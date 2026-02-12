@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Iron Rivals Bingo (Alt1)</title>
+  <link rel="stylesheet" href="https://runeapps.org/nis/nis.css" />
+  <link rel="stylesheet" href="https://runeapps.org/runeappslib.css" />
+  <link rel="stylesheet" href="./css/style.css" />
+
+  <script src="https://runeapps.org/runeappslib.js"></script>
+  <script src="https://www.unpkg.com/alt1/dist/base/index.js"></script>
+  <script src="https://www.unpkg.com/alt1/dist/chatbox/index.js"></script>
+</head>
+<body class="nis">
+  <div class="wrap">
+    <div class="row">
+      <div class="pill" id="alt1Status">Alt1: checking…</div>
+      <div class="pill" id="apiStatus">API: not checked</div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>API base</label>
+        <input id="apiBase" value="http://127.0.0.1:8000" />
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Team #</label>
+        <input id="teamNumber" type="number" min="1" step="1" value="1" />
+      </div>
+      <div>
+        <label>IGN</label>
+        <input id="ign" placeholder="e.g. Barry" />
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="primary" id="btnStart">Start auto-submit</button>
+      <button class="danger" id="btnStop" disabled>Stop</button>
+    </div>
+
+    <div class="row">
+      <button id="btnTest">Send test drop (mock)</button>
+      <button id="btnPing">Ping API</button>
+    </div>
+
+    <div class="muted">
+      Reads your chatbox and auto-submits detected drop messages to <span class="small">/api/mock_drop</span>.
+      <br/>Tip: enabling chat timestamps improves duplicate detection, but isn’t required.
+    </div>
+
+    <div style="height:10px"></div>
+
+    <label>Log</label>
+    <textarea id="log" class="log" readonly></textarea>
+  </div>
+
+  <script src="./js/main.js"></script>
+</body>
+</html>
