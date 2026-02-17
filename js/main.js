@@ -241,19 +241,47 @@
     }
   }
 
-  async function submitDrop({ drop_name, amount }) {
+  
+  // ---------- canonical name resolver (via backend /wiki/tooltip) ----------
+  const canonicalCache = new Map(); // raw->canonical
+  async function resolveCanonicalName(rawName) {
+    const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    if (!base) return rawName;
+    const key = (rawName || "").trim();
+    if (!key) return rawName;
+    if (canonicalCache.has(key)) return canonicalCache.get(key);
+    // trim trailing punctuation often present in chat lines
+    const cleaned = key.replace(/[\s\u00A0]+$/g, "").replace(/[\.,;:]+$/g, "");
+    try {
+      const url = `${base}/wiki/tooltip?item=${encodeURIComponent(cleaned)}`;
+      const res = await fetch(url, { method: "GET", credentials: "omit" });
+      if (!res.ok) throw new Error(`tooltip ${res.status}`);
+      const data = await res.json();
+      const title = (data && data.title) ? String(data.title).trim() : cleaned;
+      canonicalCache.set(key, title || cleaned);
+      return title || cleaned;
+    } catch (e) {
+      canonicalCache.set(key, cleaned);
+      return cleaned;
+    }
+  }
+
+async function submitDrop({ drop_name, amount }) {
     const base = (ui.apiBase.value || "").replace(/\/+$/, "");
     const bingoId = parseInt(ui.bingoId.value || "0", 10) || 0;
     const team_number = parseInt(ui.teamNumber.value || "0", 10);
     const ign = (ui.ign.value || "").trim() || "Unknown";
     const ts_iso = new Date().toISOString();
 
+    const canonical = await resolveCanonicalName(drop_name);
+
+
     const fd = new FormData();
     fd.append("ts_iso", ts_iso);
     fd.append("ign", ign);
     fd.append("team_number", String(team_number || 0));
     fd.append("boss", "");
-    fd.append("drop_name", drop_name);
+    fd.append("drop_name", canonical);
     fd.append("result", "success");
     fd.append("amount", amount || "");
 
@@ -599,11 +627,13 @@ if (force) {
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
 
-      const key = `${parsed.drop_name}||${parsed.amount || ""}`;
+      // Resolve to canonical wiki title (server-side) before dedupe + submit
+      const canonicalName = await resolveCanonicalName(parsed.drop_name);
+      const key = `${canonicalName}||${parsed.amount || ""}`;
       if (recentSet.has(key)) continue;
 
       rememberKey(key);
-      addFeed(`Drop detected: ${parsed.drop_name}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
+      addFeed(`Drop detected: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
 
       if (!loadSettings().autoSubmit) {
         addFeed("Auto-submit is OFF (Settings).", "warn");
@@ -611,10 +641,10 @@ if (force) {
       }
 
       try {
-        await submitDrop(parsed);
-        addFeed(`Submitted ✅ ${parsed.drop_name}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
+        await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+        addFeed(`Submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
       } catch (e) {
-        addFeed(`Submit failed ❌ (${parsed.drop_name}): ${e.message}`, "bad");
+        addFeed(`Submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
       }
     }
   }
