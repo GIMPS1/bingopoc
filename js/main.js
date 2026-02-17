@@ -45,6 +45,16 @@
     optAutoSubmit: $("optAutoSubmit"),
     btnSendTest: $("btnSendTest"),
     btnResetIgn: $("btnResetIgn"),
+
+    // Chat debug (testing)
+    chatDebug: $("chatDebug"),
+    chatDebugMeta: $("chatDebugMeta"),
+    chatDebugPos: $("chatDebugPos"),
+    chatDebugBox: $("chatDebugBox"),
+    btnDebugRead: $("btnDebugRead"),
+    btnDebugHighlight: $("btnDebugHighlight"),
+    btnDebugClear: $("btnDebugClear"),
+    optChatDebug: $("optChatDebug"),
   };
 
   // ---------- storage ----------
@@ -65,6 +75,7 @@
       autoDetect: s.autoDetect !== false,     // default true
       highlight: s.highlight === true,        // default false
       miniDebug: s.miniDebug === true,        // default false
+      chatDebug: s.chatDebug === true,        // default false
       autoSubmit: s.autoSubmit !== false      // default true
     };
   }
@@ -160,14 +171,54 @@
   ui.optAutoDetect.checked = settings.autoDetect;
   ui.optHighlight.checked = settings.highlight;
   ui.optMiniDebug.checked = settings.miniDebug;
+  ui.optChatDebug.checked = settings.chatDebug;
   ui.optAutoSubmit.checked = settings.autoSubmit;
   ui.miniDebug.style.display = settings.miniDebug ? "" : "none";
+  ui.chatDebug.style.display = settings.chatDebug ? "" : "none";
 
   function updateMiniDebug({ chatState, confPct, lastLine }) {
     if (!loadSettings().miniDebug) return;
     ui.dbgChat.textContent = chatState || "—";
     ui.dbgConf.textContent = (confPct != null) ? `${confPct}%` : "—";
     ui.dbgLast.textContent = lastLine ? lastLine : "—";
+  }
+
+  // ---------- chat debug (testing) ----------
+  const chatDebugState = {
+    lines: [],
+    max: 60,
+    lastReadAt: null,
+    lastFirstLineKey: "",
+  };
+
+  function setChatDebugVisible(on) {
+    ui.chatDebug.style.display = on ? "" : "none";
+  }
+
+  function renderChatDebug() {
+    if (!loadSettings().chatDebug) return;
+    const pos = chatReader && chatReader.pos ? chatReader.pos : null;
+    ui.chatDebugPos.textContent = pos
+      ? `pos: x=${pos.x}, y=${pos.y}, w=${pos.width || pos.w}, h=${pos.height || pos.h}`
+      : "pos: —";
+    ui.chatDebugBox.value = chatDebugState.lines.join("\n");
+    ui.chatDebugMeta.textContent = `${chatDebugState.lines.length} lines` + (chatDebugState.lastReadAt ? ` • last read ${chatDebugState.lastReadAt}` : "");
+  }
+
+  function pushChatDebug(lines, sourceTag) {
+    if (!loadSettings().chatDebug) return;
+    const stamp = nowTs();
+    chatDebugState.lastReadAt = stamp;
+    const tag = sourceTag ? ` ${sourceTag}` : "";
+
+    for (const ln of (lines || [])) {
+      const raw = (ln && typeof ln === "object" && "text" in ln) ? (ln.text || "") : String(ln || "");
+      const cleaned = stripTimestampPrefix(String(raw || "")).trim();
+      if (!cleaned) continue;
+      chatDebugState.lines.unshift(`[${stamp}]${tag} ${cleaned}`);
+    }
+    while (chatDebugState.lines.length > chatDebugState.max) chatDebugState.lines.pop();
+    renderChatDebug();
   }
 
   // ---------- API helpers ----------
@@ -353,35 +404,52 @@
   function highlightChatPos(pos) {
     if (!pos || !isAlt1) return;
     if (!loadSettings().highlight) return;
-
-    // Best-effort: different Alt1 versions expose different overlay APIs.
-    try {
-      if (window.alt1 && typeof alt1.overLayRect === "function") {
-        alt1.overLayRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2000, 2);
-        return;
-      }
-    } catch (e) {}
-    try {
-      if (window.A1lib && typeof A1lib.drawRect === "function") {
-        A1lib.drawRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2000);
-      }
-    } catch (e) {}
+    tryOverlayRect(pos, false);
   }
 
   function highlightChatPosForce(pos) {
     // Used when user clicks Locate/Recalibrate: always show once for confidence.
     if (!pos || !isAlt1) return;
-    try {
-      if (window.alt1 && typeof alt1.overLayRect === "function") {
-        alt1.overLayRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2200, 2);
-        return;
-      }
-    } catch (e) {}
-    try {
-      if (window.A1lib && typeof A1lib.drawRect === "function") {
-        A1lib.drawRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2200);
-      }
-    } catch (e) {}
+    tryOverlayRect(pos, true);
+  }
+
+  function tryOverlayRect(pos, force) {
+    if (!pos || !isAlt1) return false;
+    const x = pos.x, y = pos.y;
+    const w = pos.width || pos.w;
+    const h = pos.height || pos.h;
+    const dur = 2500;
+    const thick = 2;
+    const colA = 0xFF00FF00; // ARGB green
+    const colB = 0x00FF00;   // RGB green
+
+    const attempts = [];
+
+    // alt1 overlay variants (different builds)
+    if (window.alt1 && typeof alt1.overLayRect === "function") {
+      attempts.push(() => alt1.overLayRect(x, y, w, h, dur));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, dur, thick));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, colA, dur, thick));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, colB, dur, thick));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, colA, dur));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, colA));
+      attempts.push(() => alt1.overLayRect(x, y, w, h, dur, colA));
+    }
+
+    // RuneApps lib fallback
+    if (window.A1lib && typeof A1lib.drawRect === "function") {
+      attempts.push(() => A1lib.drawRect(x, y, w, h, dur));
+      attempts.push(() => A1lib.drawRect(x, y, w, h, dur, thick));
+    }
+
+    for (const fn of attempts) {
+      try { fn(); return true; } catch (e) {}
+    }
+
+    if (force) {
+      addFeed("Highlight attempted but no overlay API responded. Check appconfig permissions include 'overlay'.", "warn");
+    }
+    return false;
   }
 
   async function poll() {
@@ -426,6 +494,17 @@
     }
 
     chatState.consecutiveEmpty = 0;
+
+    // If chat debug enabled, record the raw lines (only when the newest line changes)
+    if (loadSettings().chatDebug) {
+      const first = lines[0] && lines[0].text ? lines[0].text : String(lines[0] || "");
+      const key = stripTimestampPrefix(first).trim();
+      if (key && key !== chatDebugState.lastFirstLineKey) {
+        chatDebugState.lastFirstLineKey = key;
+        pushChatDebug(lines.slice(0, 6), "poll");
+      }
+      renderChatDebug();
+    }
 
     for (const line of lines) {
       const raw = line && line.text ? line.text : "";
@@ -591,6 +670,13 @@
     ui.miniDebug.style.display = settings.miniDebug ? "" : "none";
     addFeed("Mini debug: " + (settings.miniDebug ? "ON" : "OFF"), "ok");
   });
+
+  ui.optChatDebug.addEventListener("change", (e) => {
+    settings = saveSettings({ chatDebug: !!e.target.checked });
+    setChatDebugVisible(settings.chatDebug);
+    addFeed("Chat debug: " + (settings.chatDebug ? "ON" : "OFF"), "ok");
+    renderChatDebug();
+  });
   ui.optAutoSubmit.addEventListener("change", (e) => {
     settings = saveSettings({ autoSubmit: !!e.target.checked });
     addFeed("Auto-submit: " + (settings.autoSubmit ? "ON" : "OFF"), "ok");
@@ -612,6 +698,48 @@
 
   ui.btnLocate.addEventListener("click", () => {
     locateChatboxAndStore();
+  });
+
+  // Chat debug actions (testing)
+  ui.btnDebugRead && ui.btnDebugRead.addEventListener("click", () => {
+    if (!chatReader) initChatReader();
+    if (!chatReader || !chatReader.pos) {
+      addFeed("Debug read: chatbox not located yet (use Locate chat).", "bad");
+      renderChatDebug();
+      return;
+    }
+    try {
+      const lines = chatReader.read() || [];
+      addFeed(`Debug read: ${lines.length} lines.`, "ok");
+      pushChatDebug(lines.slice(0, 12), "manual");
+      // Prove 'Last'
+      const first = lines[0] && lines[0].text ? lines[0].text : String(lines[0] || "");
+      const last = stripTimestampPrefix(first).trim();
+      if (last) {
+        chatState.lastLine = last;
+        updateMiniDebug({ chatState: chatState.locked ? "LOCKED" : (chatState.usingFallback ? "FALLBACK" : "OK"), confPct: chatState.confPct, lastLine: chatState.lastLine });
+      }
+      renderChatDebug();
+    } catch (e) {
+      addFeed("Debug read failed: " + e.message, "bad");
+    }
+  });
+
+  ui.btnDebugHighlight && ui.btnDebugHighlight.addEventListener("click", () => {
+    if (!chatReader) initChatReader();
+    if (chatReader && chatReader.pos) {
+      highlightChatPosForce(chatReader.pos);
+      addFeed("Highlight requested.", "ok");
+    } else {
+      addFeed("No chatbox position to highlight. Use Locate chat first.", "bad");
+    }
+  });
+
+  ui.btnDebugClear && ui.btnDebugClear.addEventListener("click", () => {
+    chatDebugState.lines = [];
+    chatDebugState.lastFirstLineKey = "";
+    renderChatDebug();
+    addFeed("Chat debug cleared.", "ok");
   });
 
   ui.btnPing.addEventListener("click", pingApi);

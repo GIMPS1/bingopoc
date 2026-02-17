@@ -94,6 +94,21 @@
         <div class="miniRow"><span class="k">Confidence</span><span class="v" id="dbgConf">—</span></div>
         <div class="miniRow"><span class="k">Last</span><span class="v" id="dbgLast">—</span></div>
       </div>
+
+      <div class="chatDebug" id="chatDebug" style="display:none;">
+        <div class="feedHeader" style="margin-top:12px;">
+          <div>Chat debug</div>
+          <div class="feedMeta" id="chatDebugMeta">—</div>
+        </div>
+        <div class="hint mono" id="chatDebugPos" style="margin-top:6px;">—</div>
+        <textarea id="chatDebugBox" class="logbox" readonly style="height:150px; margin-top:8px;"></textarea>
+        <div class="rowInline" style="margin-top:8px; gap:10px;">
+          <button class="btn secondary small" id="btnDebugRead">Read now</button>
+          <button class="btn secondary small" id="btnDebugHighlight">Highlight box</button>
+          <button class="btn secondary small" id="btnDebugClear">Clear</button>
+        </div>
+        <div class="hint" style="margin-top:6px;">Testing panel to prove locate + read. We can hide later.</div>
+      </div>
     </section>
 
     <!-- Settings drawer -->
@@ -128,6 +143,12 @@
             <label class="toggle">
               <input type="checkbox" id="optMiniDebug" />
               <span>Show mini debug panel</span>
+            </label>
+          </div>
+          <div class="toggleRow">
+            <label class="toggle">
+              <input type="checkbox" id="optChatDebug" />
+              <span>Show chat debug panel (testing)</span>
             </label>
           </div>
           <button class="btn secondary small" id="btnCopyDebug">Copy debug info</button>

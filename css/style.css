@@ -74,6 +74,29 @@ input, select{
   color:var(--text);
   outline:none;
 }
+
+textarea.logbox{
+  width:100%;
+  box-sizing:border-box;
+  padding:10px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(7,10,14,.65);
+  color:var(--text);
+  outline:none;
+  resize:vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size:11px;
+  line-height:1.35;
+}
+
+.chatDebug{
+  margin-top:10px;
+  padding:10px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.08);
+  background:rgba(17,26,36,.45);
+}
 input:focus,select:focus{border-color:rgba(214,178,94,.50); box-shadow:0 0 0 3px rgba(214,178,94,.12);}
 
 .rowInline{display:flex; gap:8px; align-items:center;}
