@@ -68,6 +68,10 @@
     settings: "irb.settings"
   };
 
+  // v9.1: lock API base (hidden in UI)
+  const LOCKED_API_BASE = "http://80.43.97.201:8000";
+  const getApiBase = () => LOCKED_API_BASE;
+
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(localStorage.getItem(LS.settings) || "{}"); } catch (e) {}
@@ -145,7 +149,8 @@
   }
 
   // ---------- restore form ----------
-  ui.apiBase.value = localStorage.getItem(LS.apiBase) || "http://127.0.0.1:8000";
+  // v9.1: API base is locked
+  if (ui.apiBase) ui.apiBase.value = getApiBase();
   ui.bingoId.value = localStorage.getItem(LS.bingoId) || "1";
   ui.teamNumber.value = localStorage.getItem(LS.team) || "1";
 
@@ -189,6 +194,7 @@
     max: 60,
     lastReadAt: null,
     lastFirstLineKey: "",
+    lastStats: null,
   };
 
   function setChatDebugVisible(on) {
@@ -203,13 +209,16 @@
       ? `pos: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}`
       : "pos: —";
     ui.chatDebugBox.value = chatDebugState.lines.join("\n");
-    ui.chatDebugMeta.textContent = `${chatDebugState.lines.length} lines` + (chatDebugState.lastReadAt ? ` • last read ${chatDebugState.lastReadAt}` : "");
+    const stats = chatDebugState.lastStats;
+    const statsTxt = stats ? ` • raw ${stats.rawCount} → stitched ${stats.stitchedCount} • ts ${stats.hasTimestamps ? "on" : "off"}` : "";
+    ui.chatDebugMeta.textContent = `${chatDebugState.lines.length} lines` + (chatDebugState.lastReadAt ? ` • last read ${chatDebugState.lastReadAt}` : "") + statsTxt;
   }
 
-  function pushChatDebug(lines, sourceTag) {
+  function pushChatDebug(lines, sourceTag, stats) {
     if (!loadSettings().chatDebug) return;
     const stamp = nowTs();
     chatDebugState.lastReadAt = stamp;
+    if (stats) chatDebugState.lastStats = stats;
     const tag = sourceTag ? ` ${sourceTag}` : "";
 
     for (const ln of (lines || [])) {
@@ -224,9 +233,8 @@
 
   // ---------- API helpers ----------
   async function pingApi() {
-    const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    const base = getApiBase();
     const bingoId = parseInt(ui.bingoId.value || "0", 10) || 0;
-    localStorage.setItem(LS.apiBase, base);
     localStorage.setItem(LS.bingoId, String(bingoId || 1));
     try {
       const r = await fetch(`${base}/b/${bingoId}/api/state`, { method: "GET" });
@@ -245,7 +253,7 @@
   // ---------- canonical name resolver (via backend /wiki/tooltip) ----------
   const canonicalCache = new Map(); // raw->canonical
   async function resolveCanonicalName(rawName) {
-    const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    const base = getApiBase();
     if (!base) return rawName;
     const key = (rawName || "").trim();
     if (!key) return rawName;
@@ -267,7 +275,7 @@
   }
 
 async function submitDrop({ drop_name, amount }) {
-    const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    const base = getApiBase();
     const bingoId = parseInt(ui.bingoId.value || "0", 10) || 0;
     const team_number = parseInt(ui.teamNumber.value || "0", 10);
     const ign = (ui.ign.value || "").trim() || "Unknown";
@@ -353,6 +361,71 @@ function parseDropLine(text, nextLine) {
     }
   }
   return null;
+}
+
+// ---------- message stitching (handles wrapped RS3 chat lines) ----------
+function detectHasTimestamps(lines) {
+  for (let i = 0; i < Math.min(lines.length, 12); i++) {
+    const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
+    if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
+  }
+  return false;
+}
+
+function isLikelyMessageStartNoTs(line) {
+  const t = (line || "").trim();
+  if (!t) return false;
+  // Common RS3 starters
+  if (/^(You\b|Your\b|News:|A\b)/.test(t)) return true;
+  // Player / channel name patterns: "Name:" (allow special chars like ⚯)
+  if (/^[^a-z\s][^:]{1,40}:\s+/.test(t)) return true;
+  if (/^[A-Z][A-Za-z0-9' _-]{1,30}:\s+/.test(t)) return true;
+  return false;
+}
+
+function stitchChatMessages(lines) {
+  const rawLines = (lines || []).map(l => (l && l.text) ? String(l.text) : String(l || "")).filter(Boolean);
+  const hasTs = detectHasTimestamps(lines || []);
+  const out = [];
+
+  for (const raw of rawLines) {
+    const t = String(raw || "").trimEnd();
+    if (!t) continue;
+
+    if (out.length === 0) {
+      out.push(t);
+      continue;
+    }
+
+    if (hasTs) {
+      // Timestamped: wrapped lines do NOT start with a timestamp.
+      if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(t)) out.push(t);
+      else out[out.length - 1] = (out[out.length - 1] + " " + t.trim()).replace(/\s+/g, " ");
+      continue;
+    }
+
+    // No timestamps: heuristic stitching
+    const prev = out[out.length - 1];
+    const prevEndsSentence = /[.!?]\s*$/.test(prev);
+    const startsLower = /^[a-z]/.test(t.trim());
+    const likelyStart = isLikelyMessageStartNoTs(t);
+
+    // If it doesn't look like a new message, or it starts lowercase, treat as continuation.
+    if (!likelyStart || startsLower) {
+      out[out.length - 1] = (prev + " " + t.trim()).replace(/\s+/g, " ");
+      continue;
+    }
+
+    // If previous didn't end a sentence, it's probably wrapping even if it looks like a start.
+    if (!prevEndsSentence) {
+      out[out.length - 1] = (prev + " " + t.trim()).replace(/\s+/g, " ");
+      continue;
+    }
+
+    out.push(t);
+  }
+
+  return { messages: out, rawCount: rawLines.length, stitchedCount: out.length, hasTimestamps: hasTs };
 }
 
   // Duplicate protection
@@ -585,20 +658,22 @@ if (force) {
 
     chatState.consecutiveEmpty = 0;
 
-    // If chat debug enabled, record the raw lines (only when the newest line changes)
+    const stitched = stitchChatMessages(lines);
+
+    // If chat debug enabled, record stitched messages (only when the newest message changes)
     if (loadSettings().chatDebug) {
-      const first = lines[0] && lines[0].text ? lines[0].text : String(lines[0] || "");
-      const key = stripTimestampPrefix(first).trim();
+      const firstMsg = stitched.messages[0] ? String(stitched.messages[0]) : "";
+      const key = stripTimestampPrefix(firstMsg).trim();
       if (key && key !== chatDebugState.lastFirstLineKey) {
         chatDebugState.lastFirstLineKey = key;
-        pushChatDebug(lines.slice(0, 6), "poll");
+        // show up to 6 stitched messages for clarity
+        pushChatDebug(stitched.messages.slice(0, 6), "poll", { rawCount: stitched.rawCount, stitchedCount: stitched.stitchedCount, hasTimestamps: stitched.hasTimestamps });
       }
       renderChatDebug();
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const raw = line && line.text ? line.text : "";
+    for (let i = 0; i < stitched.messages.length; i++) {
+      const raw = stitched.messages[i];
       if (!raw) continue;
 
       chatState.lastLine = stripTimestampPrefix(raw);
@@ -622,7 +697,7 @@ if (force) {
       if (timeStr && lineTime < lastLineTime) continue;
       if (timeStr) lastLineTime = lineTime;
 
-      const nextRaw = (lines[i+1] && lines[i+1].text) ? lines[i+1].text : "";
+      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
 
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
@@ -677,7 +752,7 @@ if (force) {
 
     localStorage.setItem(LS.team, ui.teamNumber.value);
     localStorage.setItem(LS.bingoId, ui.bingoId.value);
-    localStorage.setItem(LS.apiBase, ui.apiBase.value.replace(/\/+$/, ""));
+    // v9.1: API base is locked (do not persist user edits)
 
     if (!chatReader) {
       const ok = initChatReader();
@@ -805,10 +880,11 @@ if (force) {
     }
     try {
       const lines = chatReader.read() || [];
-      addFeed(`Debug read: ${lines.length} lines.`, "ok");
-      pushChatDebug(lines.slice(0, 12), "manual");
+      const stitched = stitchChatMessages(lines);
+      addFeed(`Debug read: ${stitched.rawCount} raw → ${stitched.stitchedCount} stitched.`, "ok");
+      pushChatDebug(stitched.messages.slice(0, 12), "manual", { rawCount: stitched.rawCount, stitchedCount: stitched.stitchedCount, hasTimestamps: stitched.hasTimestamps });
       // Prove 'Last'
-      const first = lines[0] && lines[0].text ? lines[0].text : String(lines[0] || "");
+      const first = stitched.messages[0] ? String(stitched.messages[0]) : "";
       const last = stripTimestampPrefix(first).trim();
       if (last) {
         chatState.lastLine = last;
@@ -860,7 +936,7 @@ if (force) {
     return {
       time: new Date().toISOString(),
       alt1Detected: isAlt1,
-      apiBase: (ui.apiBase.value || "").replace(/\/+$/, ""),
+      apiBase: getApiBase(),
       bingoId: ui.bingoId ? ui.bingoId.value : "1",
       team: ui.teamNumber.value,
       ign: (ui.ign.value || "").trim(),
