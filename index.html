@@ -13,48 +13,133 @@
 </head>
 <body class="nis">
   <div class="wrap">
-    <div class="row">
-      <div class="pill" id="alt1Status">Alt1: checking…</div>
-      <div class="pill" id="apiStatus">API: not checked</div>
-    </div>
-
-    <div class="row">
-      <div>
-        <label>API base</label>
-        <input id="apiBase" value="http://127.0.0.1:8000" />
+    <header class="topbar">
+      <div class="brand">
+        <img class="brandIcon" src="./assets/icon.png" alt="" />
+        <div class="brandText">
+          <div class="title">Iron Rivals Bingo</div>
+          <div class="subtitle">Drop auto-submit</div>
+        </div>
       </div>
-    </div>
 
-    <div class="row">
-      <div>
-        <label>Team #</label>
-        <input id="teamNumber" type="number" min="1" step="1" value="1" />
+      <div class="statusRow">
+        <div class="pill" id="alt1Pill">Alt1: …</div>
+        <div class="pill" id="apiPill">API: …</div>
+        <div class="pill" id="chatPill">Chat: …</div>
+        <button class="iconBtn" id="btnOpenSettings" title="Settings">
+          <span class="icon">⚙</span>
+        </button>
       </div>
-      <div>
-        <label>IGN</label>
-        <input id="ign" placeholder="e.g. Barry" />
+    </header>
+
+    <section class="panel">
+      <div class="grid2">
+        <div class="field">
+          <label>API base</label>
+          <input id="apiBase" placeholder="http://127.0.0.1:8000" />
+        </div>
+        <div class="field">
+          <label>Team #</label>
+          <select id="teamNumber">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+            <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+          </select>
+        </div>
       </div>
-    </div>
 
-    <div class="row">
-      <button class="primary" id="btnStart">Start auto-submit</button>
-      <button class="danger" id="btnStop" disabled>Stop</button>
-    </div>
+      <div class="grid2">
+        <div class="field">
+          <label>IGN</label>
+          <div class="rowInline">
+            <input id="ign" placeholder="Your RSN" />
+            <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
+          </div>
+          <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
+        </div>
+        <div class="field">
+          <label>Actions</label>
+          <div class="rowInline">
+            <button class="btn primary" id="btnStart">Start</button>
+            <button class="btn danger" id="btnStop" disabled>Stop</button>
+          </div>
+          <div class="rowInline" style="margin-top:8px">
+            <button class="btn secondary small" id="btnPing">Test API</button>
+            <button class="btn secondary small" id="btnLocate">Locate chat</button>
+          </div>
+        </div>
+      </div>
 
-    <div class="row">
-      <button id="btnTest">Send test drop (mock)</button>
-      <button id="btnPing">Ping API</button>
-    </div>
+      <div class="feedHeader">
+        <div>Activity</div>
+        <div class="feedMeta" id="feedMeta">—</div>
+      </div>
+      <div class="feed" id="feed"></div>
 
-    <div class="muted">
-      Reads your chatbox and auto-submits detected drop messages to <span class="small">/api/mock_drop</span>.
-      <br/>Tip: enabling chat timestamps improves duplicate detection, but isn’t required.
-    </div>
+      <div class="miniDebug" id="miniDebug" style="display:none;">
+        <div class="miniRow"><span class="k">Chat</span><span class="v" id="dbgChat">—</span></div>
+        <div class="miniRow"><span class="k">Confidence</span><span class="v" id="dbgConf">—</span></div>
+        <div class="miniRow"><span class="k">Last</span><span class="v" id="dbgLast">—</span></div>
+      </div>
+    </section>
 
-    <div style="height:10px"></div>
+    <!-- Settings drawer -->
+    <aside class="drawer" id="settingsDrawer" aria-hidden="true">
+      <div class="drawerHeader">
+        <div class="drawerTitle">Settings</div>
+        <button class="iconBtn" id="btnCloseSettings" title="Close"><span class="icon">✕</span></button>
+      </div>
 
-    <label>Log</label>
-    <textarea id="log" class="log" readonly></textarea>
+      <div class="drawerBody">
+        <div class="section">
+          <div class="sectionTitle">Capture & calibration</div>
+          <button class="btn secondary" id="btnRecalibrate">Recalibrate chatbox</button>
+          <div class="toggleRow">
+            <label class="toggle">
+              <input type="checkbox" id="optAutoDetect" />
+              <span>Auto-detect fallback</span>
+            </label>
+          </div>
+          <div class="toggleRow">
+            <label class="toggle">
+              <input type="checkbox" id="optHighlight" />
+              <span>Highlight box during locate</span>
+            </label>
+          </div>
+          <div class="hint">Recommended: calibrate once, keep fallback on.</div>
+        </div>
+
+        <div class="section">
+          <div class="sectionTitle">Debug</div>
+          <div class="toggleRow">
+            <label class="toggle">
+              <input type="checkbox" id="optMiniDebug" />
+              <span>Show mini debug panel</span>
+            </label>
+          </div>
+          <button class="btn secondary small" id="btnCopyDebug">Copy debug info</button>
+        </div>
+
+        <div class="section">
+          <div class="sectionTitle">Submission</div>
+          <div class="toggleRow">
+            <label class="toggle">
+              <input type="checkbox" id="optAutoSubmit" />
+              <span>Auto-submit drops</span>
+            </label>
+          </div>
+          <button class="btn secondary small" id="btnSendTest">Send test drop</button>
+          <div class="hint">Test drop uses “Ahrim's hood”.</div>
+        </div>
+
+        <div class="section dangerZone">
+          <div class="sectionTitle">Account</div>
+          <button class="btn danger small" id="btnResetIgn">Reset locked IGN</button>
+          <div class="hint">Only use if you changed RSN.</div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="backdrop" id="drawerBackdrop" aria-hidden="true"></div>
   </div>
 
   <script src="./js/main.js"></script>
