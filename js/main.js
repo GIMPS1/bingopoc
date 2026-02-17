@@ -418,23 +418,35 @@
     const x = pos.x, y = pos.y;
     const w = pos.width || pos.w;
     const h = pos.height || pos.h;
-    const dur = 2500;
-    const thick = 2;
-    const colA = 0xFF00FF00; // ARGB green
-    const colB = 0x00FF00;   // RGB green
+    const dur = 1700;
+    const t = 2;
 
-    const attempts = [];
+    // Alt1 overlay signature (works in your 5.3 build):
+    // alt1.overLayRect(color, x, y, w, h, ms, thickness)
+    const color = 0x00ff00; // green
 
-    // alt1 overlay variants (different builds)
+    // Draw a border (4 thin rects) for maximum visibility.
     if (window.alt1 && typeof alt1.overLayRect === "function") {
-      attempts.push(() => alt1.overLayRect(x, y, w, h, dur));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, dur, thick));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, colA, dur, thick));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, colB, dur, thick));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, colA, dur));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, colA));
-      attempts.push(() => alt1.overLayRect(x, y, w, h, dur, colA));
+      try {
+        alt1.overLayRect(color, x, y, w, t, dur, 2);
+        alt1.overLayRect(color, x, y + h - t, w, t, dur, 2);
+        alt1.overLayRect(color, x, y, t, h, dur, 2);
+        alt1.overLayRect(color, x + w - t, y, t, h, dur, 2);
+        return true;
+      } catch (e) {
+        // fall through to RuneApps fallback
+      }
     }
+
+    // RuneApps fallback (may be less consistent across environments)
+    if (window.A1lib && typeof A1lib.drawRect === "function") {
+      try { A1lib.drawRect(x, y, w, h, dur); return true; } catch (e) {}
+    }
+
+    if (force) addFeed("Highlight attempted but overlay didn't draw. Check Alt1 overlay permissions / capture mode.", "warn");
+    return false;
+  }
+
 
     // RuneApps lib fallback
     if (window.A1lib && typeof A1lib.drawRect === "function") {
