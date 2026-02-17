@@ -264,27 +264,68 @@
   }
 
   // ---------- drop parsing ----------
-  function stripTimestampPrefix(s) {
-    return (s || "").replace(/^\s*\[?\d{2}:\d{2}:\d{2}\]?\s*/g, "").trim();
+  
+function stripTimestampPrefix(s) {
+  // Supports: [10:51:37], [10:51:37 AM], 10:51:37, 10:51:37 AM
+  return (s || "")
+    .replace(/^\s*\[?\d{1,2}:\d{2}:\d{2}(?:\s*[AP]M)?\]?\s*/i, "")
+    .replace(/^\s*poll\s+/i, "")
+    .trim();
+}
+
+function _tryParseReceive(text) {
+  const t = stripTimestampPrefix(text);
+
+  // Allow prefix text before 'You receive' (e.g. Luck of the Dwarves message)
+  const idx = t.toLowerCase().indexOf('you receive');
+  const idx2 = t.toLowerCase().indexOf('you received');
+  const start = idx >= 0 ? idx : idx2;
+  const slice = start >= 0 ? t.slice(start) : t;
+
+  const patterns = [
+    // "You receive: 1 x Item"
+    /^You\s+(?:have\s+)?(?:receive|received)\s*:?\s*([0-9]+)\s*x\s*(.+?)\s*$/i,
+    // "You receive: Item (x 2)" or "You receive: Item x2"
+    /^You\s+(?:have\s+)?(?:receive|received|find|found)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
+    // "Loot: Item"
+    /^Loot\s*:\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
+  ];
+
+  for (const re of patterns) {
+    const m = slice.match(re);
+    if (m) {
+      let item = (m[1] || "").trim();
+      let amt = (m[2] || "").trim();
+      // Handle amount-first pattern
+      if (amt && /^\d+$/.test(item) && !/^\d+$/.test(amt)) {
+        const tmp = item; item = amt; amt = tmp;
+      }
+      if (!item) return null;
+      item = item.replace(/\s+from.*$/i, "").trim();
+      return { drop_name: item, amount: amt };
+    }
   }
-  function parseDropLine(text) {
+  return null;
+}
+
+function parseDropLine(text, nextLine) {
+  // Try single line
+  let parsed = _tryParseReceive(text);
+  if (parsed) return parsed;
+
+  // Try joining wrapped lines: "You receive: 1 x Armadyl" + "chainskirt."
+  if (text && nextLine) {
     const t = stripTimestampPrefix(text);
-
-    const patterns = [
-      /^You\s+(?:have\s+)?(?:receive|received)\s*:?\s*([0-9]+)\s*x\s*(.+?)\s*$/i,
-      /^You (?:have )?(?:receive|received|find|found)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
-      /^Loot\s*:\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
-    ];
-
-    for (const re of patterns) {
-      const m = t.match(re);
-      if (m) {
-        let item = (m[1] || "").trim();
-        let amt = (m[2] || "").trim();
-        // Handle pattern where amount appears first: "You receive: 1 x Item"
-        if (amt && /^\d+$/.test(item) && !/^\d+$/.test(amt)) {
-          const tmp = item; item = amt; amt = tmp;
-        }
+    const n = stripTimestampPrefix(nextLine);
+    // If the first contains 'You receive' and the next looks like a continuation (no 'You ')
+    if (/you\s+receiv/i.test(t) && n && !/^you\s+/i.test(n)) {
+      const joined = (t + " " + n).replace(/\s+/g, " ").trim();
+      parsed = _tryParseReceive(joined);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
+}
         if (!item) return null;
         item = item.replace(/\s+from.*$/i, "").trim();
         return { drop_name: item, amount: amt };
@@ -503,7 +544,7 @@ if (force) {
     if (!lines.length) {
       chatState.consecutiveEmpty++;
       // If we get empty too long, attempt fallback re-find (in case tab changed / moved)
-      if (chatState.consecutiveEmpty >= 12 && loadSettings().autoDetect) {
+      if (chatState.consecutiveEmpty >= 12 && loadSettings().autoDetect && !chatState.locked) {
         const ok = tryFindChatbox("empty-read");
         if (ok) {
           chatState.consecutiveEmpty = 0;
@@ -527,7 +568,8 @@ if (force) {
       renderChatDebug();
     }
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       const raw = line && line.text ? line.text : "";
       if (!raw) continue;
 
@@ -552,7 +594,9 @@ if (force) {
       if (timeStr && lineTime < lastLineTime) continue;
       if (timeStr) lastLineTime = lineTime;
 
-      const parsed = parseDropLine(raw);
+      const nextRaw = (lines[i+1] && lines[i+1].text) ? lines[i+1].text : "";
+
+      const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
 
       const key = `${parsed.drop_name}||${parsed.amount || ""}`;
