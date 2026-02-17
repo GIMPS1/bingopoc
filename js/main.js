@@ -383,21 +383,28 @@ function parseDropLine(text, nextLine) {
   }
 
   function initChatReader() {
-    if (!window.Chatbox || !Chatbox.default) {
-      addFeed("Alt1 chatbox library not loaded.", "bad");
+    // unpkg may expose Chatbox in different shapes depending on version
+    // (e.g. Chatbox.default, Chatbox, or window.ChatBox). Be defensive.
+    const ChatboxCtor = (window.Chatbox && (Chatbox.default || Chatbox)) || window.ChatBox || null;
+    if (!ChatboxCtor) {
+      addFeed("Alt1 chatbox library not loaded (Chatbox ctor missing).", "bad");
       return false;
     }
-    chatReader = new Chatbox.default();
+    chatReader = new ChatboxCtor();
     // IMPORTANT: don't overwrite chatbox default readargs/colors.
     // Some chat tabs fail if we replace the color list.
     if (!chatReader.readargs) chatReader.readargs = {};
     if (!Array.isArray(chatReader.readargs.colors)) chatReader.readargs.colors = [];
+    const mix = (window.A1lib && typeof A1lib.mixColor === "function")
+      ? A1lib.mixColor
+      : ((r,g,b) => ((r & 255) << 16) | ((g & 255) << 8) | (b & 255));
+
     const extraCols = [
-      A1lib.mixColor(255,255,255),   // white
-      A1lib.mixColor(127,169,255),   // timestamp blue
-      A1lib.mixColor(255,255,0),     // yellow
-      A1lib.mixColor(255,0,0),       // red
-      A1lib.mixColor(0,255,0),       // green
+      mix(255,255,255),   // white
+      mix(127,169,255),   // timestamp blue
+      mix(255,255,0),     // yellow
+      mix(255,0,0),       // red
+      mix(0,255,0),       // green
     ];
     for (const c of extraCols) {
       if (chatReader.readargs.colors.indexOf(c) === -1) chatReader.readargs.colors.push(c);
