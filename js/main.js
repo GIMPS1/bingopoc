@@ -197,9 +197,10 @@
 
   function renderChatDebug() {
     if (!loadSettings().chatDebug) return;
-    const pos = chatReader && chatReader.pos ? chatReader.pos : null;
-    ui.chatDebugPos.textContent = pos
-      ? `pos: x=${pos.x}, y=${pos.y}, w=${pos.width || pos.w}, h=${pos.height || pos.h}`
+    const posObj = chatReader && chatReader.pos ? chatReader.pos : null;
+    const rect = posObj && posObj.mainbox && posObj.mainbox.rect ? posObj.mainbox.rect : (posObj && posObj.rect ? posObj.rect : null);
+    ui.chatDebugPos.textContent = rect
+      ? `pos: x=${rect.x}, y=${rect.y}, w=${rect.width}, h=${rect.height}`
       : "pos: —";
     ui.chatDebugBox.value = chatDebugState.lines.join("\n");
     ui.chatDebugMeta.textContent = `${chatDebugState.lines.length} lines` + (chatDebugState.lastReadAt ? ` • last read ${chatDebugState.lastReadAt}` : "");
@@ -270,6 +271,7 @@
     const t = stripTimestampPrefix(text);
 
     const patterns = [
+      /^You\s+(?:have\s+)?(?:receive|received)\s*:?\s*([0-9]+)\s*x\s*(.+?)\s*$/i,
       /^You (?:have )?(?:receive|received|find|found)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
       /^Loot\s*:\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
     ];
@@ -279,6 +281,10 @@
       if (m) {
         let item = (m[1] || "").trim();
         let amt = (m[2] || "").trim();
+        // Handle pattern where amount appears first: "You receive: 1 x Item"
+        if (amt && /^\d+$/.test(item) && !/^\d+$/.test(amt)) {
+          const tmp = item; item = amt; amt = tmp;
+        }
         if (!item) return null;
         item = item.replace(/\s+from.*$/i, "").trim();
         return { drop_name: item, amount: amt };
@@ -447,7 +453,21 @@
       } catch (e) {}
     }
 
-    if (force) {
+    
+    // Text overlay fallback: at least prove overlay pipeline works
+    if (window.alt1 && typeof alt1.overLayText === "function") {
+      try {
+        alt1.overLayText("CHATBOX", color, x, y - 18, ms, "Arial", 12, true, true);
+        return true;
+      } catch (e) {}
+    }
+    if (window.alt1 && typeof alt1.overLayTextEx === "function") {
+      try {
+        alt1.overLayTextEx("CHATBOX", color, x, y - 18, ms, 12, "Arial", true, true);
+        return true;
+      } catch (e) {}
+    }
+if (force) {
       addFeed("Highlight failed: overlay API not available. Ensure Alt1 overlay permission is enabled and capture mode is active.", "warn");
     }
     return false;
@@ -739,8 +759,12 @@
   ui.btnDebugClear && ui.btnDebugClear.addEventListener("click", () => {
     chatDebugState.lines = [];
     chatDebugState.lastFirstLineKey = "";
+    // Also reset drop/chat de-duplication so testing can re-trigger on visible lines
+    try { lastProcessedLineKeys.clear(); } catch (e) {}
+    try { processedDropKeys.clear(); } catch (e) {}
+    lastSubmittedKey = "";
     renderChatDebug();
-    addFeed("Chat debug cleared.", "ok");
+    addFeed("Chat debug cleared (dedupe reset).", "ok");
   });
 
   ui.btnPing.addEventListener("click", pingApi);
