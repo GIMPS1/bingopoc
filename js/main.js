@@ -414,52 +414,41 @@
   }
 
   function tryOverlayRect(pos, force) {
+    // Match the proven working 5.3 approach:
+    // alt1.overLayRect(color, x, y, w, h, ms, thickness)
     if (!pos || !isAlt1) return false;
+
     const x = pos.x, y = pos.y;
     const w = pos.width || pos.w;
     const h = pos.height || pos.h;
-    const dur = 1700;
+    const ms = 1500;
     const t = 2;
+    const color = 0x00ff00; // green (same style as 5.3)
 
-    // Alt1 overlay signature (works in your 5.3 build):
-    // alt1.overLayRect(color, x, y, w, h, ms, thickness)
-    const color = 0x00ff00; // green
-
-    // Draw a border (4 thin rects) for maximum visibility.
+    // Prefer alt1 overlay if available
     if (window.alt1 && typeof alt1.overLayRect === "function") {
       try {
-        alt1.overLayRect(color, x, y, w, t, dur, 2);
-        alt1.overLayRect(color, x, y + h - t, w, t, dur, 2);
-        alt1.overLayRect(color, x, y, t, h, dur, 2);
-        alt1.overLayRect(color, x + w - t, y, t, h, dur, 2);
+        // Draw a border using 4 thin rectangles (clearest on RS3 UI)
+        alt1.overLayRect(color, x, y, w, t, ms, 2);
+        alt1.overLayRect(color, x, y + h - t, w, t, ms, 2);
+        alt1.overLayRect(color, x, y, t, h, ms, 2);
+        alt1.overLayRect(color, x + w - t, y, t, h, ms, 2);
         return true;
       } catch (e) {
         // fall through to RuneApps fallback
       }
     }
 
-    // RuneApps fallback (may be less consistent across environments)
+    // RuneApps fallback (single rectangle)
     if (window.A1lib && typeof A1lib.drawRect === "function") {
-      try { A1lib.drawRect(x, y, w, h, dur); return true; } catch (e) {}
-    }
-
-    if (force) addFeed("Highlight attempted but overlay didn't draw. Check Alt1 overlay permissions / capture mode.", "warn");
-    return false;
-  }
-
-
-    // RuneApps lib fallback
-    if (window.A1lib && typeof A1lib.drawRect === "function") {
-      attempts.push(() => A1lib.drawRect(x, y, w, h, dur));
-      attempts.push(() => A1lib.drawRect(x, y, w, h, dur, thick));
-    }
-
-    for (const fn of attempts) {
-      try { fn(); return true; } catch (e) {}
+      try {
+        A1lib.drawRect(x, y, w, h, ms);
+        return true;
+      } catch (e) {}
     }
 
     if (force) {
-      addFeed("Highlight attempted but no overlay API responded. Check appconfig permissions include 'overlay'.", "warn");
+      addFeed("Highlight failed: overlay API not available. Ensure Alt1 overlay permission is enabled and capture mode is active.", "warn");
     }
     return false;
   }
