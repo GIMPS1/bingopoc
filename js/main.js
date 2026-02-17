@@ -326,13 +326,6 @@ function parseDropLine(text, nextLine) {
   }
   return null;
 }
-        if (!item) return null;
-        item = item.replace(/\s+from.*$/i, "").trim();
-        return { drop_name: item, amount: amt };
-      }
-    }
-    return null;
-  }
 
   // Duplicate protection
   let lastLineTime = new Date(0);
