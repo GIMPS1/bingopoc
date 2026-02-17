@@ -12,6 +12,7 @@
     apiPill: $("apiPill"),
     chatPill: $("chatPill"),
     apiBase: $("apiBase"),
+    bingoId: $("bingoId"),
     teamNumber: $("teamNumber"),
     ign: $("ign"),
     ignHint: $("ignHint"),
@@ -49,6 +50,7 @@
   // ---------- storage ----------
   const LS = {
     apiBase: "irb.apiBase",
+    bingoId: "irb.bingoId",
     team: "irb.team",
     ign: "irb.ign",
     ignLocked: "irb.ignLocked",
@@ -133,6 +135,7 @@
 
   // ---------- restore form ----------
   ui.apiBase.value = localStorage.getItem(LS.apiBase) || "http://127.0.0.1:8000";
+  ui.bingoId.value = localStorage.getItem(LS.bingoId) || "1";
   ui.teamNumber.value = localStorage.getItem(LS.team) || "1";
 
   const ignLocked = (localStorage.getItem(LS.ignLocked) || "") === "1";
@@ -170,12 +173,14 @@
   // ---------- API helpers ----------
   async function pingApi() {
     const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    const bingoId = parseInt(ui.bingoId.value || "0", 10) || 0;
     localStorage.setItem(LS.apiBase, base);
+    localStorage.setItem(LS.bingoId, String(bingoId || 1));
     try {
-      const r = await fetch(base + "/api/state", { method: "GET" });
+      const r = await fetch(`${base}/b/${bingoId}/api/state`, { method: "GET" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       setPill(ui.apiPill, "API: ✅", "ok");
-      addFeed("API ping OK (/api/state).", "ok");
+      addFeed(`API ping OK (/b/${bingoId}/api/state).`, "ok");
       return true;
     } catch (e) {
       setPill(ui.apiPill, "API: ❌", "bad");
@@ -186,6 +191,7 @@
 
   async function submitDrop({ drop_name, amount }) {
     const base = (ui.apiBase.value || "").replace(/\/+$/, "");
+    const bingoId = parseInt(ui.bingoId.value || "0", 10) || 0;
     const team_number = parseInt(ui.teamNumber.value || "0", 10);
     const ign = (ui.ign.value || "").trim() || "Unknown";
     const ts_iso = new Date().toISOString();
@@ -199,7 +205,7 @@
     fd.append("result", "success");
     fd.append("amount", amount || "");
 
-    const url = base + "/api/mock_drop";
+    const url = `${base}/b/${bingoId}/api/mock_drop`;
     const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return true;
@@ -291,16 +297,21 @@
       return false;
     }
     chatReader = new Chatbox.default();
-    chatReader.readargs = {
-      colors: [
-        A1lib.mixColor(255, 255, 255),
-        A1lib.mixColor(102, 152, 255),
-        A1lib.mixColor(163, 53, 238),
-        A1lib.mixColor(255, 112, 0),
-        A1lib.mixColor(0, 255, 0),
-      ],
-      backwards: true
-    };
+    // IMPORTANT: don't overwrite chatbox default readargs/colors.
+    // Some chat tabs fail if we replace the color list.
+    if (!chatReader.readargs) chatReader.readargs = {};
+    if (!Array.isArray(chatReader.readargs.colors)) chatReader.readargs.colors = [];
+    const extraCols = [
+      A1lib.mixColor(255,255,255),   // white
+      A1lib.mixColor(127,169,255),   // timestamp blue
+      A1lib.mixColor(255,255,0),     // yellow
+      A1lib.mixColor(255,0,0),       // red
+      A1lib.mixColor(0,255,0),       // green
+    ];
+    for (const c of extraCols) {
+      if (chatReader.readargs.colors.indexOf(c) === -1) chatReader.readargs.colors.push(c);
+    }
+    chatReader.readargs.backwards = true;
 
     // Apply stored calibration if present
     const stored = loadChatPos();
@@ -353,6 +364,22 @@
     try {
       if (window.A1lib && typeof A1lib.drawRect === "function") {
         A1lib.drawRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2000);
+      }
+    } catch (e) {}
+  }
+
+  function highlightChatPosForce(pos) {
+    // Used when user clicks Locate/Recalibrate: always show once for confidence.
+    if (!pos || !isAlt1) return;
+    try {
+      if (window.alt1 && typeof alt1.overLayRect === "function") {
+        alt1.overLayRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2200, 2);
+        return;
+      }
+    } catch (e) {}
+    try {
+      if (window.A1lib && typeof A1lib.drawRect === "function") {
+        A1lib.drawRect(pos.x, pos.y, pos.width || pos.w, pos.height || pos.h, 2200);
       }
     } catch (e) {}
   }
@@ -454,7 +481,12 @@
       return false;
     }
     const team = parseInt(ui.teamNumber.value || "0", 10);
+    const bingoId = parseInt(ui.bingoId.value || "0", 10);
     const ign = (ui.ign.value || "").trim();
+    if (!bingoId || bingoId < 1) {
+      addFeed("Set a valid Bingo # first.", "bad");
+      return false;
+    }
     if (!team || team < 1) {
       addFeed("Set a valid Team # first.", "bad");
       return false;
@@ -470,6 +502,7 @@
     if (!validateBeforeStart()) return;
 
     localStorage.setItem(LS.team, ui.teamNumber.value);
+    localStorage.setItem(LS.bingoId, ui.bingoId.value);
     localStorage.setItem(LS.apiBase, ui.apiBase.value.replace(/\/+$/, ""));
 
     if (!chatReader) {
@@ -510,7 +543,8 @@
         chatState.confPct = 95;
         setChatPillLocked(chatState.confPct, "locked");
         addFeed("Chatbox calibrated & locked ✅", "ok");
-        highlightChatPos(chatReader.pos);
+        // Always show highlight once when user requests locate.
+        highlightChatPosForce(chatReader.pos);
         return true;
       }
       addFeed("Could not find chatbox. Ensure chat is visible and try again.", "bad");
@@ -600,6 +634,7 @@
       time: new Date().toISOString(),
       alt1Detected: isAlt1,
       apiBase: (ui.apiBase.value || "").replace(/\/+$/, ""),
+      bingoId: ui.bingoId ? ui.bingoId.value : "1",
       team: ui.teamNumber.value,
       ign: (ui.ign.value || "").trim(),
       ignLocked: (localStorage.getItem(LS.ignLocked) || "") === "1",

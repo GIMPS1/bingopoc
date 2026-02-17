@@ -63,6 +63,7 @@ body{
 .grid2{display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;}
 .field label{display:block; font-size:11px; color:var(--muted); margin-bottom:6px;}
 .hint{font-size:11px; color:var(--muted); margin-top:6px; line-height:1.3;}
+.mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
 
 input, select{
   width:100%; box-sizing:border-box;
