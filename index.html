@@ -34,52 +34,60 @@
     </header>
 
     <section class="panel">
-      <div class="grid2">
-        <!-- API base is locked/hidden in v9.1 -->
-        <input id="apiBase" type="hidden" value="https://colorado-textiles-polished-camcorder.trycloudflare.com" />
-        <div class="field">
-          <label>Bingo #</label>
-          <select id="bingoId">
-            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-            <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
-          </select>
+      <!-- API base is locked/hidden -->
+      <input id="apiBase" type="hidden" value="https://colorado-textiles-polished-camcorder.trycloudflare.com" />
+
+      <!-- Setup (auto-hides once locked) -->
+      <div id="setupBlock">
+        <div class="grid3">
+          <div class="field">
+            <label>Bingo #</label>
+            <select id="bingoId">
+              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Team #</label>
+            <select id="teamNumber">
+              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
+              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>&nbsp;</label>
+            <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team">Lock</button>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <div class="field">
+            <label>IGN</label>
+            <div class="rowInline">
+              <input id="ign" placeholder="Your RSN" />
+              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
+            </div>
+            <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
+          </div>
+
+          <div class="field">
+            <label>Status</label>
+            <div class="hint" id="setupHint">
+              Choose Bingo/Team, lock them, then lock your IGN. Chatbox can be set in Settings.
+            </div>
+          </div>
         </div>
       </div>
 
-      <div class="grid2">
-        <div class="field">
-          <label>Team #</label>
-          <select id="teamNumber">
-            <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-            <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
-          </select>
+      <!-- Compact summary (shown once setup is locked) -->
+      <div class="setupSummary" id="setupSummary" style="display:none;">
+        <div class="summaryLeft">
+          <div class="summaryTitle">Configured ✅</div>
+          <div class="summaryMeta" id="summaryMeta">—</div>
         </div>
-        <div class="field">
-          <label>&nbsp;</label>
-          <div class="hint">API endpoints are under <span class="mono">/b/&lt;bingo&gt;/api/…</span></div>
-        </div>
-      </div>
-
-      <div class="grid2">
-        <div class="field">
-          <label>IGN</label>
-          <div class="rowInline">
-            <input id="ign" placeholder="Your RSN" />
-            <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
-          </div>
-          <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
-        </div>
-        <div class="field">
-          <label>Actions</label>
-          <div class="rowInline">
-            <button class="btn primary" id="btnStart">Start</button>
-            <button class="btn danger" id="btnStop" disabled>Stop</button>
-          </div>
-          <div class="rowInline" style="margin-top:8px">
-            <button class="btn secondary small" id="btnPing">Test API</button>
-            <button class="btn secondary small" id="btnLocate">Locate chat</button>
-          </div>
-        </div>
+        <button class="btn secondary small" id="btnOpenSettings2" title="Open settings">Settings</button>
       </div>
 
       <div class="feedHeader">
@@ -87,27 +95,6 @@
         <div class="feedMeta" id="feedMeta">—</div>
       </div>
       <div class="feed" id="feed"></div>
-
-      <div class="miniDebug" id="miniDebug" style="display:none;">
-        <div class="miniRow"><span class="k">Chat</span><span class="v" id="dbgChat">—</span></div>
-        <div class="miniRow"><span class="k">Confidence</span><span class="v" id="dbgConf">—</span></div>
-        <div class="miniRow"><span class="k">Last</span><span class="v" id="dbgLast">—</span></div>
-      </div>
-
-      <div class="chatDebug" id="chatDebug" style="display:none;">
-        <div class="feedHeader" style="margin-top:12px;">
-          <div>Chat debug</div>
-          <div class="feedMeta" id="chatDebugMeta">—</div>
-        </div>
-        <div class="hint mono" id="chatDebugPos" style="margin-top:6px;">—</div>
-        <textarea id="chatDebugBox" class="logbox" readonly style="height:150px; margin-top:8px;"></textarea>
-        <div class="rowInline" style="margin-top:8px; gap:10px;">
-          <button class="btn secondary small" id="btnDebugRead">Read now</button>
-          <button class="btn secondary small" id="btnDebugHighlight">Highlight box</button>
-          <button class="btn secondary small" id="btnDebugClear">Clear</button>
-        </div>
-        <div class="hint" style="margin-top:6px;">Testing panel to prove locate + read. We can hide later.</div>
-      </div>
     </section>
 
     <!-- Settings drawer -->
@@ -119,9 +106,34 @@
 
       <div class="drawerBody">
         <div class="section">
-          <div class="sectionTitle">Capture & calibration</div>
-          <button class="btn secondary" id="btnRecalibrate">Recalibrate chatbox</button>
-          <div class="toggleRow">
+          <div class="sectionTitle">Setup</div>
+          <div class="hint" id="setupState">—</div>
+          <div class="rowInline" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn secondary small" id="btnUnlockSetup">Unlock Bingo/Team</button>
+            <button class="btn danger small" id="btnResetIgn">Reset IGN</button>
+          </div>
+          <div class="hint" style="margin-top:8px;">Unlock only if you need to change values.</div>
+        </div>
+
+        <div class="section">
+          <div class="sectionTitle">Chatbox</div>
+
+          <button class="btn secondary" id="btnScanChats">Scan & highlight chatboxes</button>
+
+          <div class="field" style="margin-top:10px;">
+            <label>Choose chatbox</label>
+            <select id="chatSelect" disabled>
+              <option value="">Scan first…</option>
+            </select>
+          </div>
+
+          <div class="rowInline" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn primary small" id="btnLockChat" disabled>Lock selected</button>
+            <button class="btn secondary small" id="btnHighlightChat" disabled>Highlight</button>
+            <button class="btn secondary small" id="btnRecalibrate">Auto-locate (quick)</button>
+          </div>
+
+          <div class="toggleRow" style="margin-top:10px;">
             <label class="toggle">
               <input type="checkbox" id="optAutoDetect" />
               <span>Auto-detect fallback</span>
@@ -130,45 +142,26 @@
           <div class="toggleRow">
             <label class="toggle">
               <input type="checkbox" id="optHighlight" />
-              <span>Highlight box during locate</span>
+              <span>Highlight during locate</span>
             </label>
           </div>
-          <div class="hint">Recommended: calibrate once, keep fallback on.</div>
+          <div class="hint">Tip: scanning lets you pick the right tab when you have multiple chat windows.</div>
         </div>
 
         <div class="section">
-          <div class="sectionTitle">Debug</div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optMiniDebug" />
-              <span>Show mini debug panel</span>
-            </label>
+          <div class="sectionTitle">Runtime</div>
+          <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
+            <button class="btn secondary small" id="btnStart">Start</button>
+            <button class="btn danger small" id="btnStop" disabled>Stop</button>
+            <button class="btn secondary small" id="btnUnlockChat">Unlock chat</button>
           </div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optChatDebug" />
-              <span>Show chat debug panel (testing)</span>
-            </label>
-          </div>
-          <button class="btn secondary small" id="btnCopyDebug">Copy debug info</button>
+          <div class="hint" style="margin-top:8px;">Auto-submit is always on once setup is locked.</div>
         </div>
 
-        <div class="section">
-          <div class="sectionTitle">Submission</div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optAutoSubmit" />
-              <span>Auto-submit drops</span>
-            </label>
-          </div>
-          <button class="btn secondary small" id="btnSendTest">Send test drop</button>
-          <div class="hint">Test drop uses “Ahrim's hood”.</div>
-        </div>
-
-        <div class="section dangerZone">
-          <div class="sectionTitle">Account</div>
-          <button class="btn danger small" id="btnResetIgn">Reset locked IGN</button>
-          <div class="hint">Only use if you changed RSN.</div>
+        <!-- Debug tools are intentionally hidden for now -->
+        <div class="section adminGate" id="adminGate" style="display:none;">
+          <div class="sectionTitle">Admin tools</div>
+          <div class="hint">Hidden placeholder for future password-protected debug tools.</div>
         </div>
       </div>
     </aside>

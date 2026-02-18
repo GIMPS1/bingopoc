@@ -203,3 +203,27 @@ input:focus,select:focus{border-color:rgba(214,178,94,.50); box-shadow:0 0 0 3px
   transition:opacity .18s ease;
 }
 .backdrop.show{opacity:1; pointer-events:auto;}
+
+
+
+.grid3{
+  display:grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap:10px;
+  align-items:end;
+}
+
+.setupSummary{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(255,255,255,.035);
+  border:1px solid rgba(255,255,255,.08);
+  margin-bottom:10px;
+}
+.summaryTitle{font-weight:800; font-size:12px;}
+.summaryMeta{font-size:11px; color:var(--muted); margin-top:2px;}
+.summaryLeft{display:flex; flex-direction:column;}
