@@ -69,7 +69,7 @@
   };
 
   // v9.1: lock API base (hidden in UI)
-  const LOCKED_API_BASE = "http://80.43.97.201:8000";
+  const LOCKED_API_BASE = "https://senior-legendary-sunglasses-transition.trycloudflare.com/b/4/api/state:8000";
   const getApiBase = () => LOCKED_API_BASE;
 
   function loadSettings() {
