@@ -791,7 +791,7 @@
     running = true;
     ui.btnStart.disabled = true;
     ui.btnStop.disabled = false;
-    addFeed("Running. Auto-submit active ✅", "ok");
+    addFeed("Running. Auto-submit active ", "ok");
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(poll, 350);
