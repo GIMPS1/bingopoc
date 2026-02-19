@@ -93,7 +93,7 @@
   }
 
   // ---------- UI helpers ----------
-  const FEED_MAX = 12;
+  const FEED_MAX = 3;
   const feedItems = []; // {ts, msg, level}
   function nowTs() {
     const d = new Date();
