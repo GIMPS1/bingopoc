@@ -3,21 +3,6 @@
    - No main window scrollbars
    - Premium single-line event tile (#eventLine)
 */
-.mockBtn {
-  margin-top: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid rgba(214,178,94,.35);
-  background: rgba(214,178,94,.15);
-  color: #fff;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.mockBtn:hover {
-  background: rgba(214,178,94,.25);
-}
 
 :root{
   --bg:#0b0f14;
@@ -81,10 +66,6 @@ body{
 }
 .title{font-weight:900; letter-spacing:.25px; font-size:13px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
 .subtitle{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-/* Hide top status pills */
-.statusRow {
-  display: none !important;
-}
 
 .statusRow{display:flex; gap:8px; align-items:center;}
 .pill{
@@ -158,18 +139,6 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 
 /* Hide old activity UI (list) */
 .feedHeader, .feedMeta, .feed { display:none !important; }
-
-/* Remove setup summary */
-.setupSummary {
-  display: none !important;
-}
-
-/* Limit feed to exactly 3 visible rows */
-.feed {
-  max-height: 72px !important; /* tweak to 78px if clipping */
-  overflow-y: auto;
-  overflow-x: hidden;
-}
 
 /* Premium single-line event tile */
 .eventLine{
@@ -289,3 +258,34 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   border: 2px solid rgba(12,18,32,.90);
 }
 .drawerBody::-webkit-scrollbar-thumb:hover{ background: linear-gradient(180deg, rgba(214,178,94,1), rgba(214,178,94,.75)); }
+
+/* --- v1.2 tweaks --- */
+
+/* 1) Remove pills from top (they'll live in settings only) */
+.statusRow{ display:none !important; }
+
+/* 2) Remove setup summary */
+.setupSummary{ display:none !important; }
+
+/* 5) Header narrower + margin bottom 5px */
+.topbar{ margin-bottom:5px !important; }
+.brandIcon{ width:28px !important; height:28px !important; }
+.title{ font-size:13px !important; }
+
+/* 2) Allow 3 items visible in feed (still scrollable) */
+.feed{ max-height:72px !important; }
+
+/* 3) Dev mock drop button */
+.mockBtn{
+  margin-top:8px;
+  width:100%;
+  padding:8px 10px;
+  border-radius:12px;
+  border:1px solid rgba(214,178,94,.35);
+  background: rgba(214,178,94,.15);
+  color:#fff;
+  font-weight:800;
+  letter-spacing:.15px;
+  cursor:pointer;
+}
+.mockBtn:hover{ background: rgba(214,178,94,.25); }
