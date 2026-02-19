@@ -64,8 +64,8 @@ body{
     radial-gradient(circle at 30% 30%, rgba(214,178,94,.75), rgba(214,178,94,.15) 45%, rgba(17,26,36,0) 70%),
     linear-gradient(135deg, rgba(214,178,94,.35), rgba(17,26,36,0));
 }
-.title{font-weight:900; letter-spacing:.25px; font-size:13px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
-.subtitle{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.title{font-weight:900; letter-spacing:.25px; font-size:13px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:10px;}
+.subtitle{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:10px;}
 
 .statusRow{display:flex; gap:8px; align-items:center;}
 .pill{
