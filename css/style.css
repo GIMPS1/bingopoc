@@ -175,6 +175,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   white-space:nowrap;
   overflow:hidden;
   text-overflow:ellipsis;
+  padding-left:10px;
 }
 .eventText .line2{
   font-size:11px;
