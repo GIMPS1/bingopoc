@@ -15,6 +15,10 @@
     bingoId: $("bingoId"),
     teamNumber: $("teamNumber"),
 
+    // Name-based setup
+    bingoSelect: $("bingoSelect"),
+    teamSelect: $("teamSelect"),
+
     ign: $("ign"),
     ignHint: $("ignHint"),
     btnLockIgn: $("btnLockIgn"),
@@ -47,11 +51,7 @@
     optHighlight: $("optHighlight"),
     btnUnlockChat: $("btnUnlockChat"),
 
-    // Runtime
-    btnStart: $("btnStart"),
-    btnStop: $("btnStop"),
-
-    // Feed
+    // Runtime// Feed
     feed: $("feed"),
     feedMeta: $("feedMeta"),
 
@@ -246,8 +246,8 @@
   // ---------- restore setup ----------
   if (ui.apiBase) ui.apiBase.value = getApiBase();
 
-  ui.bingoId.value = localStorage.getItem(LS.bingoId) || "1";
-  ui.teamNumber.value = localStorage.getItem(LS.team) || "1";
+  if (ui.bingoId) ui.bingoId.value = localStorage.getItem(LS.bingoId) || "1";
+  if (ui.teamNumber) ui.teamNumber.value = localStorage.getItem(LS.team) || "1";
 
   const setupLocked = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const ignLocked = (localStorage.getItem(LS.ignLocked) || "") === "1";
@@ -280,23 +280,29 @@
 
   function refreshSummary() {
     if (!ui.summaryMeta) return;
-    const b = localStorage.getItem(LS.bingoId) || ui.bingoId.value || "—";
-    const t = localStorage.getItem(LS.team) || ui.teamNumber.value || "—";
+    const b = localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "—";
+    const t = localStorage.getItem(LS.team) || ui.teamNumber?.value || "—";
+    const names = loadSavedNames();
+    const bingoLabel = names.bingoName ? names.bingoName : `Bingo ${b}`;
+    const teamLabel = names.teamName ? names.teamName : `Team ${t}`;
     const ign = (localStorage.getItem(LS.ign) || ui.ign.value || "").trim();
     const chat = localStorage.getItem(LS.chatPos) ? "Chat locked" : "Chat not set";
     const ignTxt = ign ? `IGN: ${ign}` : "IGN: —";
-    ui.summaryMeta.textContent = `Bingo ${b} • Team ${t} • ${ignTxt} • ${chat}`;
+    ui.summaryMeta.textContent = `${bingoLabel} • ${teamLabel} • ${ignTxt} • ${chat}`;
     updateConfigPill();
   }
 
   function refreshSetupState() {
     if (!ui.setupState) return;
-    const b = localStorage.getItem(LS.bingoId) || ui.bingoId.value || "—";
-    const t = localStorage.getItem(LS.team) || ui.teamNumber.value || "—";
+    const b = localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "—";
+    const t = localStorage.getItem(LS.team) || ui.teamNumber?.value || "—";
+    const names = loadSavedNames();
+    const bingoLabel = names.bingoName ? names.bingoName : `Bingo ${b}`;
+    const teamLabel = names.teamName ? names.teamName : `Team ${t}`;
     const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
     const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
     const cl = !!localStorage.getItem(LS.chatPos);
-    ui.setupState.textContent = `Bingo ${b} • Team ${t} • IGN ${il ? "locked" : "not set"} • Chat ${cl ? "locked" : "not set"} • Setup ${sl ? "locked" : "unlocked"}`;
+    ui.setupState.textContent = `${bingoLabel} • ${teamLabel} • IGN ${il ? "locked" : "not set"} • Chat ${cl ? "locked" : "not set"} • Setup ${sl ? "locked" : "unlocked"}`;
   }
 
   setIgnLocked(ignLocked);
@@ -307,7 +313,179 @@
   ui.optAutoDetect.checked = settings.autoDetect;
   ui.optHighlight.checked = settings.highlight;
 
-  // ---------- API helpers ----------
+  
+
+
+  // ---------- Name-based setup UI ----------
+  // Load bingos and wire selects if present
+  if (ui.bingoSelect && ui.teamSelect) {
+    // Populate from API
+    loadBingosAndPopulate();
+
+    ui.bingoSelect.addEventListener("change", () => {
+      const b = getSelectedBingo();
+      if (!b) {
+        if (ui.teamSelect) {
+          ui.teamSelect.innerHTML = '<option value="">Select a bingo first…</option>';
+          ui.teamSelect.disabled = true;
+        }
+        setHiddenSetupIds("", "");
+        setSetupSelectState({ loading: false, ready: false });
+        return;
+      }
+
+      populateTeamSelect(b.teams || []);
+      if (ui.teamSelect) ui.teamSelect.disabled = false;
+
+      // Update hidden bingo id
+      setHiddenSetupIds(b.id, ui.teamSelect && ui.teamSelect.value ? ui.teamSelect.value : "");
+      setSetupSelectState({ loading: false, ready: !!(ui.teamSelect && ui.teamSelect.value) });
+    });
+
+    ui.teamSelect.addEventListener("change", () => {
+      const b = getSelectedBingo();
+      const t = b ? getSelectedTeam(b) : null;
+      if (!b || !t) {
+        setHiddenSetupIds(b ? b.id : "", "");
+        setSetupSelectState({ loading: false, ready: false });
+        return;
+      }
+      setHiddenSetupIds(b.id, t.team_number);
+      setSetupSelectState({ loading: false, ready: true });
+    });
+  }
+
+  // ---------- Bingo/team name resolver ----------
+  // Fetch /api/bingos once, populate Bingo + Team selects (no typing)
+  let _bingosCache = null; // [{id,name,teams:[{team_number,name}]}]
+
+  function setSetupSelectState({ loading = false, ready = false } = {}) {
+    if (ui.bingoSelect) ui.bingoSelect.disabled = loading;
+    if (ui.teamSelect) ui.teamSelect.disabled = !ready;
+    if (ui.btnLockSetup) ui.btnLockSetup.disabled = !ready;
+  }
+
+  function setHiddenSetupIds(bingoId, teamNo) {
+    if (ui.bingoId) ui.bingoId.value = String(bingoId || "");
+    if (ui.teamNumber) ui.teamNumber.value = String(teamNo || "");
+  }
+
+  function saveSetupFromSelection(bingoObj, teamObj) {
+    if (bingoObj && bingoObj.id) localStorage.setItem(LS.bingoId, String(bingoObj.id));
+    if (teamObj && teamObj.team_number) localStorage.setItem(LS.team, String(teamObj.team_number));
+    if (bingoObj && bingoObj.name) localStorage.setItem("irb.bingoName", String(bingoObj.name));
+    if (teamObj && teamObj.name) localStorage.setItem("irb.teamName", String(teamObj.name));
+  }
+
+  function loadSavedNames() {
+    return {
+      bingoName: localStorage.getItem("irb.bingoName") || "",
+      teamName: localStorage.getItem("irb.teamName") || ""
+    };
+  }
+
+  function populateBingoSelect(bingos) {
+    if (!ui.bingoSelect) return;
+    ui.bingoSelect.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "Select a bingo…";
+    ui.bingoSelect.appendChild(opt0);
+
+    for (const b of bingos) {
+      const opt = document.createElement("option");
+      opt.value = String(b.id);
+      opt.textContent = b.name ? String(b.name) : `Bingo #${b.id}`;
+      ui.bingoSelect.appendChild(opt);
+    }
+
+    // Try restore last selected
+    const savedId = localStorage.getItem(LS.bingoId) || "";
+    if (savedId) ui.bingoSelect.value = savedId;
+  }
+
+  function populateTeamSelect(teams) {
+    if (!ui.teamSelect) return;
+    ui.teamSelect.innerHTML = "";
+    const opt0 = document.createElement("option");
+    opt0.value = "";
+    opt0.textContent = "Select a team…";
+    ui.teamSelect.appendChild(opt0);
+
+    for (const t of teams || []) {
+      const opt = document.createElement("option");
+      opt.value = String(t.team_number);
+      opt.textContent = t.name ? String(t.name) : `Team ${t.team_number}`;
+      ui.teamSelect.appendChild(opt);
+    }
+
+    // Try restore last selected
+    const savedTeam = localStorage.getItem(LS.team) || "";
+    if (savedTeam) ui.teamSelect.value = savedTeam;
+  }
+
+  function getSelectedBingo() {
+    const id = (ui.bingoSelect && ui.bingoSelect.value) ? parseInt(ui.bingoSelect.value, 10) : parseInt(ui.bingoId?.value || "0", 10);
+    if (!_bingosCache || !id) return null;
+    return _bingosCache.find(b => Number(b.id) === Number(id)) || null;
+  }
+
+  function getSelectedTeam(bingoObj) {
+    const teamNo = (ui.teamSelect && ui.teamSelect.value) ? parseInt(ui.teamSelect.value, 10) : parseInt(ui.teamNumber?.value || "0", 10);
+    if (!bingoObj || !bingoObj.teams || !teamNo) return null;
+    return bingoObj.teams.find(t => Number(t.team_number) === Number(teamNo)) || null;
+  }
+
+  async function loadBingosAndPopulate() {
+    const base = getApiBase();
+    if (!base) {
+      addFeed("API base missing; cannot load bingos.", "bad");
+      return false;
+    }
+
+    setSetupSelectState({ loading: true, ready: false });
+
+    try {
+      const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      // Accept either {bingos:[...]} or [...]
+      const bingos = Array.isArray(data) ? data : (Array.isArray(data?.bingos) ? data.bingos : []);
+      _bingosCache = (bingos || []).map(b => ({
+        id: b.id ?? b.bingo_id ?? b.bingoId,
+        name: b.name ?? b.title ?? b.bingo_name,
+        teams: Array.isArray(b.teams) ? b.teams.map(t => ({
+          team_number: t.team_number ?? t.teamNo ?? t.number ?? t.id,
+          name: t.name ?? t.team_name ?? t.title
+        })) : []
+      })).filter(b => b.id);
+
+      if (!_bingosCache.length) throw new Error("No bingos returned");
+
+      populateBingoSelect(_bingosCache);
+
+      // If a bingo is already selected, populate teams
+      const b = getSelectedBingo();
+      if (b) {
+        populateTeamSelect(b.teams || []);
+        if (ui.teamSelect) ui.teamSelect.disabled = false;
+      }
+
+      // Determine readiness
+      const ready = !!(getSelectedBingo() && (ui.teamSelect ? ui.teamSelect.value : ui.teamNumber?.value));
+      setSetupSelectState({ loading: false, ready });
+
+      addFeed("Loaded bingos ✅", "ok");
+      return true;
+    } catch (e) {
+      setSetupSelectState({ loading: false, ready: false });
+      addFeed("Failed to load /api/bingos: " + e.message, "bad");
+      return false;
+    }
+  }
+
+// ---------- API helpers ----------
   async function pingApi() {
     const base = getApiBase();
     const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId.value || "0", 10) || 0;
@@ -805,7 +983,8 @@
 
   function start() {
     if (!isAlt1) { addFeed("Alt1 not detected. Open inside Alt1 Toolkit.", "bad"); return; }
-    if (!isSetupReady()) { addFeed("Finish setup first (lock Bingo/Team + IGN).", "bad"); return; }
+    if (!isSetupReady()) { addFeed("Finish setup first (lock Bingo/Team + IGN + Chat).", "bad"); return; }
+    if (running) return;
 
     if (!chatReader) {
       const ok = initChatReader();
@@ -813,9 +992,7 @@
     }
 
     running = true;
-    ui.btnStart.disabled = true;
-    ui.btnStop.disabled = false;
-    addFeed("Running. Auto-submit active ✅", "ok");
+    addFeed("Running. Auto-submit active.", "ok");
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(poll, 350);
@@ -823,8 +1000,6 @@
 
   function stop() {
     running = false;
-    ui.btnStart.disabled = false;
-    ui.btnStop.disabled = true;
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
     addFeed("Stopped.", "warn");
@@ -932,13 +1107,17 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
   });
 
   ui.btnLockSetup.addEventListener("click", () => {
-    const b = parseInt(ui.bingoId.value || "0", 10);
-    const t = parseInt(ui.teamNumber.value || "0", 10);
+    const bingoObj = (ui.bingoSelect && ui.teamSelect) ? getSelectedBingo() : null;
+    const teamObj = (ui.bingoSelect && ui.teamSelect && bingoObj) ? getSelectedTeam(bingoObj) : null;
+
+    const b = parseInt((bingoObj ? bingoObj.id : ui.bingoId.value) || "0", 10);
+    const t = parseInt((teamObj ? teamObj.team_number : ui.teamNumber.value) || "0", 10);
     if (!b || b < 1) { addFeed("Set a valid Bingo #.", "bad"); return; }
     if (!t || t < 1) { addFeed("Set a valid Team #.", "bad"); return; }
 
     localStorage.setItem(LS.bingoId, String(b));
     localStorage.setItem(LS.team, String(t));
+    if (bingoObj && teamObj) saveSetupFromSelection(bingoObj, teamObj);
     setSetupLocked(true);
     addFeed("Bingo/Team locked ✅", "ok");
 
@@ -1002,12 +1181,7 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
 
   ui.btnLockChat.addEventListener("click", lockSelectedChat);
   ui.btnUnlockChat.addEventListener("click", unlockChat);
-
-  ui.btnStart.addEventListener("click", start);
-  ui.btnStop.addEventListener("click", stop);
-
-  
-  // --- WebAudio "beep" (no file needed) ---
+// --- WebAudio "beep" (no file needed) ---
   let __irbAudioCtx = null;
   function playBeep(type = "ok") {
     try {
