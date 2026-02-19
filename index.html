@@ -1,211 +1,42 @@
-<!doctype html>
+<!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Iron Rivals Bingo (Alt1)</title>
-  <script>
-(function () {
-  const BLOCKED = [
-    "runeapps.org/nis/nis.css",
-    "runeapps.org/runeappslib.css"
-  ];
-
-  function shouldBlock(url) {
-    return BLOCKED.some(b => url && url.includes(b));
-  }
-
-  // Remove already-existing link tags
-  document.addEventListener("DOMContentLoaded", function () {
-    document.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
-      if (shouldBlock(link.href)) {
-        console.log("Blocked stylesheet:", link.href);
-        link.remove();
-      }
-    });
-  });
-
-  // Intercept future stylesheet injections
-  const originalAppendChild = Element.prototype.appendChild;
-  Element.prototype.appendChild = function (child) {
-    if (
-      child.tagName === "LINK" &&
-      child.rel === "stylesheet" &&
-      shouldBlock(child.href)
-    ) {
-      console.log("Prevented stylesheet injection:", child.href);
-      return child; // silently ignore
-    }
-    return originalAppendChild.call(this, child);
-  };
-})();
-</script>
-
-  <link rel="stylesheet" href="https://runeapps.org/nis/nis.css" />
-  <link rel="stylesheet" href="https://runeapps.org/runeappslib.css" />
-  <link rel="stylesheet" href="./css/style.css" />
-
-  <script src="https://runeapps.org/runeappslib.js"></script>
-  <script src="https://www.unpkg.com/alt1/dist/base/index.js"></script>
-  <script src="https://www.unpkg.com/alt1/dist/ocr/index.js"></script>
-  <script src="https://www.unpkg.com/alt1/dist/chatbox/index.js"></script>
+  <meta charset="UTF-8" />
+  <title>Iron Rivals Bingo</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
-<body class="nis">
+<body>
   <div class="wrap">
-    <header class="topbar">
+    <div class="topbar">
       <div class="brand">
-        <img class="brandIcon" src="./assets/icon.png" alt="" />
-        <div class="brandText">
+        <div class="brandIcon"></div>
+        <div>
           <div class="title">Iron Rivals Bingo</div>
-          <div class="subtitle">Drop auto-submit</div>
+          <div class="subtitle">Premium Drop Tracker</div>
         </div>
       </div>
+    </div>
 
-      <div class="statusRow">
-        <div class="pill" id="alt1Pill">Alt1: …</div>
-        <div class="pill" id="apiPill">API: …</div>
-        <div class="pill" id="chatPill">Chat: …</div>
-        <button class="iconBtn" id="btnOpenSettings" title="Settings">
-          <span class="icon">⚙</span>
-        </button>
-      </div>
-    </header>
-
-    <section class="panel">
-      <!-- API base is locked/hidden -->
-      <input id="apiBase" type="hidden" value="https://colorado-textiles-polished-camcorder.trycloudflare.com" />
-
-      <!-- Setup (auto-hides once locked) -->
-      <div id="setupBlock">
-        <div class="grid3">
-          <div class="field">
-            <label>Bingo #</label>
-            <select id="bingoId">
-              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label>Team #</label>
-            <select id="teamNumber">
-              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
-            </select>
-          </div>
-
-          <div class="field">
-            <label>&nbsp;</label>
-            <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team">Lock</button>
+    <div class="panel">
+      <div id="eventLine" class="eventLine ok">
+        <div class="eventLeft">
+          <div class="eventIcon">✓</div>
+          <div class="eventText">
+            <div class="line1" id="eventTitle">Waiting for drops…</div>
+            <div class="line2" id="eventSub">Auto-submit armed</div>
           </div>
         </div>
-
-        <div class="grid2">
-          <div class="field">
-            <label>IGN</label>
-            <div class="rowInline">
-              <input id="ign" placeholder="Your RSN" />
-              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
-            </div>
-            <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
-          </div>
-
-          <div class="field">
-            <label>Status</label>
-            <div class="hint" id="setupHint">
-              Choose Bingo/Team, lock them, then lock your IGN. Chatbox can be set in Settings.
-            </div>
-          </div>
+        <div class="eventRight">
+          <div class="eventTick">✓</div>
         </div>
       </div>
-
-      <!-- Compact summary (shown once setup is locked) -->
-      <div class="setupSummary" id="setupSummary" style="display:none;">
-        <div class="summaryLeft">
-          <div class="summaryTitle">Configured ✅</div>
-          <div class="summaryMeta" id="summaryMeta">—</div>
-        </div>
-        <button class="btn secondary small" id="btnOpenSettings2" title="Open settings">Settings</button>
-      </div>
-
-      <div class="feedHeader">
-        <div>Activity</div>
-        <div class="feedMeta" id="feedMeta">—</div>
-      </div>
-      <div class="feed" id="feed"></div>
-    </section>
-
-    <!-- Settings drawer -->
-    <aside class="drawer" id="settingsDrawer" aria-hidden="true">
-      <div class="drawerHeader">
-        <div class="drawerTitle">Settings</div>
-        <button class="iconBtn" id="btnCloseSettings" title="Close"><span class="icon">✕</span></button>
-      </div>
-
-      <div class="drawerBody">
-        <div class="section">
-          <div class="sectionTitle">Setup</div>
-          <div class="hint" id="setupState">—</div>
-          <div class="rowInline" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnUnlockSetup">Unlock Bingo/Team</button>
-            <button class="btn danger small" id="btnResetIgn">Reset IGN</button>
-          </div>
-          <div class="hint" style="margin-top:8px;">Unlock only if you need to change values.</div>
-        </div>
-
-        <div class="section">
-          <div class="sectionTitle">Chatbox</div>
-
-          <button class="btn secondary" id="btnScanChats">Scan & highlight chatboxes</button>
-
-          <div class="field" style="margin-top:10px;">
-            <label>Choose chatbox</label>
-            <select id="chatSelect" disabled>
-              <option value="">Scan first…</option>
-            </select>
-          </div>
-
-          <div class="rowInline" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
-            <button class="btn primary small" id="btnLockChat" disabled>Lock selected</button>
-            <button class="btn secondary small" id="btnHighlightChat" disabled>Highlight</button>
-            <button class="btn secondary small" id="btnRecalibrate">Auto-locate (quick)</button>
-          </div>
-
-          <div class="toggleRow" style="margin-top:10px;">
-            <label class="toggle">
-              <input type="checkbox" id="optAutoDetect" />
-              <span>Auto-detect fallback</span>
-            </label>
-          </div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optHighlight" />
-              <span>Highlight during locate</span>
-            </label>
-          </div>
-          <div class="hint">Tip: scanning lets you pick the right tab when you have multiple chat windows.</div>
-        </div>
-
-        <div class="section">
-          <div class="sectionTitle">Runtime</div>
-          <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnStart">Start</button>
-            <button class="btn danger small" id="btnStop" disabled>Stop</button>
-            <button class="btn secondary small" id="btnUnlockChat">Unlock chat</button>
-          </div>
-          <div class="hint" style="margin-top:8px;">Auto-submit is always on once setup is locked.</div>
-        </div>
-
-        <!-- Debug tools are intentionally hidden for now -->
-        <div class="section adminGate" id="adminGate" style="display:none;">
-          <div class="sectionTitle">Admin tools</div>
-          <div class="hint">Hidden placeholder for future password-protected debug tools.</div>
-        </div>
-      </div>
-    </aside>
-
-    <div class="backdrop" id="drawerBackdrop" aria-hidden="true"></div>
+    </div>
   </div>
 
-  <script src="./js/main.js"></script>
+  <audio id="dropSound" preload="auto">
+    <source src="drop.mp3" type="audio/mpeg">
+  </audio>
+
+  <script src="main.js"></script>
 </body>
 </html>
