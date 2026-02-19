@@ -36,24 +36,26 @@
       <div id="setupBlock">
         <div class="grid3">
           <div class="field">
-            <label>Bingo #</label>
-            <select id="bingoId">
-              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+            <label>Bingo</label>
+            <select id="bingoSelect">
+              <option value="">Loading bingos…</option>
             </select>
+            <!-- Hidden numeric id used by backend routes -->
+            <input id="bingoId" type="hidden" value="1" />
           </div>
 
           <div class="field">
-            <label>Team #</label>
-            <select id="teamNumber">
-              <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option>
-              <option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option>
+            <label>Team</label>
+            <select id="teamSelect" disabled>
+              <option value="">Select a bingo first…</option>
             </select>
+            <!-- Hidden numeric team used by backend routes -->
+            <input id="teamNumber" type="hidden" value="1" />
           </div>
 
           <div class="field">
             <label>&nbsp;</label>
-            <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team">Lock</button>
+            <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team" disabled>Lock</button>
           </div>
         </div>
 
@@ -87,7 +89,7 @@
 
       
       <!-- Premium single-line event (replaces activity list visually) -->
-      <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
+      <div id="eventLine" class="eventLine ok show" style="margin-bottom:10px;">
         <div class="eventLeft">
           <div class="eventIcon" id="eventIcon">✓</div>
           <div class="eventText">
@@ -171,11 +173,9 @@
         <div class="section">
           <div class="sectionTitle">Runtime</div>
           <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnStart">Start</button>
-            <button class="btn danger small" id="btnStop" disabled>Stop</button>
             <button class="btn secondary small" id="btnUnlockChat">Unlock chat</button>
           </div>
-          <div class="hint" style="margin-top:8px;">Auto-submit is always on once setup is locked.</div>
+          <div class="hint" style="margin-top:8px;">Auto-submit runs automatically once Setup + IGN + Chat are locked.</div>
         </div>
 
         <!-- Debug tools are intentionally hidden for now -->
