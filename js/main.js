@@ -47,11 +47,7 @@
     optHighlight: $("optHighlight"),
     btnUnlockChat: $("btnUnlockChat"),
 
-    // Runtime
-    btnStart: $("btnStart"),
-    btnStop: $("btnStop"),
-
-    // Feed
+    // Runtime// Feed
     feed: $("feed"),
     feedMeta: $("feedMeta"),
 
@@ -104,10 +100,7 @@
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(localStorage.getItem(LS.settings) || "{}"); } catch (e) {}
-    return {
-      autoDetect: s.autoDetect !== false, // default true
-      highlight: s.highlight === true,    // default false
-    };
+    return { autoDetect: true, highlight: s.highlight === true };;
   }
   function saveSettings(patch) {
     const current = loadSettings();
@@ -627,27 +620,33 @@
     return false;
   }
 
+  
   function tryOverlayRect(pos, force) {
     if (!pos || !isAlt1) return false;
-    if (!force && !loadSettings().highlight) return false;
 
     const rect = pos.mainbox && pos.mainbox.rect ? pos.mainbox.rect : (pos.rect ? pos.rect : pos);
     const x = rect.x, y = rect.y;
     const w = rect.width || rect.w;
     const h = rect.height || rect.h;
-    const ms = 1300;
-    const t = 2;
-    const color = 0x00ff00;
+
+    const duration = 1400;
+    const thickness = 3;
+
+    // Theme gold color (#d6b25e)
+    const gold = (214 << 16) | (178 << 8) | 94;
 
     if (window.alt1 && typeof alt1.overLayRect === "function") {
       try {
-        alt1.overLayRect(color, x, y, w, t, ms, 2);
-        alt1.overLayRect(color, x, y + h - t, w, t, ms, 2);
-        alt1.overLayRect(color, x, y, t, h, ms, 2);
-        alt1.overLayRect(color, x + w - t, y, t, h, ms, 2);
+        alt1.overLayRect(gold, x, y, w, thickness, duration, 2);
+        alt1.overLayRect(gold, x, y + h - thickness, w, thickness, duration, 2);
+        alt1.overLayRect(gold, x, y, thickness, h, duration, 2);
+        alt1.overLayRect(gold, x + w - thickness, y, thickness, h, duration, 2);
         return true;
       } catch (e) {}
     }
+
+    return false;
+  }
     if (window.A1lib && typeof A1lib.drawRect === "function") {
       try { A1lib.drawRect(x, y, w, h, ms); return true; } catch (e) {}
     }
@@ -804,8 +803,9 @@
   }
 
   function start() {
-    if (!isAlt1) { addFeed("Alt1 not detected. Open inside Alt1 Toolkit.", "bad"); return; }
-    if (!isSetupReady()) { addFeed("Finish setup first (lock Bingo/Team + IGN).", "bad"); return; }
+    if (!isAlt1) return;
+    if (!isSetupReady()) return;
+    if (running) return;
 
     if (!chatReader) {
       const ok = initChatReader();
@@ -813,9 +813,6 @@
     }
 
     running = true;
-    ui.btnStart.disabled = true;
-    ui.btnStop.disabled = false;
-    addFeed("Running. Auto-submit active ✅", "ok");
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(poll, 350);
@@ -823,11 +820,8 @@
 
   function stop() {
     running = false;
-    ui.btnStart.disabled = false;
-    ui.btnStop.disabled = true;
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
-    addFeed("Stopped.", "warn");
   }
 
   async function poll() {
@@ -1003,10 +997,6 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
   ui.btnLockChat.addEventListener("click", lockSelectedChat);
   ui.btnUnlockChat.addEventListener("click", unlockChat);
 
-  ui.btnStart.addEventListener("click", start);
-  ui.btnStop.addEventListener("click", stop);
-
-  
   // --- WebAudio "beep" (no file needed) ---
   let __irbAudioCtx = null;
   function playBeep(type = "ok") {
@@ -1102,6 +1092,9 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
       if (feed) feed.style.display = "none";
 
       openDrawer();
+
+      const runtimeSection = document.getElementById("runtimeSection");
+      if (runtimeSection) runtimeSection.style.display = "none";
       // In popup, backdrop isn't needed (click outside won't exist meaningfully)
       if (ui.backdrop) ui.backdrop.style.display = "none";
     } catch (e) {}
