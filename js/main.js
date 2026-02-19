@@ -869,6 +869,7 @@
 
       try {
         await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+        playBeep("ok");
         addFeed(`Submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
       } catch (e) {
         addFeed(`Submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
@@ -965,6 +966,53 @@
 
   ui.btnStart.addEventListener("click", start);
   ui.btnStop.addEventListener("click", stop);
+
+  
+  // --- WebAudio "beep" (no file needed) ---
+  let __irbAudioCtx = null;
+  function playBeep(type = "ok") {
+    try {
+      if (!__irbAudioCtx) __irbAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = __irbAudioCtx;
+
+      // Some browsers require resume after user gesture; best-effort
+      if (ctx.state === "suspended") ctx.resume().catch(() => {});
+
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+
+      // Tones: ok=880Hz, warn=660Hz, bad=220Hz
+      const freq = type === "bad" ? 220 : (type === "warn" ? 660 : 880);
+      o.type = "sine";
+      o.frequency.value = freq;
+
+      const now = ctx.currentTime;
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(0.12, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+
+      o.connect(g);
+      g.connect(ctx.destination);
+
+      o.start(now);
+      o.stop(now + 0.13);
+    } catch(e) {}
+  }
+
+  // --- Dev: add mock drop to feed ---
+  function addMockDrop() {
+    const picks = [
+      ["Magic logs", 71],
+      ["Ahrim's hood", 1],
+      ["Onyx", 2],
+      ["Rune bar", 50],
+      ["Hydrix bolt tips", 25]
+    ];
+    const [name, amt] = picks[Math.floor(Math.random() * picks.length)];
+    addFeed(`Mock Drop: ${name} x${amt}`, "ok");
+    playBeep("ok");
+  }
+
 
   // ---------- boot ----------
   addFeed("Plugin loaded.", "ok");
