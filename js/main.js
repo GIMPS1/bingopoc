@@ -6,6 +6,8 @@
 (function () {
   const $ = (id) => document.getElementById(id);
 
+  const on = (el, ev, fn) => { if (el) el.addEventListener(ev, fn); }
+
   const ui = {
     alt1Pill: $("alt1Pill"),
     apiPill: $("apiPill"),
@@ -493,18 +495,18 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     }
     closeDrawer();
   });
-  ui.backdrop.addEventListener("click", closeDrawer);
+  on(ui.backdrop, "click", closeDrawer);
 
-  ui.optAutoDetect.addEventListener("change", (e) => {
+  on(ui.optAutoDetect, "change", (e) => {
     settings = saveSettings({ autoDetect: !!e.target.checked });
     addFeed("Auto-detect fallback: " + (settings.autoDetect ? "ON" : "OFF"), "ok");
   });
-  ui.optHighlight.addEventListener("change", (e) => {
+  on(ui.optHighlight, "change", (e) => {
     settings = saveSettings({ highlight: !!e.target.checked });
     addFeed("Highlight during locate: " + (settings.highlight ? "ON" : "OFF"), "ok");
   });
 
-  ui.btnLockSetup.addEventListener("click", () => {
+  on(ui.btnLockSetup, "click", () => {
     const b = parseInt(ui.bingoId.value || "0", 10);
     const t = parseInt(ui.teamNumber.value || "0", 10);
     if (!b || b < 1) { addFeed("Set a valid Bingo #.", "bad"); return; }
@@ -522,13 +524,13 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (isSetupReady()) start();
   });
 
-  ui.btnUnlockSetup.addEventListener("click", () => {
+  on(ui.btnUnlockSetup, "click", () => {
     setSetupLocked(false);
     addFeed("Bingo/Team unlocked. Set values then Lock again.", "warn");
     stop();
   });
 
-  ui.btnLockIgn.addEventListener("click", () => {
+  on(ui.btnLockIgn, "click", () => {
     const ign = (ui.ign.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
     localStorage.setItem(LS.ign, ign);
@@ -540,7 +542,7 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (isSetupReady()) start();
   });
 
-  ui.btnResetIgn.addEventListener("click", () => {
+  on(ui.btnResetIgn, "click", () => {
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
@@ -549,23 +551,23 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     stop();
   });
 
-  ui.btnRecalibrate.addEventListener("click", () => {
+  on(ui.btnRecalibrate, "click", () => {
     locateChatboxAndStore();
   });
 
-  ui.btnScanChats.addEventListener("click", () => {
+  on(ui.btnScanChats, "click", () => {
     // Ensure chatReader exists for best compatibility
     if (!chatReader) initChatReader();
     scanChatboxes();
   });
 
-  ui.chatSelect.addEventListener("change", () => {
+  on(ui.chatSelect, "change", () => {
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (sel) tryOverlayRect(sel.pos, true);
   });
 
-  ui.btnHighlightChat.addEventListener("click", () => {
+  on(ui.btnHighlightChat, "click", () => {
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (!sel) { addFeed("Select a chatbox first.", "bad"); return; }
@@ -573,8 +575,8 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     addFeed("Highlight shown.", "ok");
   });
 
-  ui.btnLockChat.addEventListener("click", lockSelectedChat);
-  ui.btnUnlockChat.addEventListener("click", unlockChat);
+  on(ui.btnLockChat, "click", lockSelectedChat);
+  on(ui.btnUnlockChat, "click", unlockChat);
 
   // --- WebAudio "beep" (no file needed) ---
   let __irbAudioCtx = null;
