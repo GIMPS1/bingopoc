@@ -60,6 +60,30 @@
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
   };
+  // ---------- settings popup mode ----------
+  const __params = new URLSearchParams(location.search);
+  const __settingsOnly = __params.get("settings") === "1";
+
+  function buildSettingsUrl() {
+    // Same file, settings-only view
+    const base = location.href.split("#")[0].split("?")[0];
+    return `${base}?settings=1`;
+  }
+
+  function openSettingsPopup() {
+    const url = buildSettingsUrl();
+    const w = 356;
+    const h = 560;
+
+    // Alt1 popup if available
+    if (window.alt1 && typeof alt1.openPopup === "function") {
+      try { alt1.openPopup(url, w, h); return; } catch (e) {}
+    }
+
+    // Browser fallback
+    window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
+  }
+
 
   // ---------- storage ----------
   const LS = {
@@ -791,7 +815,7 @@
     running = true;
     ui.btnStart.disabled = true;
     ui.btnStop.disabled = false;
-    addFeed("Running. Auto-submit active ", "ok");
+    addFeed("Running. Auto-submit active ✅", "ok");
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(poll, 350);
@@ -878,9 +902,24 @@
   }
 
   // ---------- events ----------
-  ui.btnOpenSettings.addEventListener("click", openDrawer);
-  ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
-  ui.btnCloseSettings.addEventListener("click", closeDrawer);
+  // ---------- events ----------
+  // Main overlay opens Settings in a separate popup window (Alt1 can't render outside its window)
+  if (!__settingsOnly) {
+    ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
+    ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
+  } else {
+    // Settings-only window uses the in-window drawer
+    ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openDrawer);
+    ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
+  }
+
+ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
+    if (__settingsOnly) {
+      try { window.close(); } catch (e) {}
+      return;
+    }
+    closeDrawer();
+  });
   ui.backdrop.addEventListener("click", closeDrawer);
 
   ui.optAutoDetect.addEventListener("change", (e) => {
@@ -1016,6 +1055,57 @@
 
 
   // ---------- boot ----------
+
+  // If this is the settings-only popup view, hide the compact overlay UI and open the drawer immediately
+  if (__settingsOnly) {
+    try {
+      // Make the drawer fill the popup (no dead space)
+      if (ui.drawer) {
+        ui.drawer.style.width = "100vw";
+        ui.drawer.style.maxWidth = "100vw";
+        ui.drawer.style.transform = "translateX(0)";
+      }
+
+      // Dedicated "Close Settings" button (closes the popup cleanly)
+      const hdr = document.querySelector(".drawerHeader");
+      if (hdr && !document.getElementById("btnClosePopup")) {
+        const btn = document.createElement("button");
+        btn.id = "btnClosePopup";
+        btn.className = "iconBtn";
+        btn.type = "button";
+        btn.title = "Close Settings";
+        btn.setAttribute("aria-label", "Close Settings");
+        btn.innerHTML = '<span class="icon">✕</span>';
+        btn.addEventListener("click", () => {
+          try { window.close(); } catch (e) {}
+        });
+        hdr.appendChild(btn);
+      }
+
+      // Hide the in-drawer close button if it exists (we use the dedicated one in popup)
+      if (ui.btnCloseSettings) ui.btnCloseSettings.style.display = "none";
+
+      const topbar = document.querySelector(".topbar");
+      const panel = document.querySelector(".panel");
+      const setupBlock = document.getElementById("setupBlock");
+      const setupSummary = document.getElementById("setupSummary");
+      const feedHeader = document.querySelector(".feedHeader");
+      const feedMeta = document.getElementById("feedMeta");
+      const feed = document.getElementById("feed");
+
+      if (topbar) topbar.style.display = "none";
+      if (panel) panel.style.display = "none";
+      if (setupBlock) setupBlock.style.display = "none";
+      if (setupSummary) setupSummary.style.display = "none";
+      if (feedHeader) feedHeader.style.display = "none";
+      if (feedMeta) feedMeta.style.display = "none";
+      if (feed) feed.style.display = "none";
+
+      openDrawer();
+      // In popup, backdrop isn't needed (click outside won't exist meaningfully)
+      if (ui.backdrop) ui.backdrop.style.display = "none";
+    } catch (e) {}
+  }
   addFeed("Plugin loaded.", "ok");
   pingApi();
 
