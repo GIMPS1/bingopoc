@@ -1012,6 +1012,7 @@
     addFeed(`Mock Drop: ${name} x${amt}`, "ok");
     playBeep("ok");
   }
+  window.addMockDrop = addMockDrop;
 
 
   // ---------- boot ----------

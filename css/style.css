@@ -262,8 +262,6 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 /* --- v1.2 tweaks --- */
 
 /* 1) Remove pills from top (they'll live in settings only) */
-.statusRow{ display:none !important; }
-
 /* 2) Remove setup summary */
 .setupSummary{ display:none !important; }
 
@@ -289,3 +287,10 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   cursor:pointer;
 }
 .mockBtn:hover{ background: rgba(214,178,94,.25); }
+
+/* v1.2.1 fix: keep settings gear visible; hide only top pills */
+.statusRow .pill{ display:none !important; }
+
+/* --- v1.3 status move --- */
+.drawer .pill{ margin:2px 0; }
+.topbar .statusRow{ gap:6px; }
