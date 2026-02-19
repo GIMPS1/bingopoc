@@ -3,6 +3,43 @@
 <head>
   <meta charset="utf-8" />
   <title>Iron Rivals Bingo (Alt1)</title>
+  <script>
+(function () {
+  const BLOCKED = [
+    "runeapps.org/nis/nis.css",
+    "runeapps.org/runeappslib.css"
+  ];
+
+  function shouldBlock(url) {
+    return BLOCKED.some(b => url && url.includes(b));
+  }
+
+  // Remove already-existing link tags
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll('link[rel="stylesheet"]').forEach(link => {
+      if (shouldBlock(link.href)) {
+        console.log("Blocked stylesheet:", link.href);
+        link.remove();
+      }
+    });
+  });
+
+  // Intercept future stylesheet injections
+  const originalAppendChild = Element.prototype.appendChild;
+  Element.prototype.appendChild = function (child) {
+    if (
+      child.tagName === "LINK" &&
+      child.rel === "stylesheet" &&
+      shouldBlock(child.href)
+    ) {
+      console.log("Prevented stylesheet injection:", child.href);
+      return child; // silently ignore
+    }
+    return originalAppendChild.call(this, child);
+  };
+})();
+</script>
+
   <link rel="stylesheet" href="https://runeapps.org/nis/nis.css" />
   <link rel="stylesheet" href="https://runeapps.org/runeappslib.css" />
   <link rel="stylesheet" href="./css/style.css" />
