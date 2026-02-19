@@ -159,7 +159,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 .eventLeft{display:flex; align-items:center; gap:10px; min-width:0;}
 .eventIcon{
   width:34px;height:34px;border-radius:12px;
-  display:flex; align-items:center; justify-content:center;
+  display:none !important; align-items:center; justify-content:center;
   border:1px solid rgba(78,227,138,.35);
   background: rgba(78,227,138,.10);
   color: var(--green);
