@@ -601,6 +601,8 @@
       updateLockButtonEnabled();
 
       addFeed("Loaded bingos ✅", "ok");
+      // If we are already running (auto-start), keep the main status line unambiguous
+      if (typeof running !== "undefined" && running) addFeed("Running. Waiting for drops…", "ok");
       return true;
     } catch (e) {
       pselectSetDisabled(ui.bingoSelectWrap, false);
@@ -1117,9 +1119,10 @@
   function isSetupReady() {
     const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
     const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
+    const cl = !!localStorage.getItem(LS.chatPos);
     const b = parseInt(localStorage.getItem(LS.bingoId) || "0", 10);
     const t = parseInt(localStorage.getItem(LS.team) || "0", 10);
-    return sl && il && b > 0 && t > 0;
+    return sl && il && cl && b > 0 && t > 0;
   }
 
   function start() {
