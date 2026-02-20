@@ -159,7 +159,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 .eventLeft{display:flex; align-items:center; gap:10px; min-width:0;}
 .eventIcon{
   width:34px;height:34px;border-radius:12px;
-  display:none !important; align-items:center; justify-content:center;
+  display:flex; align-items:center; justify-content:center;
   border:1px solid rgba(78,227,138,.35);
   background: rgba(78,227,138,.10);
   color: var(--green);
@@ -296,3 +296,111 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 /* --- v1.3 status move --- */
 .drawer .pill{ margin:2px 0; }
 .topbar .statusRow{ gap:6px; }
+
+/* --- Premium Select (custom dropdown for Alt1) --- */
+.pselect{ position:relative; width:100%; }
+.pselectBtn{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:9px 10px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,.10);
+  background: rgba(7,10,14,.65);
+  color: var(--text);
+  cursor:pointer;
+  user-select:none;
+}
+.pselectBtn:hover{ border-color: rgba(214,178,94,.35); }
+.pselectBtn:focus{
+  outline:none;
+  border-color: rgba(214,178,94,.50);
+  box-shadow: 0 0 0 3px rgba(214,178,94,.12);
+}
+.pselectValue{
+  min-width:0;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-weight:800;
+  letter-spacing:.1px;
+  font-size:12.5px;
+}
+.pselectChevron{ color: rgba(214,178,94,.9); font-weight:900; }
+.pselectBtn[aria-expanded="true"] .pselectChevron{ transform: rotate(180deg); }
+
+.pselectMenu{
+  position:absolute;
+  top: calc(100% + 8px);
+  left:0;
+  right:0;
+  z-index:50;
+  border-radius:14px;
+  border:1px solid rgba(214,178,94,.25);
+  background: linear-gradient(180deg, rgba(17,26,36,.98), rgba(12,18,26,.96));
+  box-shadow: 0 18px 50px rgba(0,0,0,.55);
+  padding:6px;
+  display:none;
+  max-height: 220px;
+  overflow:auto;
+}
+.pselect.open .pselectMenu{ display:block; }
+
+.pselectItem{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  width:100%;
+  padding:9px 10px;
+  border-radius:12px;
+  cursor:pointer;
+  border:1px solid transparent;
+  color: var(--text);
+  background: rgba(255,255,255,.02);
+  font-size:12px;
+  font-weight:800;
+}
+.pselectItem:hover{
+  background: rgba(214,178,94,.10);
+  border-color: rgba(214,178,94,.22);
+}
+.pselectItem[aria-selected="true"]{
+  background: rgba(78,227,138,.10);
+  border-color: rgba(78,227,138,.30);
+  box-shadow: 0 0 0 1px rgba(78,227,138,.10) inset;
+}
+.pselectItem .meta{
+  font-size:11px;
+  color: var(--muted);
+  font-weight:700;
+}
+.pselectEmpty{
+  padding:10px;
+  border-radius:12px;
+  color: var(--muted);
+  background: rgba(255,255,255,.02);
+  border:1px dashed rgba(255,255,255,.10);
+  font-size:11px;
+  display:none;
+}
+.pselectMenu.is-empty .pselectEmpty{ display:block; }
+
+/* Gold scrollbars inside dropdown */
+.pselectMenu{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(214,178,94,.65) rgba(255,255,255,.05);
+}
+.pselectMenu::-webkit-scrollbar{ width:10px; }
+.pselectMenu::-webkit-scrollbar-track{ background: rgba(255,255,255,.04); border-radius: 10px; }
+.pselectMenu::-webkit-scrollbar-thumb{
+  background: linear-gradient(180deg, rgba(214,178,94,.85), rgba(214,178,94,.55));
+  border-radius: 10px;
+  border: 2px solid rgba(12,18,32,.90);
+}
+.pselectMenu::-webkit-scrollbar-thumb:hover{ background: linear-gradient(180deg, rgba(214,178,94,1), rgba(214,178,94,.75)); }
+
+/* Disabled look (we use a class on wrapper) */
+.pselect.disabled .pselectBtn{ opacity:.55; cursor:not-allowed; }
