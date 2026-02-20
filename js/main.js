@@ -597,7 +597,16 @@ async function loadBingosAndPopulate() {
     populateBingoUI();
 
     addFeed("Loaded bingos ✅", "ok");
-    return true;
+        let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
   } catch (e) {
     setPSelectDisabled(ui.bingoSelectWrap, false);
     clearMenu(ui.bingoMenu, "Failed to load bingos");
@@ -617,7 +626,16 @@ async function loadBingosAndPopulate() {
       const r = await fetch(`${base}/b/${bingoId}/api/state`, { method: "GET" });
       if (!r.ok) throw new Error("HTTP " + r.status);
       setPill(ui.apiPill, "API: ✅", "ok");
-      return true;
+          let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
     } catch (e) {
       setPill(ui.apiPill, "API: ❌", "bad");
       addFeed("API ping failed: " + e.message, "bad");
@@ -670,7 +688,16 @@ async function loadBingosAndPopulate() {
     const url = `${base}/b/${bingoId}/api/mock_drop`;
     const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return true;
+        let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
   }
 
   // ---------- drop parsing ----------
@@ -730,7 +757,16 @@ async function loadBingosAndPopulate() {
   function detectHasTimestamps(lines) {
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
       const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
-      if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
+      if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw))     let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
     }
     return false;
   }
@@ -738,9 +774,36 @@ async function loadBingosAndPopulate() {
   function isLikelyMessageStartNoTs(line) {
     const t = (line || "").trim();
     if (!t) return false;
-    if (/^(You\b|Your\b|News:|A\b)/.test(t)) return true;
-    if (/^[^a-z\s][^:]{1,40}:\s+/.test(t)) return true;
-    if (/^[A-Z][A-Za-z0-9' _-]{1,30}:\s+/.test(t)) return true;
+    if (/^(You\b|Your\b|News:|A\b)/.test(t))     let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
+    if (/^[^a-z\s][^:]{1,40}:\s+/.test(t))     let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
+    if (/^[A-Z][A-Za-z0-9' _-]{1,30}:\s+/.test(t))     let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
     return false;
   }
 
@@ -910,7 +973,16 @@ async function loadBingosAndPopulate() {
     } else {
       setChatPillMissing();
     }
-    return true;
+        let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
   }
 
   function tryFindChatbox(tag) {
@@ -923,7 +995,16 @@ async function loadBingosAndPopulate() {
         chatState.confPct = 70;
         setChatPillLocked(chatState.confPct, "fallback");
         addFeed(`Chatbox auto-detected (${tag}).`, "ok");
-        return true;
+            let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
       }
     } catch (e) {}
     return false;
@@ -947,11 +1028,29 @@ async function loadBingosAndPopulate() {
         alt1.overLayRect(color, x, y + h - t, w, t, ms, 2);
         alt1.overLayRect(color, x, y, t, h, ms, 2);
         alt1.overLayRect(color, x + w - t, y, t, h, ms, 2);
-        return true;
+            let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
       } catch (e) {}
     }
     if (window.A1lib && typeof A1lib.drawRect === "function") {
-      try { A1lib.drawRect(x, y, w, h, ms); return true; } catch (e) {}
+      try { A1lib.drawRect(x, y, w, h, ms);     let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+ } catch (e) {}
     }
     if (force) addFeed("Highlight failed: overlay API not available. Check Alt1 overlay permission & capture mode.", "warn");
     return false;
@@ -972,7 +1071,16 @@ async function loadBingosAndPopulate() {
         setChatPillLocked(chatState.confPct, "locked");
         addFeed("Chatbox calibrated & locked ✅", "ok");
         tryOverlayRect(chatReader.pos, true);
-        return true;
+            let rarity = "common";
+    try {
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
+      }
+    } catch (e) {}
+    return rarity;
+
       }
       addFeed("Could not find chatbox. Ensure chat is visible and try again.", "bad");
       setChatPillMissing();
@@ -1129,7 +1237,95 @@ async function loadBingosAndPopulate() {
     addFeed("Stopped.", "warn");
   }
 
-  async function poll() {
+  
+  // ===============================
+  // Audio System (toggle + volume + rarity)
+  // ===============================
+  class AudioManager {
+    constructor() {
+      this.enabled = localStorage.getItem("audioEnabled") !== "false";
+      const v = parseFloat(localStorage.getItem("masterVolume") || "1");
+      this.volume = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1;
+
+      this.sounds = {
+        common: new Audio("sounds/common.mp3"),
+        rare: new Audio("sounds/rare.mp3"),
+        ultra: new Audio("sounds/ultra.mp3"),
+      };
+    }
+
+    setEnabled(val) {
+      this.enabled = !!val;
+      localStorage.setItem("audioEnabled", this.enabled ? "true" : "false");
+    }
+
+    setVolume(val01) {
+      const v = Math.max(0, Math.min(1, Number(val01) || 0));
+      this.volume = v;
+      localStorage.setItem("masterVolume", String(v));
+    }
+
+    play(rarity) {
+      if (!this.enabled) return;
+      const key = (rarity || "common").toLowerCase();
+      const snd = this.sounds[key] || this.sounds.common;
+      try {
+        snd.volume = this.volume;
+        snd.currentTime = 0;
+        snd.play();
+      } catch (e) {}
+    }
+  }
+
+  const audioManager = new AudioManager();
+
+  // ===============================
+  // Multi-Frame Stabilisation (2-frame)
+  // ===============================
+  function _captureRect(rect) {
+    return alt1.capture(rect.x, rect.y, rect.width, rect.height);
+  }
+
+  function _diffScoreRed(a, b) {
+    const da = a.data, db = b.data;
+    let total = 0;
+    for (let i = 0; i < da.length; i += 4) total += Math.abs(da[i] - db[i]);
+    return total / (da.length / 4);
+  }
+
+  function _avgFrames(a, b) {
+    const merged = new ImageData(a.width, a.height);
+    const out = merged.data, da = a.data, db = b.data;
+    for (let i = 0; i < da.length; i += 4) {
+      out[i] = (da[i] + db[i]) >> 1;
+      out[i+1] = (da[i+1] + db[i+1]) >> 1;
+      out[i+2] = (da[i+2] + db[i+2]) >> 1;
+      out[i+3] = 255;
+    }
+    return merged;
+  }
+
+  function _readChatFromImage(img) {
+    // Support different Alt1 chatbox reader APIs
+    if (chatReader.readFromImage) return chatReader.readFromImage(img) || [];
+    try { return chatReader.read(img) || []; } catch (e) {}
+    return [];
+  }
+
+  async function readChatWithStabilisation(rect) {
+    const f0 = _captureRect(rect);
+    await new Promise(r => setTimeout(r, 50));
+    const f1 = _captureRect(rect);
+
+    const diff = _diffScoreRed(f0, f1);
+    if (diff > 20) {
+      return _readChatFromImage(f1);
+    }
+    const merged = _avgFrames(f0, f1);
+    return _readChatFromImage(merged);
+  }
+
+async function poll() {
     if (!running || !chatReader) return;
 
     // Guard: auto-submit only once setup locked
@@ -1151,7 +1347,10 @@ async function loadBingosAndPopulate() {
 
     let lines = [];
     try {
-      lines = chatReader.read() || [];
+            const rect = extractRectFromPos(chatReader.pos);
+      lines = await readChatWithStabilisation(rect);
+      lines = lines || [];
+
     } catch (e) {
       addFeed("Chat read error: " + e.message, "bad");
       setChatPillMissing();
