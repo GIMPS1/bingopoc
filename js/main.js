@@ -1222,7 +1222,6 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
 
     // Re-ping with correct bingo path
     pingApi();
-  loadBingosAndPopulate();
 
     // If IGN already locked too, auto start
     if (isSetupReady()) start();
@@ -1382,6 +1381,13 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
   }
   addFeed("Plugin loaded.", "ok");
   pingApi();
+  setupPremiumSelectUI();
+  loadBingosAndPopulate();
+
+  // Debug hook (safe)
+  window.IRB = window.IRB || {};
+  window.IRB.reloadBingos = loadBingosAndPopulate;
+
 
   if (isAlt1) {
     initChatReader();
