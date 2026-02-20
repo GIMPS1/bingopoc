@@ -246,6 +246,77 @@
     el.style.display = on ? "" : "none";
   }
 
+  // ---------- UI render (no storage writes) + cross-window sync ----------
+  function renderSetupLockedUI(locked) {
+    setVisible(ui.setupBlock, !locked);
+    setVisible(ui.setupSummary, locked);
+    refreshSummary();
+    refreshSetupState();
+  }
+
+  function renderIgnLockedUI(locked) {
+    const field = ui.ign ? ui.ign.closest(".field") : null;
+    if (!ui.ign || !ui.btnLockIgn) return;
+
+    if (locked) {
+      ui.ign.disabled = true;
+      ui.btnLockIgn.disabled = true;
+      if (ui.ignHint) ui.ignHint.textContent = "IGN locked ✅ (reset in Settings if you change RSN).";
+      if (field) field.style.display = "none";
+    } else {
+      ui.ign.disabled = false;
+      ui.btnLockIgn.disabled = false;
+      if (ui.ignHint) ui.ignHint.textContent = "Tip: lock your IGN once so submissions can’t be spoofed accidentally.";
+      if (field) field.style.display = "";
+    }
+  }
+
+  function syncUiFromStorage() {
+    const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
+    const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
+
+    // reflect lock state UI
+    renderSetupLockedUI(sl);
+    renderIgnLockedUI(il);
+
+    // keep premium select + lock button in sync
+    try { applySelectionToUI(); } catch (e) {}
+    try { updateLockButtonEnabled(); } catch (e) {}
+
+    updateConfigPill();
+    refreshSummary();
+    refreshSetupState();
+  }
+
+  function syncRuntimeFromStorage() {
+    // Start/stop automatically based on current configuration
+    if (!isAlt1) return;
+    if (isSetupReady()) {
+      if (!running) start();
+      else addFeed("Running. Waiting for drops…", "ok");
+    } else {
+      if (running) stop();
+    }
+  }
+
+  // Cross-window changes (Settings popup -> Main overlay)
+  window.addEventListener("storage", (e) => {
+    if (!e) return;
+    const keys = new Set([
+      LS.setupLocked, LS.ignLocked, LS.bingoId, LS.team, LS.chatPos, LS.ign, LS.settings,
+      "irb.bingoName", "irb.teamName"
+    ]);
+    if (!keys.has(e.key)) return;
+
+    syncUiFromStorage();
+    syncRuntimeFromStorage();
+
+    // subtle feedback for lock/unlock transitions
+    if (e.key === LS.setupLocked) playBeep((e.newValue === "1") ? "ok" : "warn");
+    if (e.key === LS.ignLocked) playBeep((e.newValue === "1") ? "ok" : "warn");
+    if (e.key === LS.chatPos) playBeep(e.newValue ? "ok" : "warn");
+  });
+
   // ---------- Alt1 detect ----------
   const isAlt1 = !!window.alt1;
   setPill(ui.alt1Pill, isAlt1 ? "Alt1: ✅" : "Alt1: ❌", isAlt1 ? "ok" : "bad");
@@ -265,28 +336,12 @@
   if (ui.ign) ui.ign.value = ignVal;
 
   function setIgnLocked(locked) {
-    const field = ui.ign ? ui.ign.closest(".field") : null;
-    if (!ui.ign || !ui.btnLockIgn) return;
-
-    if (locked) {
-      ui.ign.disabled = true;
-      ui.btnLockIgn.disabled = true;
-      if (ui.ignHint) ui.ignHint.textContent = "IGN locked ✅ (reset in Settings if you change RSN).";
-      if (field) field.style.display = "none";
-    } else {
-      ui.ign.disabled = false;
-      ui.btnLockIgn.disabled = false;
-      if (ui.ignHint) ui.ignHint.textContent = "Tip: lock your IGN once so submissions can’t be spoofed accidentally.";
-      if (field) field.style.display = "";
-    }
+    renderIgnLockedUI(locked);
   }
 
   function setSetupLocked(locked) {
     localStorage.setItem(LS.setupLocked, locked ? "1" : "0");
-    setVisible(ui.setupBlock, !locked);
-    setVisible(ui.setupSummary, locked);
-    refreshSummary();
-    refreshSetupState();
+    renderSetupLockedUI(locked);
   }
 
   function refreshSummary() {
@@ -318,6 +373,7 @@
 
   setIgnLocked(ignLocked);
   setSetupLocked(setupLocked);
+  try { syncUiFromStorage(); } catch (e) {}
 
   // ---------- settings init ----------
   let settings = loadSettings();
@@ -1040,6 +1096,7 @@
       setChatPillLocked();
       tryOverlayRect(sel.pos, true);
       addFeed("Chatbox locked ✅", "ok");
+      playBeep("ok");
     } catch (e) {
       addFeed("Lock chat failed: " + e.message, "bad");
     }
@@ -1053,6 +1110,7 @@
     chatState.confPct = 0;
     setChatPillMissing();
     addFeed("Chat unlocked. Scan/locate again in Settings.", "warn");
+    playBeep("warn");
   }
 
   // ---------- runtime ----------
@@ -1075,7 +1133,8 @@
     }
 
     running = true;
-    addFeed("Running. Auto-submit active.", "ok");
+    addFeed("Running. Waiting for drops…", "ok");
+    playBeep("ok");
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(poll, 350);
@@ -1086,6 +1145,7 @@
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
     addFeed("Stopped.", "warn");
+    playBeep("warn");
   }
 
   async function poll() {
@@ -1210,6 +1270,7 @@
 
     setSetupLocked(true);
     addFeed("Bingo/Team locked ✅", "ok");
+    playBeep("ok");
     pingApi();
     if (isSetupReady()) start();
   });
@@ -1217,6 +1278,7 @@
   ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     setSetupLocked(false);
     addFeed("Bingo/Team unlocked. Set values then Lock again.", "warn");
+    playBeep("warn");
     stop();
   });
 
@@ -1227,6 +1289,7 @@
     localStorage.setItem(LS.ignLocked, "1");
     setIgnLocked(true);
     addFeed("IGN locked ✅", "ok");
+    playBeep("ok");
     refreshSummary();
     refreshSetupState();
     if (isSetupReady()) start();
@@ -1236,6 +1299,7 @@
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
+    playBeep("warn");
     refreshSummary();
     refreshSetupState();
     stop();
@@ -1371,7 +1435,7 @@
     refreshSummary();
     refreshSetupState();
 
-    if (isSetupReady()) start();
+    if (isSetupReady()) { start(); addFeed("Running. Waiting for drops…", "ok"); }
     else addFeed("Finish setup to enable auto-submit.", "warn");
 
     if (!loadChatPos() && loadSettings().autoDetect) {
