@@ -37,18 +37,32 @@
         <div class="grid3">
           <div class="field">
             <label>Bingo</label>
-            <select id="bingoSelect">
-              <option value="">Loading bingos…</option>
-            </select>
+            <div class="pselect" id="bingoSelectWrap" data-select="bingoSelect">
+              <button type="button" class="pselectBtn" id="bingoSelectBtn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="pselectValue" id="bingoSelectValue">Select a bingo…</span>
+                <span class="pselectChevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="pselectMenu" id="bingoSelectMenu" role="listbox" tabindex="-1" aria-label="Bingo">
+                <div class="pselectEmpty">Loading…</div>
+                <!-- items injected -->
+              </div>
+            </div>
             <!-- Hidden numeric id used by backend routes -->
             <input id="bingoId" type="hidden" value="1" />
           </div>
 
           <div class="field">
             <label>Team</label>
-            <select id="teamSelect" disabled>
-              <option value="">Select a bingo first…</option>
-            </select>
+            <div class="pselect" id="teamSelectWrap" data-select="teamSelect">
+              <button type="button" class="pselectBtn" id="teamSelectBtn" aria-haspopup="listbox" aria-expanded="false">
+                <span class="pselectValue" id="teamSelectValue">Select a team…</span>
+                <span class="pselectChevron" aria-hidden="true">▾</span>
+              </button>
+              <div class="pselectMenu" id="teamSelectMenu" role="listbox" tabindex="-1" aria-label="Team">
+                <div class="pselectEmpty">Select a bingo first…</div>
+                <!-- items injected -->
+              </div>
+            </div>
             <!-- Hidden numeric team used by backend routes -->
             <input id="teamNumber" type="hidden" value="1" />
           </div>
