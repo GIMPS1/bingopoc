@@ -193,6 +193,14 @@
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
   }
+
+  function loadSavedNames() {
+    return {
+      bingoName: localStorage.getItem("irb.bingoName") || "",
+      teamName: localStorage.getItem("irb.teamName") || "",
+    };
+  }
+
   function addFeed(msg, level = "warn") {
     // Always update premium event line (single-row)
     // Sound + gold flash on successful submissions
