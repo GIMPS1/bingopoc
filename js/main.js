@@ -334,6 +334,253 @@
 
   
 
+
+
+// ---------- Premium Selects (Bingo + Team) ----------
+// Uses backend JSON at: GET {apiBase}/api/bingos
+// Expected shape: [{id, name, teams:[{team_number, name}, ...]}, ...]
+let _bingosCache = [];
+let _selectedBingo = null; // object
+let _selectedTeam = null;  // object
+
+function pselectOpen(wrap, open) {
+  if (!wrap) return;
+  wrap.classList.toggle("open", !!open);
+  const btn = wrap.querySelector(".pselectBtn");
+  if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function pselectCloseAll() {
+  pselectOpen(ui.bingoSelectWrap, false);
+  pselectOpen(ui.teamSelectWrap, false);
+}
+
+function pselectSetDisabled(wrap, disabled) {
+  if (!wrap) return;
+  wrap.classList.toggle("disabled", !!disabled);
+  const btn = wrap.querySelector(".pselectBtn");
+  if (btn) btn.disabled = !!disabled;
+}
+
+function pselectSetLabel(valueEl, text, fallback) {
+  if (!valueEl) return;
+  valueEl.textContent = (text && String(text).trim()) ? String(text).trim() : (fallback || "Select…");
+}
+
+function pselectClearMenu(menuEl, emptyText) {
+  if (!menuEl) return;
+  menuEl.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className = "pselectEmpty";
+  empty.textContent = emptyText || "No items";
+  menuEl.appendChild(empty);
+  menuEl.classList.add("is-empty");
+}
+
+function pselectRenderMenu(menuEl, items, selectedValue, onPick) {
+  if (!menuEl) return;
+  menuEl.innerHTML = "";
+  if (!items || !items.length) {
+    pselectClearMenu(menuEl, "No items");
+    return;
+  }
+  menuEl.classList.remove("is-empty");
+
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "pselectItem";
+    row.setAttribute("role", "option");
+    row.setAttribute("tabindex", "0");
+    row.dataset.value = String(it.value);
+    row.setAttribute("aria-selected", String(it.value) === String(selectedValue) ? "true" : "false");
+    row.innerHTML = `<div class="txt">${escapeHtml(it.label)}</div>${it.meta ? `<div class="meta">${escapeHtml(it.meta)}</div>` : ""}`;
+
+    const pick = () => onPick(it);
+    row.addEventListener("click", (e) => { e.stopPropagation(); pick(); });
+    row.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+    });
+
+    menuEl.appendChild(row);
+  }
+}
+
+function getSavedBingoId() {
+  const v = localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "";
+  const id = parseInt(v || "0", 10);
+  return id || 0;
+}
+function getSavedTeamNo() {
+  const v = localStorage.getItem(LS.team) || ui.teamNumber?.value || "";
+  const t = parseInt(v || "0", 10);
+  return t || 0;
+}
+
+function setHiddenIds(bingoId, teamNo) {
+  if (ui.bingoId) ui.bingoId.value = bingoId ? String(bingoId) : "";
+  if (ui.teamNumber) ui.teamNumber.value = teamNo ? String(teamNo) : "";
+}
+
+function updateLockButtonEnabled() {
+  if (!ui.btnLockSetup) return;
+  const b = getSavedBingoId();
+  const t = getSavedTeamNo();
+  ui.btnLockSetup.disabled = !(b > 0 && t > 0);
+}
+
+function findBingoById(id) {
+  return _bingosCache.find(b => Number(b.id) === Number(id)) || null;
+}
+function findTeamByNo(bingoObj, teamNo) {
+  if (!bingoObj || !Array.isArray(bingoObj.teams)) return null;
+  return bingoObj.teams.find(t => Number(t.team_number) === Number(teamNo)) || null;
+}
+
+function applySelectionToUI() {
+  const bid = getSavedBingoId();
+  const tno = getSavedTeamNo();
+  _selectedBingo = bid ? findBingoById(bid) : null;
+  _selectedTeam = (_selectedBingo && tno) ? findTeamByNo(_selectedBingo, tno) : null;
+
+  pselectSetLabel(ui.bingoValue, _selectedBingo?.name, "Select a bingo…");
+  if (_selectedBingo) {
+    pselectSetDisabled(ui.teamSelectWrap, false);
+    pselectSetLabel(ui.teamValue, _selectedTeam?.name, "Select a team…");
+  } else {
+    pselectSetDisabled(ui.teamSelectWrap, true);
+    pselectSetLabel(ui.teamValue, "", "Select a team…");
+    pselectClearMenu(ui.teamMenu, "Select a bingo first…");
+  }
+
+  updateLockButtonEnabled();
+}
+
+function renderBingoMenu() {
+  const selectedId = getSavedBingoId();
+  const items = (_bingosCache || []).map(b => ({
+    value: b.id,
+    label: b.name || `Bingo ${b.id}`,
+    meta: `ID ${b.id}`
+  }));
+
+  pselectRenderMenu(ui.bingoMenu, items, selectedId, (it) => {
+    const b = findBingoById(it.value);
+    if (!b) return;
+
+    localStorage.setItem(LS.bingoId, String(b.id));
+    localStorage.setItem("irb.bingoName", String(b.name || `Bingo ${b.id}`));
+    localStorage.removeItem(LS.team);
+    localStorage.removeItem("irb.teamName");
+
+    setHiddenIds(b.id, "");
+    _selectedBingo = b;
+    _selectedTeam = null;
+
+    pselectSetLabel(ui.bingoValue, b.name, "Select a bingo…");
+    pselectSetLabel(ui.teamValue, "", "Select a team…");
+
+    renderTeamMenu(b);
+    applySelectionToUI();
+    pselectOpen(ui.bingoSelectWrap, false);
+  });
+}
+
+function renderTeamMenu(bingoObj) {
+  const selectedTeam = getSavedTeamNo();
+  const teams = (bingoObj?.teams || []).map(t => ({
+    value: t.team_number,
+    label: t.name || `Team ${t.team_number}`,
+    meta: `#${t.team_number}`
+  }));
+
+  pselectRenderMenu(ui.teamMenu, teams, selectedTeam, (it) => {
+    const t = findTeamByNo(bingoObj, it.value);
+    if (!t) return;
+
+    localStorage.setItem(LS.team, String(t.team_number));
+    localStorage.setItem("irb.teamName", String(t.name || `Team ${t.team_number}`));
+
+    setHiddenIds(bingoObj.id, t.team_number);
+    _selectedTeam = t;
+
+    pselectSetLabel(ui.teamValue, t.name, "Select a team…");
+    applySelectionToUI();
+    pselectOpen(ui.teamSelectWrap, false);
+  });
+}
+
+function wirePremiumSelects() {
+  if (ui.bingoBtn && ui.bingoSelectWrap) {
+    ui.bingoBtn.addEventListener("click", (e) => {
+      if (ui.bingoSelectWrap.classList.contains("disabled")) return;
+      const open = !ui.bingoSelectWrap.classList.contains("open");
+      pselectCloseAll();
+      pselectOpen(ui.bingoSelectWrap, open);
+      e.stopPropagation();
+    });
+  }
+  if (ui.teamBtn && ui.teamSelectWrap) {
+    ui.teamBtn.addEventListener("click", (e) => {
+      if (ui.teamSelectWrap.classList.contains("disabled")) return;
+      const open = !ui.teamSelectWrap.classList.contains("open");
+      pselectCloseAll();
+      pselectOpen(ui.teamSelectWrap, open);
+      e.stopPropagation();
+    });
+  }
+  document.addEventListener("click", () => pselectCloseAll());
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") pselectCloseAll(); });
+}
+
+async function loadBingosAndPopulate() {
+  const base = getApiBase();
+  if (!base) return false;
+
+  pselectSetDisabled(ui.bingoSelectWrap, true);
+  pselectSetDisabled(ui.teamSelectWrap, true);
+  pselectClearMenu(ui.bingoMenu, "Loading…");
+  pselectClearMenu(ui.teamMenu, "Select a bingo first…");
+  pselectSetLabel(ui.bingoValue, "", "Loading…");
+  pselectSetLabel(ui.teamValue, "", "Select a team…");
+  if (ui.btnLockSetup) ui.btnLockSetup.disabled = true;
+
+  try {
+    const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+
+    const arr = Array.isArray(data) ? data : (Array.isArray(data?.bingos) ? data.bingos : []);
+    _bingosCache = (arr || []).map(b => ({
+      id: b.id ?? b.bingo_id ?? b.bingoId,
+      name: b.name ?? b.title ?? b.bingo_name,
+      teams: Array.isArray(b.teams) ? b.teams.map(t => ({
+        team_number: t.team_number ?? t.team_number ?? t.teamNo ?? t.team_no ?? t.number,
+        name: t.name ?? t.team_name ?? t.title
+      })) : []
+    })).filter(b => b.id);
+
+    if (!_bingosCache.length) throw new Error("No bingos returned");
+
+    pselectSetDisabled(ui.bingoSelectWrap, false);
+    renderBingoMenu();
+
+    // Apply saved selection (if any) and populate teams
+    applySelectionToUI();
+    if (_selectedBingo) renderTeamMenu(_selectedBingo);
+    updateLockButtonEnabled();
+
+    addFeed("Loaded bingos ✅", "ok");
+    return true;
+  } catch (e) {
+    pselectSetDisabled(ui.bingoSelectWrap, false);
+    pselectClearMenu(ui.bingoMenu, "Failed to load bingos");
+    pselectSetLabel(ui.bingoValue, "", "Failed to load bingos");
+    addFeed("Failed to load bingos: " + e.message, "bad");
+    return false;
+  }
+}
+
+  wirePremiumSelects();
 // ---------- API helpers ----------
 
   async function pingApi() {
