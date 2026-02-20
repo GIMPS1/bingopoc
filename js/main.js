@@ -1178,7 +1178,7 @@
       return;
     }
 
-    iif (!lines.length) {
+    if (!lines.length) {
   chatState.consecutiveEmpty++;
   if (chatState.consecutiveEmpty >= 12 && loadSettings().autoDetect && !chatState.locked) {
     const ok = tryFindChatbox("empty-read");
