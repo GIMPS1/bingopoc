@@ -1,16 +1,25 @@
 {
-  "appName": "Iron Rivals Bingo (Local)",
-  "description": "Alt1 companion that reads chat drops and auto-submits them to your local Bingo PoC API.",
+  "appName": "Bingo Auto Submit",
+  "description": "Lightweight Alt1 companion that reads chat drops and auto-submits to Bingo PoC API.",
   "appUrl": "./index.html",
   "configUrl": "./appconfig.json",
   "iconUrl": "./assets/icon.png",
-  "defaultWidth": 380,
-  "defaultHeight": 340,
+
+  "defaultWidth": 360,
+  "defaultHeight": 280,
+
   "minWidth": 320,
   "minHeight": 145,
-  "maxWidth": 520,
-  "maxHeight": 700,
+
+  "maxWidth": 420,
+  "maxHeight": 500,
+
   "requestHandlers": [],
   "activators": [],
-  "permissions": "pixel,gamestate,overlay"
+
+  "permissions": [
+    "pixel",
+    "overlay"
+    "gamestate"
+  ]
 }
