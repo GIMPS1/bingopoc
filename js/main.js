@@ -914,12 +914,6 @@
     if (force) addFeed("Highlight failed: overlay API not available.", "warn");
     return false;
   }
-    if (window.A1lib && typeof A1lib.drawRect === "function") {
-      try { A1lib.drawRect(x, y, w, h, ms); return true; } catch (e) {}
-    }
-    if (force) addFeed("Highlight failed: overlay API not available. Check Alt1 overlay permission & capture mode.", "warn");
-    return false;
-  }
 
   function locateChatboxAndStore() {
     if (!chatReader) {
