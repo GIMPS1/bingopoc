@@ -757,16 +757,7 @@ async function loadBingosAndPopulate() {
   function detectHasTimestamps(lines) {
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
       const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
-      if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw))     let rarity = "common";
-    try {
-      const ct = res.headers.get("content-type") || "";
-      if (ct.includes("application/json")) {
-        const j = await res.json();
-        rarity = (j && (j.rarity || j.tier || j.drop_rarity)) ? String(j.rarity || j.tier || j.drop_rarity).toLowerCase() : "common";
-      }
-    } catch (e) {}
-    return rarity;
-
+      if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
     }
     return false;
   }
