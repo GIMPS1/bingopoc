@@ -2,7 +2,7 @@
   "appName": "Bingo Auto Submit",
   "description": "Reads RuneScape chat drops and automatically submits validated drops to the Bingo PoC API.",
   "appUrl": "./index.html",
-  "configUrl": "./appconfig.json",
+  "configUrl": "https://gimps1.github.io/bingopoc/appconfig.json",
   "iconUrl": "./assets/icon.png",
   "defaultWidth": 380,
   "defaultHeight": 340,
