@@ -28,7 +28,7 @@ html,body{
   margin:0;
   padding:0;
   height:100%;
-  overflow:visible;           /* main window: no scrollbars */
+  overflow:hidden;           /* main window: no scrollbars */
   scrollbar-width:none;
   -ms-overflow-style:none;
 }
@@ -49,7 +49,7 @@ body{
 }
 
 /* Shell */
-.wrap{ padding:10px; max-width:520px; overflow:visible; }
+.wrap{ padding:10px; max-width:520px; overflow:hidden; }
 
 .topbar{
   display:flex; align-items:center; justify-content:space-between;
@@ -64,8 +64,8 @@ body{
     radial-gradient(circle at 30% 30%, rgba(214,178,94,.75), rgba(214,178,94,.15) 45%, rgba(17,26,36,0) 70%),
     linear-gradient(135deg, rgba(214,178,94,.35), rgba(17,26,36,0));
 }
-.title{font-weight:900; letter-spacing:.25px; font-size:13px; line-height:1.15; white-space:nowrap; overflow:visible; text-overflow:ellipsis; padding-left:10px;}
-.subtitle{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:visible; text-overflow:ellipsis; padding-left:10px;}
+.title{font-weight:900; letter-spacing:.25px; font-size:13px; line-height:1.15; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:10px;}
+.subtitle{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding-left:10px;}
 
 .statusRow{display:flex; gap:8px; align-items:center;}
 .pill{
@@ -97,7 +97,7 @@ body{
   border-radius:var(--radius);
   box-shadow: var(--shadow);
   padding:12px;
-  overflow:visible;
+  overflow:hidden;
 }
 
 /* Inputs + buttons (kept for setup/settings) */
@@ -173,7 +173,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   letter-spacing:.2px;
   font-size:12px;
   white-space:nowrap;
-  overflow:visible;
+  overflow:hidden;
   text-overflow:ellipsis;
   padding-left:10px;
 }
@@ -182,7 +182,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   color:var(--muted);
   margin-top:2px;
   white-space:nowrap;
-  overflow:visible;
+  overflow:hidden;
   text-overflow:ellipsis;
     padding-left:10px;
 }
@@ -322,7 +322,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 .pselectValue{
   min-width:0;
   white-space:nowrap;
-  overflow:visible;
+  overflow:hidden;
   text-overflow:ellipsis;
   font-weight:800;
   letter-spacing:.1px;
@@ -404,6 +404,3 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 
 /* Disabled look (we use a class on wrapper) */
 .pselect.disabled .pselectBtn{ opacity:.55; cursor:not-allowed; }
-
-/* Premium Select: allow dropdown to escape cards/wrap */
-.wrap, .panel{ overflow:visible !important; }
