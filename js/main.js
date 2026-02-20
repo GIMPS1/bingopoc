@@ -1,3 +1,5 @@
+let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
+
 /* Iron Rivals Bingo (Alt1) - compact UI
    - Locked setup (Bingo/Team + IGN) becomes invisible
    - Auto-submit always ON once setup is locked
@@ -187,7 +189,7 @@
       void ui.eventLine.offsetWidth;
       ui.eventLine.classList.add("flash");
     }
-    if (sound) playChime();
+    if (sound && audioEnabled) playChime();
   }
 
   function escapeHtml(s) {
@@ -1000,80 +1002,7 @@ async function loadBingosAndPopulate() {
     return null;
   }
 
-  
-  // ===============================
-  // Multi-Frame Chat Stabilisation
-  // ===============================
-  function captureChatFrame(rect) {
-    // Alt1 returns an ImageData-like object (width/height/data)
-    return alt1.capture(rect.x, rect.y, rect.width, rect.height);
-  }
-
-  function frameDiffScore(a, b) {
-    const dataA = a && a.data;
-    const dataB = b && b.data;
-    if (!dataA || !dataB || dataA.length !== dataB.length) return Infinity;
-
-    let total = 0;
-    const len = dataA.length;
-
-    // Red channel only for speed
-    for (let i = 0; i < len; i += 4) {
-      total += Math.abs(dataA[i] - dataB[i]);
-    }
-    return total / (len / 4);
-  }
-
-  function averageFrames(a, b) {
-    // Create a merged ImageData (or a plain object if ImageData isn't available)
-    const w = a.width, h = a.height;
-    let merged;
-    try {
-      merged = new ImageData(w, h);
-    } catch (e) {
-      merged = { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
-    }
-
-    const out = merged.data;
-    const dataA = a.data;
-    const dataB = b.data;
-
-    for (let i = 0; i < dataA.length; i += 4) {
-      out[i]     = (dataA[i] + dataB[i]) >> 1;
-      out[i + 1] = (dataA[i + 1] + dataB[i + 1]) >> 1;
-      out[i + 2] = (dataA[i + 2] + dataB[i + 2]) >> 1;
-      out[i + 3] = 255;
-    }
-    return merged;
-  }
-
-  async function readChatWithStabilisation() {
-    if (!chatReader || !chatReader.pos) return [];
-
-    const rect = extractRectFromPos(chatReader.pos);
-    if (!rect || typeof rect.x !== "number") {
-      // Fall back to default reader behaviour
-      return chatReader.read() || [];
-    }
-
-    // Two-frame burst to reduce background interference on transparent chatboxes
-    const f0 = captureChatFrame(rect);
-    await new Promise((r) => setTimeout(r, 50));
-    const f1 = captureChatFrame(rect);
-
-    // If the chat actually scrolled / changed, avoid averaging to prevent ghosting
-    const diff = frameDiffScore(f0, f1);
-    const DIFF_ABORT_THRESHOLD = 20;
-
-    if (diff > DIFF_ABORT_THRESHOLD) {
-      return (chatReader.read(f1) || []);
-    }
-
-    const merged = averageFrames(f0, f1);
-    return (chatReader.read(merged) || []);
-  }
-
-function populateChatSelect(list) {
+  function populateChatSelect(list) {
     scannedChats = list || [];
     ui.chatSelect.innerHTML = "";
     if (!scannedChats.length) {
@@ -1224,7 +1153,7 @@ function populateChatSelect(list) {
 
     let lines = [];
     try {
-      lines = (await readChatWithStabilisation()) || [];
+      lines = chatReader.read() || [];
     } catch (e) {
       addFeed("Chat read error: " + e.message, "bad");
       setChatPillMissing();
@@ -1511,3 +1440,16 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
   }
 
 })();
+
+
+document.addEventListener("DOMContentLoaded", function() {
+  const t = document.getElementById("audioToggle");
+  if (!t) return;
+
+  t.checked = audioEnabled;
+
+  t.addEventListener("change", function() {
+    audioEnabled = t.checked;
+    localStorage.setItem("audioEnabled", audioEnabled);
+  });
+});
