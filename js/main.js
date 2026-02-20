@@ -534,6 +534,28 @@ function wirePremiumSelects() {
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") pselectCloseAll(); });
 }
 
+
+function setupPremiumSelectUI() {
+  try {
+    // wire open/close behaviour for premium dropdowns
+    wirePremiumSelects();
+
+    // default state
+    pselectSetDisabled(ui.teamSelectWrap, true);
+    pselectClearMenu(ui.bingoMenu, "Loading…");
+    pselectClearMenu(ui.teamMenu, "Select a bingo first…");
+    pselectSetLabel(ui.bingoValue, "", "Select a bingo…");
+    pselectSetLabel(ui.teamValue, "", "Select a team…");
+
+    // Apply any saved selection to labels (menus will be rendered after load)
+    applySelectionToUI();
+  } catch (e) {
+    // never let UI init crash the app
+    try { addFeed("Premium select init failed: " + (e && e.message ? e.message : e), "bad"); } catch(_) {}
+  }
+}
+
+
 async function loadBingosAndPopulate() {
   const base = getApiBase();
   if (!base) return false;
@@ -1380,13 +1402,14 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     } catch (e) {}
   }
   addFeed("Plugin loaded.", "ok");
+  // Debug hook (safe) - available even if later init fails
+  window.IRB = window.IRB || {};
+  window.IRB.reloadBingos = () => loadBingosAndPopulate();
+  window.IRB.version = "v2026-02-20-premium-select-fixed3";
+
   pingApi();
   setupPremiumSelectUI();
   loadBingosAndPopulate();
-
-  // Debug hook (safe)
-  window.IRB = window.IRB || {};
-  window.IRB.reloadBingos = loadBingosAndPopulate;
 
 
   if (isAlt1) {
