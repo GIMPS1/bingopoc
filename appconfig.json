@@ -1,25 +1,16 @@
 {
   "appName": "Bingo Auto Submit",
-  "description": "Lightweight Alt1 companion that reads chat drops and auto-submits to Bingo PoC API.",
+  "description": "Reads RuneScape chat drops and automatically submits validated drops to the Bingo PoC API.",
   "appUrl": "./index.html",
   "configUrl": "./appconfig.json",
   "iconUrl": "./assets/icon.png",
-
-  "defaultWidth": 360,
-  "defaultHeight": 280,
-
+  "defaultWidth": 380,
+  "defaultHeight": 340,
   "minWidth": 320,
   "minHeight": 145,
-
-  "maxWidth": 420,
-  "maxHeight": 500,
-
+  "maxWidth": 520,
+  "maxHeight": 700,
   "requestHandlers": [],
   "activators": [],
-
-  "permissions": [
-    "pixel",
-    "overlay"
-    "gamestate"
-  ]
+  "permissions": "pixel,gamestate,overlay"
 }
