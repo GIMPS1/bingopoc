@@ -5,7 +5,7 @@
    - Avoids resolving canonical name twice (resolve ONLY in poll; submitDrop trusts input)
    - Fixes duplicate team_number mapping
 */
-function __irbInit() {
+(function () {
 
   console.log("IRB v2026-02-20-premium-select FIXED ✅");
   const $ = (id) => document.getElementById(id);
@@ -796,8 +796,130 @@ function __irbInit() {
       const old = recentKeys.shift();
       recentSet.delete(old);
     }
-  
-  // ---------- submission queue (prevents poll overlap + slow network stalls) ----------
+  }
+
+  // ---------- multi-frame stabilisation (adaptive, lightweight) ----------
+  // Goal: reduce OCR flicker / one-frame garbage reads without slowing normal operation.
+  // Strategy:
+  // - Compute a per-frame confidence estimate from chatReader.read() output (best-effort).
+  // - Require 1/2/3 consecutive frame hits depending on confidence.
+  // - Only enqueue a drop once it is "stable" across frames.
+  const __stab = {
+    frameId: 0,
+    // key -> { lastFrame, streak, lastAcceptedFrame }
+    map: new Map(),
+    // keep small to avoid perf impact
+    maxEntries: 220,
+    pruneAfterFrames: 12,
+  };
+
+  function __normKey(name, amt) {
+    const n = String(name || "")
+      .replace(/[\u00A0\s]+/g, " ")
+      .replace(/[\.,;:]+$/g, "")
+      .trim()
+      .toLowerCase();
+    const a = String(amt || "").trim();
+    return `${n}||${a}`;
+  }
+
+  function __getLineConf(line) {
+    // Alt1 Chatbox line objects sometimes carry confidence/score fields; fall back to 0.
+    const v =
+      (line && typeof line.confidence === "number" ? line.confidence :
+      (line && typeof line.conf === "number" ? line.conf :
+      (line && typeof line.score === "number" ? line.score :
+      (line && typeof line.confPct === "number" ? line.confPct : null))));
+    if (v === null || v === undefined) return null;
+    // Accept either 0..1 or 0..100
+    const n = v > 1 ? (v / 100) : v;
+    if (!isFinite(n)) return null;
+    return Math.max(0, Math.min(1, n));
+  }
+
+  function __estimateFrameConf(lines, stitched) {
+    // Best-effort. If no numeric confidence is present, infer from structure:
+    // timestamps present + reasonable line count => higher confidence.
+    const vals = [];
+    for (let i = 0; i < Math.min(lines.length, 30); i++) {
+      const c = __getLineConf(lines[i]);
+      if (typeof c === "number") vals.push(c);
+    }
+    if (vals.length) {
+      // Use a robust-ish central tendency (median) to avoid spikes.
+      vals.sort((a,b) => a-b);
+      return vals[Math.floor(vals.length / 2)];
+    }
+
+    // Heuristics if confidence isn't provided
+    const hasTs = !!(stitched && stitched.hasTimestamps);
+    const rawCount = stitched && typeof stitched.rawCount === "number" ? stitched.rawCount : (lines ? lines.length : 0);
+    if (hasTs && rawCount >= 6) return 0.88;
+    if (hasTs) return 0.80;
+    if (rawCount >= 8) return 0.78;
+    if (rawCount >= 4) return 0.70;
+    return 0.62;
+  }
+
+  function __requiredHits(conf) {
+    // Adaptive thresholds: high confidence -> 1 frame, medium -> 2, low -> 3.
+    if (conf >= 0.88) return 1;
+    if (conf >= 0.72) return 2;
+    return 3;
+  }
+
+  function __stabPrune() {
+    // prune old entries occasionally
+    if (__stab.map.size <= __stab.maxEntries) return;
+    const cutoff = __stab.frameId - __stab.pruneAfterFrames;
+    for (const [k, v] of __stab.map.entries()) {
+      if (!v || (v.lastFrame || 0) < cutoff) __stab.map.delete(k);
+    }
+    // still too big? delete oldest-ish by lastFrame
+    if (__stab.map.size > __stab.maxEntries) {
+      const arr = [];
+      for (const [k, v] of __stab.map.entries()) arr.push([k, v.lastFrame || 0]);
+      arr.sort((a,b) => a[1]-b[1]);
+      const toDrop = __stab.map.size - __stab.maxEntries;
+      for (let i = 0; i < toDrop; i++) __stab.map.delete(arr[i][0]);
+    }
+  }
+
+  function __stabNextFrame() {
+    __stab.frameId++;
+  }
+
+  function __stabShouldAccept(rawName, amt, frameConf) {
+    const need = __requiredHits(frameConf);
+
+    const key = __normKey(rawName, amt);
+    if (!key || key === "||") return false;
+
+    const prev = __stab.map.get(key) || { lastFrame: 0, streak: 0, lastAcceptedFrame: 0 };
+
+    // Update consecutive streak (same key must appear in consecutive frames)
+    if (prev.lastFrame === __stab.frameId - 1) prev.streak += 1;
+    else prev.streak = 1;
+
+    prev.lastFrame = __stab.frameId;
+    __stab.map.set(key, prev);
+
+    // Avoid immediately re-accepting the same key across adjacent frames once accepted.
+    if (prev.lastAcceptedFrame && (__stab.frameId - prev.lastAcceptedFrame) <= 2) return false;
+
+    if (prev.streak >= need) {
+      prev.lastAcceptedFrame = __stab.frameId;
+      __stab.map.set(key, prev);
+      __stabPrune();
+      return true;
+    }
+
+    __stabPrune();
+    return false;
+  }
+
+
+  // ---------- submission queue (prevents poll stalls; integrates with stabiliser) ----------
   const dropQueue = []; // { rawName, amount, rawLine, seenAt }
   let queueRunning = false;
 
@@ -841,7 +963,7 @@ function __irbInit() {
     }
   }
 
-}
+
 
   // ---------- chat reader ----------
   let chatReader = null;
@@ -1195,21 +1317,18 @@ function __irbInit() {
     addFeed("Stopped.", "warn");
     playBeep("warn");
   }
-  // Prevent overlapping poll executions (setInterval can re-enter if async work runs long)
-  let __polling = false;
+
+  
+  // Prevent re-entrant polls if a poll cycle takes longer than the interval
+  let __pollRunning = false;
   async function pollWrapper() {
-    if (__polling) return;
-    __polling = true;
-    try {
-      await poll();
-    } finally {
-      __polling = false;
-    }
+    if (__pollRunning) return;
+    __pollRunning = true;
+    try { await poll(); }
+    finally { __pollRunning = false; }
   }
 
-
-
-  async function poll() {
+async function poll() {
     if (!running || !chatReader) return;
     if (!isSetupReady()) return;
 
@@ -1242,7 +1361,7 @@ function __irbInit() {
     const ok = tryFindChatbox("empty-read");
     if (ok) {
       chatState.consecutiveEmpty = 0;
-      addFeed("Chatbox detected again. If drops stop, re-lock from Settings.", "warn");
+      addFeed("Chat moved. Lock it again from Settings.", "warn");
     }
   }
   return;
@@ -1250,6 +1369,8 @@ function __irbInit() {
 
     chatState.consecutiveEmpty = 0;
     const stitched = stitchChatMessages(lines);
+    const frameConf = __estimateFrameConf(lines, stitched);
+    __stabNextFrame();
 
     for (let i = 0; i < stitched.messages.length; i++) {
       const raw = stitched.messages[i];
@@ -1261,16 +1382,18 @@ function __irbInit() {
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
 
-      
-      // Enqueue for canonical resolution + submit outside poll loop
+            // Multi-frame stabilisation gate (adaptive)
+      // Only enqueue once the same drop is seen consistently across frames.
+      if (!__stabShouldAccept(parsed.drop_name, parsed.amount, frameConf)) continue;
+
       enqueueDrop({
         rawName: parsed.drop_name,
         amount: parsed.amount,
-        rawLine: chatState.lastLine,
-        seenAt: Date.now(),
+        rawLine: chatState.lastLine || "",
+        seenAt: Date.now()
       });
-
     }
+
   }
 
   // ---------- events ----------
@@ -1502,15 +1625,4 @@ function __irbInit() {
     refreshSetupState();
   }
 
-
-}
-
-(function __irbBoot() {
-  // Run after DOM is ready to avoid null dereferences if script is loaded in <head>
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => __irbInit(), { once: true });
-  } else {
-    __irbInit();
-  }
 })();
-;
