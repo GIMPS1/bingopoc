@@ -5,7 +5,18 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
    - Auto-submit always ON once setup is locked
    - Chatbox: scan + dropdown select + highlight + lock (safe with multiple chat windows)
 */
-(function () {
+
+
+// ---------------- Production-hardened wrapper ----------------
+(() => {
+  'use strict';
+  const __onReady = (fn) => {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true });
+    else fn();
+  };
+
+  __onReady(() => {
+
   const $ = (id) => document.getElementById(id);
 
   const ui = {
@@ -224,21 +235,30 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
   }
 
   function setPill(pill, label, state) {
+    if (!pill) return;
     pill.textContent = label;
     pill.className = "pill " + (state || "");
   }
 
   function openDrawer() {
-    ui.drawer.classList.add("open");
-    ui.drawer.setAttribute("aria-hidden", "false");
-    ui.backdrop.classList.add("show");
-    ui.backdrop.setAttribute("aria-hidden", "false");
+    if (ui.drawer) {
+      ui.drawer.classList.add("open");
+      ui.drawer.setAttribute("aria-hidden", "false");
+    }
+    if (ui.backdrop) {
+      ui.backdrop.classList.add("show");
+      ui.backdrop.setAttribute("aria-hidden", "false");
+    }
   }
   function closeDrawer() {
-    ui.drawer.classList.remove("open");
-    ui.drawer.setAttribute("aria-hidden", "true");
-    ui.backdrop.classList.remove("show");
-    ui.backdrop.setAttribute("aria-hidden", "true");
+    if (ui.drawer) {
+      ui.drawer.classList.remove("open");
+      ui.drawer.setAttribute("aria-hidden", "true");
+    }
+    if (ui.backdrop) {
+      ui.backdrop.classList.remove("show");
+      ui.backdrop.setAttribute("aria-hidden", "true");
+    }
   }
 
   function setVisible(el, on) {
@@ -262,9 +282,10 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
   const setupLocked = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const ignLocked = (localStorage.getItem(LS.ignLocked) || "") === "1";
   const ignVal = localStorage.getItem(LS.ign) || "";
-  ui.ign.value = ignVal;
+  if (ui.ign) ui.ign.value = ignVal;
 
   function setIgnLocked(locked) {
+    if (!ui.ign || !ui.btnLockIgn) return;
     const field = ui.ign ? ui.ign.closest(".field") : null;
     if (locked) {
       ui.ign.disabled = true;
@@ -295,7 +316,7 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
     const names = loadSavedNames();
     const bingoLabel = names.bingoName ? names.bingoName : `Bingo ${b}`;
     const teamLabel = names.teamName ? names.teamName : `Team ${t}`;
-    const ign = (localStorage.getItem(LS.ign) || ui.ign.value || "").trim();
+    const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
     const chat = localStorage.getItem(LS.chatPos) ? "Chat locked" : "Chat not set";
     const ignTxt = ign ? `IGN: ${ign}` : "IGN: —";
     ui.summaryMeta.textContent = `${bingoLabel} • ${teamLabel} • ${ignTxt} • ${chat}`;
@@ -320,8 +341,8 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
 
   // ---------- settings init ----------
   let settings = loadSettings();
-  ui.optAutoDetect.checked = settings.autoDetect;
-  ui.optHighlight.checked = settings.highlight;
+  if (ui.optAutoDetect) ui.optAutoDetect.checked = settings.autoDetect;
+  if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
 
   
 
@@ -332,7 +353,7 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
     // Populate from API
     loadBingosAndPopulate();
 
-    ui.bingoSelect.addEventListener("change", () => {
+    ui.bingoSelect && ui.bingoSelect.addEventListener("change", () => {
       const b = getSelectedBingo();
       if (!b) {
         if (ui.teamSelect) {
@@ -352,7 +373,7 @@ let audioEnabled = localStorage.getItem('audioEnabled') !== 'false';
       setSetupSelectState({ loading: false, ready: !!(ui.teamSelect && ui.teamSelect.value) });
     });
 
-    ui.teamSelect.addEventListener("change", () => {
+    ui.teamSelect && ui.teamSelect.addEventListener("change", () => {
       const b = getSelectedBingo();
       const t = b ? getSelectedTeam(b) : null;
       if (!b || !t) {
@@ -1121,7 +1142,7 @@ async function loadBingosAndPopulate() {
     addFeed("Running. Auto-submit active.", "ok");
 
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(poll, 350);
+    pollTimer = setInterval(pollWrapper, 350);
   }
 
   function stop() {
@@ -1129,6 +1150,49 @@ async function loadBingosAndPopulate() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
     addFeed("Stopped.", "warn");
+  }
+
+  let __polling = false;
+  function pollWrapper() {
+    if (__polling) return;
+    __polling = true;
+    Promise.resolve(poll()).catch((e) => {
+      addFeed("Poll error: " + (e && e.message ? e.message : String(e)), "bad");
+    }).finally(() => { __polling = false; });
+  }
+
+  // ---------- drop queue (prevents poll blocking / overlapping submissions) ----------
+  const __dropQueue = [];
+  let __processingQueue = false;
+  function __enqueueDrop(job) {
+    __dropQueue.push(job);
+    __processQueue();
+  }
+  async function __processQueue() {
+    if (__processingQueue) return;
+    __processingQueue = true;
+    try {
+      while (__dropQueue.length) {
+        const job = __dropQueue.shift();
+        if (!job) continue;
+        const canonicalName = await resolveCanonicalName(job.drop_name);
+        // Dedup within a short time bucket to avoid suppressing legitimate repeat drops.
+        const bucket = Math.floor(Date.now() / 5000); // 5s bucket
+        const key = `${canonicalName}||${job.amount || ""}||${bucket}`;
+        if (recentSet.has(key)) continue;
+        rememberKey(key);
+        addFeed(`Drop: ${canonicalName}${job.amount ? " x" + job.amount : ""}`, "ok");
+        try {
+          await submitDrop({ drop_name: canonicalName, amount: job.amount });
+          playBeep("ok");
+          addFeed(`Submitted ✅ ${canonicalName}${job.amount ? " x" + job.amount : ""}`, "ok");
+        } catch (e) {
+          addFeed(`Submit failed ❌ (${canonicalName}): ${e && e.message ? e.message : String(e)}`, "bad");
+        }
+      }
+    } finally {
+      __processingQueue = false;
+    }
   }
 
   async function poll() {
@@ -1191,21 +1255,7 @@ async function loadBingosAndPopulate() {
       const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
-
-      const canonicalName = await resolveCanonicalName(parsed.drop_name);
-      const key = `${canonicalName}||${parsed.amount || ""}`;
-      if (recentSet.has(key)) continue;
-
-      rememberKey(key);
-      addFeed(`Drop: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
-
-      try {
-        await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
-        playBeep("ok");
-        addFeed(`Submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
-      } catch (e) {
-        addFeed(`Submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
-      }
+      __enqueueDrop({ drop_name: parsed.drop_name, amount: parsed.amount });
     }
   }
 
@@ -1213,33 +1263,33 @@ async function loadBingosAndPopulate() {
   // ---------- events ----------
   // Main overlay opens Settings in a separate popup window (Alt1 can't render outside its window)
   if (!__settingsOnly) {
-    ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
-    ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
+    ui.btnOpenSettings && ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
+    ui.btnOpenSettings2 && ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
   } else {
     // Settings-only window uses the in-window drawer
-    ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openDrawer);
-    ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
+    ui.btnOpenSettings && ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openDrawer);
+    ui.btnOpenSettings2 && ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
   }
 
-ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
+ui.btnCloseSettings && ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (__settingsOnly) {
       try { window.close(); } catch (e) {}
       return;
     }
     closeDrawer();
   });
-  ui.backdrop.addEventListener("click", closeDrawer);
+  ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
-  ui.optAutoDetect.addEventListener("change", (e) => {
+  ui.optAutoDetect && ui.optAutoDetect.addEventListener("change", (e) => {
     settings = saveSettings({ autoDetect: !!e.target.checked });
     addFeed("Auto-detect fallback: " + (settings.autoDetect ? "ON" : "OFF"), "ok");
   });
-  ui.optHighlight.addEventListener("change", (e) => {
+  ui.optHighlight && ui.optHighlight.addEventListener("change", (e) => {
     settings = saveSettings({ highlight: !!e.target.checked });
     addFeed("Highlight during locate: " + (settings.highlight ? "ON" : "OFF"), "ok");
   });
 
-  ui.btnLockSetup.addEventListener("click", () => {
+  ui.btnLockSetup && ui.btnLockSetup.addEventListener("click", () => {
     const bingoObj = (ui.bingoSelectWrap && ui.teamSelectWrap) ? getBingoById(getSelectedBingoId()) : null;
     const teamObj = (ui.bingoSelectWrap && ui.teamSelectWrap && bingoObj) ? getTeamByNo(bingoObj, getSelectedTeamNo()) : null;
 
@@ -1261,13 +1311,13 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (isSetupReady()) start();
   });
 
-  ui.btnUnlockSetup.addEventListener("click", () => {
+  ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     setSetupLocked(false);
     addFeed("Bingo/Team unlocked. Set values then Lock again.", "warn");
     stop();
   });
 
-  ui.btnLockIgn.addEventListener("click", () => {
+  ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     const ign = (ui.ign.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
     localStorage.setItem(LS.ign, ign);
@@ -1279,7 +1329,7 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (isSetupReady()) start();
   });
 
-  ui.btnResetIgn.addEventListener("click", () => {
+  ui.btnResetIgn && ui.btnResetIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
@@ -1288,23 +1338,23 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     stop();
   });
 
-  ui.btnRecalibrate.addEventListener("click", () => {
+  ui.btnRecalibrate && ui.btnRecalibrate.addEventListener("click", () => {
     locateChatboxAndStore();
   });
 
-  ui.btnScanChats.addEventListener("click", () => {
+  ui.btnScanChats && ui.btnScanChats.addEventListener("click", () => {
     // Ensure chatReader exists for best compatibility
     if (!chatReader) initChatReader();
     scanChatboxes();
   });
 
-  ui.chatSelect.addEventListener("change", () => {
+  ui.chatSelect && ui.chatSelect.addEventListener("change", () => {
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (sel) tryOverlayRect(sel.pos, true);
   });
 
-  ui.btnHighlightChat.addEventListener("click", () => {
+  ui.btnHighlightChat && ui.btnHighlightChat.addEventListener("click", () => {
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (!sel) { addFeed("Select a chatbox first.", "bad"); return; }
@@ -1312,8 +1362,8 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     addFeed("Highlight shown.", "ok");
   });
 
-  ui.btnLockChat.addEventListener("click", lockSelectedChat);
-  ui.btnUnlockChat.addEventListener("click", unlockChat);
+  ui.btnLockChat && ui.btnLockChat.addEventListener("click", lockSelectedChat);
+  ui.btnUnlockChat && ui.btnUnlockChat.addEventListener("click", unlockChat);
 // --- WebAudio "beep" (no file needed) ---
   let __irbAudioCtx = null;
   function playBeep(type = "ok") {
@@ -1439,9 +1489,11 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     refreshSetupState();
   }
 
-})();
 
+  });
 
+  // Audio toggle wiring (safe)
+  __onReady(() => {
 document.addEventListener("DOMContentLoaded", function() {
   const t = document.getElementById("audioToggle");
   if (!t) return;
@@ -1453,3 +1505,5 @@ document.addEventListener("DOMContentLoaded", function() {
     localStorage.setItem("audioEnabled", audioEnabled);
   });
 });
+  });
+})();
