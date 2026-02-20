@@ -1179,16 +1179,23 @@
     }
 
     if (!lines.length) {
-      chatState.consecutiveEmpty++;
-      if (chatState.consecutiveEmpty >= 12 && loadSettings().autoDetect && !chatState.locked) {
-        const ok = tryFindChatbox("empty-read");
-        if (ok) {
-          chatState.consecutiveEmpty = 0;
-          addFeed("Chat moved. Lock it again from Settings.", "warn");
-        }
-      }
-      return;
-    }
+  chatState.consecutiveEmpty++;
+
+  // Don't claim "moved" just because we read nothing.
+  if (chatState.consecutiveEmpty === 12) {
+    addFeed(
+      "No chat lines detected. If you use a transparent RS window, make the chatbox background opaque (Edit Layout → chat background opacity).",
+      "warn"
+    );
+  }
+
+  // Only try auto-detect if the chat is NOT locked (safe) and keep the message neutral
+  if (chatState.consecutiveEmpty >= 12 && loadSettings().autoDetect && !chatState.locked) {
+    const ok = tryFindChatbox("empty-read");
+    if (ok) chatState.consecutiveEmpty = 0;
+  }
+  return;
+}
 
     chatState.consecutiveEmpty = 0;
     const stitched = stitchChatMessages(lines);
