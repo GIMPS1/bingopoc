@@ -1,11 +1,13 @@
-/* Iron Rivals Bingo (Alt1) - compact UI
-   - Locked setup (Bingo/Team + IGN) becomes invisible
-   - Auto-submit always ON once setup is locked
-   - Chatbox: scan + dropdown select + highlight + lock (safe with multiple chat windows)
+/* IRB v2026-02-20-premium-select (FIXED)
+   Fixes:
+   - Removes calls to missing functions: getBingoById/getSelectedBingoId/getTeamByNo/getSelectedTeamNo/saveSetupFromSelection/setupPremiumSelectUI
+   - Null-guards backdrop listener
+   - Avoids resolving canonical name twice (resolve ONLY in poll; submitDrop trusts input)
+   - Fixes duplicate team_number mapping
 */
 (function () {
 
-  console.log("IRB v2026-02-20-premium-select loaded ✅");
+  console.log("IRB v2026-02-20-premium-select FIXED ✅");
   const $ = (id) => document.getElementById(id);
 
   const ui = {
@@ -17,7 +19,6 @@
     bingoId: $("bingoId"),
     teamNumber: $("teamNumber"),
 
-    // Name-based setup
     // Premium selects (custom dropdown)
     bingoSelectWrap: $("bingoSelectWrap"),
     bingoBtn: $("bingoSelectBtn"),
@@ -70,30 +71,25 @@
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
   };
+
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
   const __settingsOnly = __params.get("settings") === "1";
 
   function buildSettingsUrl() {
-    // Same file, settings-only view
     const base = location.href.split("#")[0].split("?")[0];
     return `${base}?settings=1`;
   }
-
   function openSettingsPopup() {
     const url = buildSettingsUrl();
     const w = 356;
     const h = 560;
 
-    // Alt1 popup if available
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
-
-    // Browser fallback
     window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
   }
-
 
   // ---------- storage ----------
   const LS = {
@@ -115,8 +111,8 @@
     let s = {};
     try { s = JSON.parse(localStorage.getItem(LS.settings) || "{}"); } catch (e) {}
     return {
-      autoDetect: s.autoDetect !== false, // default true
-      highlight: s.highlight === true,    // default false
+      autoDetect: s.autoDetect !== false,
+      highlight: s.highlight === true,
     };
   }
   function saveSettings(patch) {
@@ -128,7 +124,7 @@
 
   // ---------- UI helpers ----------
   const FEED_MAX = 3;
-  const feedItems = []; // {ts, msg, level}
+  const feedItems = [];
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -139,7 +135,6 @@
     return "warn";
   }
 
-  // Premium: tiny chime (no external audio file needed)
   let _audioCtx = null;
   function playChime() {
     try {
@@ -177,7 +172,6 @@
 
   function showEvent(title, subtitle, level = "ok", flash = true, sound = false) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
-
     ui.eventTitle.textContent = title;
     ui.eventSub.textContent = subtitle;
 
@@ -185,7 +179,6 @@
     ui.eventLine.classList.add(level);
 
     if (flash) {
-      // retrigger pulse
       void ui.eventLine.offsetWidth;
       ui.eventLine.classList.add("flash");
     }
@@ -204,14 +197,11 @@
   }
 
   function addFeed(msg, level = "warn") {
-    // Always update premium event line (single-row)
-    // Sound + gold flash on successful submissions
     const isSubmitOk = level === "ok" && /^Submitted ✅/.test(msg);
     const title = msg.replace(/^Submitted ✅\s*/,"").replace(/^Drop:\s*/,"").trim();
     const subtitle = isSubmitOk ? "Submitted" : (level === "bad" ? "Error" : "Status");
     showEvent(title || msg, subtitle, level, true, isSubmitOk);
 
-    // Keep internal log buffer (for future / admin), but don't require DOM
     feedItems.unshift({ ts: nowTs(), msg, level });
     while (feedItems.length > FEED_MAX) feedItems.pop();
 
@@ -227,22 +217,24 @@
         </div>`;
       }).join("");
     }
-
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
   function setPill(pill, label, state) {
+    if (!pill) return;
     pill.textContent = label;
     pill.className = "pill " + (state || "");
   }
 
   function openDrawer() {
+    if (!ui.drawer || !ui.backdrop) return;
     ui.drawer.classList.add("open");
     ui.drawer.setAttribute("aria-hidden", "false");
     ui.backdrop.classList.add("show");
     ui.backdrop.setAttribute("aria-hidden", "false");
   }
   function closeDrawer() {
+    if (!ui.drawer || !ui.backdrop) return;
     ui.drawer.classList.remove("open");
     ui.drawer.setAttribute("aria-hidden", "true");
     ui.backdrop.classList.remove("show");
@@ -261,8 +253,8 @@
     try { A1lib.identifyApp("./appconfig.json"); } catch (e) {}
   }
 
-  // ---------- restore setup ----------
   if (ui.apiBase) ui.apiBase.value = getApiBase();
+  if (!getApiBase()) addFeed("API base is empty (locked). Check embedded apiBase value.", "bad");
 
   if (ui.bingoId) ui.bingoId.value = localStorage.getItem(LS.bingoId) || "1";
   if (ui.teamNumber) ui.teamNumber.value = localStorage.getItem(LS.team) || "1";
@@ -270,15 +262,16 @@
   const setupLocked = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const ignLocked = (localStorage.getItem(LS.ignLocked) || "") === "1";
   const ignVal = localStorage.getItem(LS.ign) || "";
-  ui.ign.value = ignVal;
+  if (ui.ign) ui.ign.value = ignVal;
 
   function setIgnLocked(locked) {
     const field = ui.ign ? ui.ign.closest(".field") : null;
+    if (!ui.ign || !ui.btnLockIgn) return;
+
     if (locked) {
       ui.ign.disabled = true;
       ui.btnLockIgn.disabled = true;
       if (ui.ignHint) ui.ignHint.textContent = "IGN locked ✅ (reset in Settings if you change RSN).";
-      // Hide IGN block once locked (requirement #2)
       if (field) field.style.display = "none";
     } else {
       ui.ign.disabled = false;
@@ -303,7 +296,7 @@
     const names = loadSavedNames();
     const bingoLabel = names.bingoName ? names.bingoName : `Bingo ${b}`;
     const teamLabel = names.teamName ? names.teamName : `Team ${t}`;
-    const ign = (localStorage.getItem(LS.ign) || ui.ign.value || "").trim();
+    const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
     const chat = localStorage.getItem(LS.chatPos) ? "Chat locked" : "Chat not set";
     const ignTxt = ign ? `IGN: ${ign}` : "IGN: —";
     ui.summaryMeta.textContent = `${bingoLabel} • ${teamLabel} • ${ignTxt} • ${chat}`;
@@ -328,288 +321,246 @@
 
   // ---------- settings init ----------
   let settings = loadSettings();
-  ui.optAutoDetect.checked = settings.autoDetect;
-  ui.optHighlight.checked = settings.highlight;
+  if (ui.optAutoDetect) ui.optAutoDetect.checked = settings.autoDetect;
+  if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
 
-  
+  // ---------- Premium Selects (Bingo + Team) ----------
+  let _bingosCache = [];
+  let _selectedBingo = null;
+  let _selectedTeam = null;
 
-
-  
-
-
-
-// ---------- Premium Selects (Bingo + Team) ----------
-// Uses backend JSON at: GET {apiBase}/api/bingos
-// Expected shape: [{id, name, teams:[{team_number, name}, ...]}, ...]
-let _bingosCache = [];
-let _selectedBingo = null; // object
-let _selectedTeam = null;  // object
-
-function pselectOpen(wrap, open) {
-  if (!wrap) return;
-  wrap.classList.toggle("open", !!open);
-  const btn = wrap.querySelector(".pselectBtn");
-  if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-function pselectCloseAll() {
-  pselectOpen(ui.bingoSelectWrap, false);
-  pselectOpen(ui.teamSelectWrap, false);
-}
-
-function pselectSetDisabled(wrap, disabled) {
-  if (!wrap) return;
-  wrap.classList.toggle("disabled", !!disabled);
-  const btn = wrap.querySelector(".pselectBtn");
-  if (btn) btn.disabled = !!disabled;
-}
-
-function pselectSetLabel(valueEl, text, fallback) {
-  if (!valueEl) return;
-  valueEl.textContent = (text && String(text).trim()) ? String(text).trim() : (fallback || "Select…");
-}
-
-function pselectClearMenu(menuEl, emptyText) {
-  if (!menuEl) return;
-  menuEl.innerHTML = "";
-  const empty = document.createElement("div");
-  empty.className = "pselectEmpty";
-  empty.textContent = emptyText || "No items";
-  menuEl.appendChild(empty);
-  menuEl.classList.add("is-empty");
-}
-
-function pselectRenderMenu(menuEl, items, selectedValue, onPick) {
-  if (!menuEl) return;
-  menuEl.innerHTML = "";
-  if (!items || !items.length) {
-    pselectClearMenu(menuEl, "No items");
-    return;
+  function pselectOpen(wrap, open) {
+    if (!wrap) return;
+    wrap.classList.toggle("open", !!open);
+    const btn = wrap.querySelector(".pselectBtn");
+    if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
   }
-  menuEl.classList.remove("is-empty");
-
-  for (const it of items) {
-    const row = document.createElement("div");
-    row.className = "pselectItem";
-    row.setAttribute("role", "option");
-    row.setAttribute("tabindex", "0");
-    row.dataset.value = String(it.value);
-    row.setAttribute("aria-selected", String(it.value) === String(selectedValue) ? "true" : "false");
-    row.innerHTML = `<div class="txt">${escapeHtml(it.label)}</div>${it.meta ? `<div class="meta">${escapeHtml(it.meta)}</div>` : ""}`;
-
-    const pick = () => onPick(it);
-    row.addEventListener("click", (e) => { e.stopPropagation(); pick(); });
-    row.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
-    });
-
-    menuEl.appendChild(row);
-  }
-}
-
-function getSavedBingoId() {
-  const v = localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "";
-  const id = parseInt(v || "0", 10);
-  return id || 0;
-}
-function getSavedTeamNo() {
-  const v = localStorage.getItem(LS.team) || ui.teamNumber?.value || "";
-  const t = parseInt(v || "0", 10);
-  return t || 0;
-}
-
-function setHiddenIds(bingoId, teamNo) {
-  if (ui.bingoId) ui.bingoId.value = bingoId ? String(bingoId) : "";
-  if (ui.teamNumber) ui.teamNumber.value = teamNo ? String(teamNo) : "";
-}
-
-function updateLockButtonEnabled() {
-  if (!ui.btnLockSetup) return;
-  const b = getSavedBingoId();
-  const t = getSavedTeamNo();
-  ui.btnLockSetup.disabled = !(b > 0 && t > 0);
-}
-
-function findBingoById(id) {
-  return _bingosCache.find(b => Number(b.id) === Number(id)) || null;
-}
-function findTeamByNo(bingoObj, teamNo) {
-  if (!bingoObj || !Array.isArray(bingoObj.teams)) return null;
-  return bingoObj.teams.find(t => Number(t.team_number) === Number(teamNo)) || null;
-}
-
-function applySelectionToUI() {
-  const bid = getSavedBingoId();
-  const tno = getSavedTeamNo();
-  _selectedBingo = bid ? findBingoById(bid) : null;
-  _selectedTeam = (_selectedBingo && tno) ? findTeamByNo(_selectedBingo, tno) : null;
-
-  pselectSetLabel(ui.bingoValue, _selectedBingo?.name, "Select a bingo…");
-  if (_selectedBingo) {
-    pselectSetDisabled(ui.teamSelectWrap, false);
-    pselectSetLabel(ui.teamValue, _selectedTeam?.name, "Select a team…");
-  } else {
-    pselectSetDisabled(ui.teamSelectWrap, true);
-    pselectSetLabel(ui.teamValue, "", "Select a team…");
-    pselectClearMenu(ui.teamMenu, "Select a bingo first…");
-  }
-
-  updateLockButtonEnabled();
-}
-
-function renderBingoMenu() {
-  const selectedId = getSavedBingoId();
-  const items = (_bingosCache || []).map(b => ({
-    value: b.id,
-    label: b.name || `Bingo ${b.id}`,
-    meta: `ID ${b.id}`
-  }));
-
-  pselectRenderMenu(ui.bingoMenu, items, selectedId, (it) => {
-    const b = findBingoById(it.value);
-    if (!b) return;
-
-    localStorage.setItem(LS.bingoId, String(b.id));
-    localStorage.setItem("irb.bingoName", String(b.name || `Bingo ${b.id}`));
-    localStorage.removeItem(LS.team);
-    localStorage.removeItem("irb.teamName");
-
-    setHiddenIds(b.id, "");
-    _selectedBingo = b;
-    _selectedTeam = null;
-
-    pselectSetLabel(ui.bingoValue, b.name, "Select a bingo…");
-    pselectSetLabel(ui.teamValue, "", "Select a team…");
-
-    renderTeamMenu(b);
-    applySelectionToUI();
+  function pselectCloseAll() {
     pselectOpen(ui.bingoSelectWrap, false);
-  });
-}
-
-function renderTeamMenu(bingoObj) {
-  const selectedTeam = getSavedTeamNo();
-  const teams = (bingoObj?.teams || []).map(t => ({
-    value: t.team_number,
-    label: t.name || `Team ${t.team_number}`,
-    meta: `#${t.team_number}`
-  }));
-
-  pselectRenderMenu(ui.teamMenu, teams, selectedTeam, (it) => {
-    const t = findTeamByNo(bingoObj, it.value);
-    if (!t) return;
-
-    localStorage.setItem(LS.team, String(t.team_number));
-    localStorage.setItem("irb.teamName", String(t.name || `Team ${t.team_number}`));
-
-    setHiddenIds(bingoObj.id, t.team_number);
-    _selectedTeam = t;
-
-    pselectSetLabel(ui.teamValue, t.name, "Select a team…");
-    applySelectionToUI();
     pselectOpen(ui.teamSelectWrap, false);
-  });
-}
+  }
+  function pselectSetDisabled(wrap, disabled) {
+    if (!wrap) return;
+    wrap.classList.toggle("disabled", !!disabled);
+    const btn = wrap.querySelector(".pselectBtn");
+    if (btn) btn.disabled = !!disabled;
+  }
+  function pselectSetLabel(valueEl, text, fallback) {
+    if (!valueEl) return;
+    valueEl.textContent = (text && String(text).trim()) ? String(text).trim() : (fallback || "Select…");
+  }
+  function pselectClearMenu(menuEl, emptyText) {
+    if (!menuEl) return;
+    menuEl.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "pselectEmpty";
+    empty.textContent = emptyText || "No items";
+    menuEl.appendChild(empty);
+    menuEl.classList.add("is-empty");
+  }
+  function pselectRenderMenu(menuEl, items, selectedValue, onPick) {
+    if (!menuEl) return;
+    menuEl.innerHTML = "";
+    if (!items || !items.length) {
+      pselectClearMenu(menuEl, "No items");
+      return;
+    }
+    menuEl.classList.remove("is-empty");
 
-function wirePremiumSelects() {
-  if (ui.bingoBtn && ui.bingoSelectWrap) {
-    ui.bingoBtn.addEventListener("click", (e) => {
-      if (ui.bingoSelectWrap.classList.contains("disabled")) return;
-      const open = !ui.bingoSelectWrap.classList.contains("open");
-      pselectCloseAll();
-      pselectOpen(ui.bingoSelectWrap, open);
-      e.stopPropagation();
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "pselectItem";
+      row.setAttribute("role", "option");
+      row.setAttribute("tabindex", "0");
+      row.dataset.value = String(it.value);
+      row.setAttribute("aria-selected", String(it.value) === String(selectedValue) ? "true" : "false");
+      row.innerHTML = `<div class="txt">${escapeHtml(it.label)}</div>${it.meta ? `<div class="meta">${escapeHtml(it.meta)}</div>` : ""}`;
+
+      const pick = () => onPick(it);
+      row.addEventListener("click", (e) => { e.stopPropagation(); pick(); });
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); }
+      });
+      menuEl.appendChild(row);
+    }
+  }
+
+  function getSavedBingoId() {
+    const v = localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "";
+    const id = parseInt(v || "0", 10);
+    return id || 0;
+  }
+  function getSavedTeamNo() {
+    const v = localStorage.getItem(LS.team) || ui.teamNumber?.value || "";
+    const t = parseInt(v || "0", 10);
+    return t || 0;
+  }
+  function setHiddenIds(bingoId, teamNo) {
+    if (ui.bingoId) ui.bingoId.value = bingoId ? String(bingoId) : "";
+    if (ui.teamNumber) ui.teamNumber.value = teamNo ? String(teamNo) : "";
+  }
+  function updateLockButtonEnabled() {
+    if (!ui.btnLockSetup) return;
+    const b = getSavedBingoId();
+    const t = getSavedTeamNo();
+    ui.btnLockSetup.disabled = !(b > 0 && t > 0);
+  }
+  function findBingoById(id) {
+    return _bingosCache.find(b => Number(b.id) === Number(id)) || null;
+  }
+  function findTeamByNo(bingoObj, teamNo) {
+    if (!bingoObj || !Array.isArray(bingoObj.teams)) return null;
+    return bingoObj.teams.find(t => Number(t.team_number) === Number(teamNo)) || null;
+  }
+
+  function applySelectionToUI() {
+    const bid = getSavedBingoId();
+    const tno = getSavedTeamNo();
+    _selectedBingo = bid ? findBingoById(bid) : null;
+    _selectedTeam = (_selectedBingo && tno) ? findTeamByNo(_selectedBingo, tno) : null;
+
+    pselectSetLabel(ui.bingoValue, _selectedBingo?.name, "Select a bingo…");
+    if (_selectedBingo) {
+      pselectSetDisabled(ui.teamSelectWrap, false);
+      pselectSetLabel(ui.teamValue, _selectedTeam?.name, "Select a team…");
+    } else {
+      pselectSetDisabled(ui.teamSelectWrap, true);
+      pselectSetLabel(ui.teamValue, "", "Select a team…");
+      pselectClearMenu(ui.teamMenu, "Select a bingo first…");
+    }
+    updateLockButtonEnabled();
+  }
+
+  function renderTeamMenu(bingoObj) {
+    const selectedTeam = getSavedTeamNo();
+    const teams = (bingoObj?.teams || []).map(t => ({
+      value: t.team_number,
+      label: t.name || `Team ${t.team_number}`,
+      meta: `#${t.team_number}`
+    }));
+
+    pselectRenderMenu(ui.teamMenu, teams, selectedTeam, (it) => {
+      const t = findTeamByNo(bingoObj, it.value);
+      if (!t) return;
+
+      localStorage.setItem(LS.team, String(t.team_number));
+      localStorage.setItem("irb.teamName", String(t.name || `Team ${t.team_number}`));
+
+      setHiddenIds(bingoObj.id, t.team_number);
+      _selectedTeam = t;
+
+      pselectSetLabel(ui.teamValue, t.name, "Select a team…");
+      applySelectionToUI();
+      pselectOpen(ui.teamSelectWrap, false);
     });
   }
-  if (ui.teamBtn && ui.teamSelectWrap) {
-    ui.teamBtn.addEventListener("click", (e) => {
-      if (ui.teamSelectWrap.classList.contains("disabled")) return;
-      const open = !ui.teamSelectWrap.classList.contains("open");
-      pselectCloseAll();
-      pselectOpen(ui.teamSelectWrap, open);
-      e.stopPropagation();
+
+  function renderBingoMenu() {
+    const selectedId = getSavedBingoId();
+    const items = (_bingosCache || []).map(b => ({
+      value: b.id,
+      label: b.name || `Bingo ${b.id}`,
+      meta: `ID ${b.id}`
+    }));
+
+    pselectRenderMenu(ui.bingoMenu, items, selectedId, (it) => {
+      const b = findBingoById(it.value);
+      if (!b) return;
+
+      localStorage.setItem(LS.bingoId, String(b.id));
+      localStorage.setItem("irb.bingoName", String(b.name || `Bingo ${b.id}`));
+      localStorage.removeItem(LS.team);
+      localStorage.removeItem("irb.teamName");
+
+      setHiddenIds(b.id, "");
+      _selectedBingo = b;
+      _selectedTeam = null;
+
+      pselectSetLabel(ui.bingoValue, b.name, "Select a bingo…");
+      pselectSetLabel(ui.teamValue, "", "Select a team…");
+
+      renderTeamMenu(b);
+      applySelectionToUI();
+      pselectOpen(ui.bingoSelectWrap, false);
     });
   }
-  document.addEventListener("click", () => pselectCloseAll());
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") pselectCloseAll(); });
-}
 
+  function wirePremiumSelects() {
+    if (ui.bingoBtn && ui.bingoSelectWrap) {
+      ui.bingoBtn.addEventListener("click", (e) => {
+        if (ui.bingoSelectWrap.classList.contains("disabled")) return;
+        const open = !ui.bingoSelectWrap.classList.contains("open");
+        pselectCloseAll();
+        pselectOpen(ui.bingoSelectWrap, open);
+        e.stopPropagation();
+      });
+    }
+    if (ui.teamBtn && ui.teamSelectWrap) {
+      ui.teamBtn.addEventListener("click", (e) => {
+        if (ui.teamSelectWrap.classList.contains("disabled")) return;
+        const open = !ui.teamSelectWrap.classList.contains("open");
+        pselectCloseAll();
+        pselectOpen(ui.teamSelectWrap, open);
+        e.stopPropagation();
+      });
+    }
+    document.addEventListener("click", () => pselectCloseAll());
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") pselectCloseAll(); });
+  }
 
-function setupPremiumSelectUI() {
-  try {
-    // wire open/close behaviour for premium dropdowns
-    wirePremiumSelects();
+  async function loadBingosAndPopulate() {
+    const base = getApiBase();
+    if (!base) return false;
 
-    // default state
+    pselectSetDisabled(ui.bingoSelectWrap, true);
     pselectSetDisabled(ui.teamSelectWrap, true);
     pselectClearMenu(ui.bingoMenu, "Loading…");
     pselectClearMenu(ui.teamMenu, "Select a bingo first…");
-    pselectSetLabel(ui.bingoValue, "", "Select a bingo…");
+    pselectSetLabel(ui.bingoValue, "", "Loading…");
     pselectSetLabel(ui.teamValue, "", "Select a team…");
+    if (ui.btnLockSetup) ui.btnLockSetup.disabled = true;
 
-    // Apply any saved selection to labels (menus will be rendered after load)
-    applySelectionToUI();
-  } catch (e) {
-    // never let UI init crash the app
-    try { addFeed("Premium select init failed: " + (e && e.message ? e.message : e), "bad"); } catch(_) {}
+    try {
+      const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+
+      const arr = Array.isArray(data) ? data : (Array.isArray(data?.bingos) ? data.bingos : []);
+      _bingosCache = (arr || []).map(b => ({
+        id: b.id ?? b.bingo_id ?? b.bingoId,
+        name: b.name ?? b.title ?? b.bingo_name,
+        teams: Array.isArray(b.teams) ? b.teams.map(t => ({
+          team_number: t.team_number ?? t.teamNumber ?? t.teamNo ?? t.team_no ?? t.number,
+          name: t.name ?? t.team_name ?? t.title
+        })) : []
+      })).filter(b => b.id);
+
+      if (!_bingosCache.length) throw new Error("No bingos returned");
+
+      pselectSetDisabled(ui.bingoSelectWrap, false);
+      renderBingoMenu();
+
+      applySelectionToUI();
+      if (_selectedBingo) renderTeamMenu(_selectedBingo);
+      updateLockButtonEnabled();
+
+      addFeed("Loaded bingos ✅", "ok");
+      return true;
+    } catch (e) {
+      pselectSetDisabled(ui.bingoSelectWrap, false);
+      pselectClearMenu(ui.bingoMenu, "Failed to load bingos");
+      pselectSetLabel(ui.bingoValue, "", "Failed to load bingos");
+      addFeed("Failed to load bingos: " + e.message, "bad");
+      return false;
+    }
   }
-}
-
-
-async function loadBingosAndPopulate() {
-  const base = getApiBase();
-  if (!base) return false;
-
-  pselectSetDisabled(ui.bingoSelectWrap, true);
-  pselectSetDisabled(ui.teamSelectWrap, true);
-  pselectClearMenu(ui.bingoMenu, "Loading…");
-  pselectClearMenu(ui.teamMenu, "Select a bingo first…");
-  pselectSetLabel(ui.bingoValue, "", "Loading…");
-  pselectSetLabel(ui.teamValue, "", "Select a team…");
-  if (ui.btnLockSetup) ui.btnLockSetup.disabled = true;
-
-  try {
-    const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-
-    const arr = Array.isArray(data) ? data : (Array.isArray(data?.bingos) ? data.bingos : []);
-    _bingosCache = (arr || []).map(b => ({
-      id: b.id ?? b.bingo_id ?? b.bingoId,
-      name: b.name ?? b.title ?? b.bingo_name,
-      teams: Array.isArray(b.teams) ? b.teams.map(t => ({
-        team_number: t.team_number ?? t.team_number ?? t.teamNo ?? t.team_no ?? t.number,
-        name: t.name ?? t.team_name ?? t.title
-      })) : []
-    })).filter(b => b.id);
-
-    if (!_bingosCache.length) throw new Error("No bingos returned");
-
-    pselectSetDisabled(ui.bingoSelectWrap, false);
-    renderBingoMenu();
-
-    // Apply saved selection (if any) and populate teams
-    applySelectionToUI();
-    if (_selectedBingo) renderTeamMenu(_selectedBingo);
-    updateLockButtonEnabled();
-
-    addFeed("Loaded bingos ✅", "ok");
-    return true;
-  } catch (e) {
-    pselectSetDisabled(ui.bingoSelectWrap, false);
-    pselectClearMenu(ui.bingoMenu, "Failed to load bingos");
-    pselectSetLabel(ui.bingoValue, "", "Failed to load bingos");
-    addFeed("Failed to load bingos: " + e.message, "bad");
-    return false;
-  }
-}
 
   wirePremiumSelects();
-// ---------- API helpers ----------
 
+  // ---------- API helpers ----------
   async function pingApi() {
     const base = getApiBase();
-    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId.value || "0", 10) || 0;
+    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
     try {
       const r = await fetch(`${base}/b/${bingoId}/api/state`, { method: "GET" });
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -622,8 +573,8 @@ async function loadBingosAndPopulate() {
     }
   }
 
-  // ---------- canonical name resolver (via backend /wiki/tooltip) ----------
-  const canonicalCache = new Map(); // raw->canonical
+  // ---------- canonical name resolver ----------
+  const canonicalCache = new Map();
   async function resolveCanonicalName(rawName) {
     const base = getApiBase();
     if (!base) return rawName;
@@ -646,19 +597,20 @@ async function loadBingosAndPopulate() {
     }
   }
 
+  // FIX: submitDrop does NOT resolve canonical again (poll already does it)
   async function submitDrop({ drop_name, amount }) {
     const base = getApiBase();
-    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId.value || "0", 10) || 0;
-    const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber.value || "0", 10);
-    const ign = (localStorage.getItem(LS.ign) || ui.ign.value || "").trim() || "Unknown";
+    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+    const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+    const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim() || "Unknown";
     const ts_iso = new Date().toISOString();
 
-    const canonical = await resolveCanonicalName(drop_name);
+    const canonical = (drop_name || "").trim(); // trust caller
 
     const fd = new FormData();
     fd.append("ts_iso", ts_iso);
     fd.append("ign", ign);
-    fd.append("team_number", String(team_number || 0));
+    fd.append("team_number", String(team_number));
     fd.append("boss", "");
     fd.append("drop_name", canonical);
     fd.append("result", "success");
@@ -680,7 +632,6 @@ async function loadBingosAndPopulate() {
 
   function _tryParseReceive(text) {
     const t = stripTimestampPrefix(text);
-
     const idx = t.toLowerCase().indexOf('you receive');
     const idx2 = t.toLowerCase().indexOf('you received');
     const start = idx >= 0 ? idx : idx2;
@@ -818,18 +769,6 @@ async function loadBingosAndPopulate() {
   function saveChatPos(pos) { localStorage.setItem(LS.chatPos, JSON.stringify(pos)); }
   function clearChatPos() { localStorage.removeItem(LS.chatPos); }
 
-  function setChatPillLocked(confPct, mode) {
-    // Chat status contributes to overall Config pill (shown in the 3rd pill)
-    updateConfigPill();
-    refreshSummary();
-    refreshSetupState();
-  }
-  function setChatPillMissing() {
-    updateConfigPill();
-    refreshSummary();
-    refreshSetupState();
-  }
-
   function updateConfigPill() {
     if (!ui.chatPill) return;
 
@@ -849,18 +788,26 @@ async function loadBingosAndPopulate() {
       return;
     }
 
-    // Not configured yet: show progress
     const parts = [];
     parts.push(setupLocked ? `B${b}/T${t} ✅` : "B/T …");
     parts.push(ignLocked ? `IGN ✅` : "IGN …");
     parts.push(chatLocked ? "Chat ✅" : "Chat …");
 
-    // state = bad if nothing set, warn otherwise
     const any = setupLocked || ignLocked || chatLocked;
     const state = any ? "warn" : "bad";
     setPill(ui.chatPill, `Config: ${parts.join(" • ")}`, state);
   }
 
+  function setChatPillLocked() {
+    updateConfigPill();
+    refreshSummary();
+    refreshSetupState();
+  }
+  function setChatPillMissing() {
+    updateConfigPill();
+    refreshSummary();
+    refreshSetupState();
+  }
 
   function initChatReader() {
     const ChatboxCtor = getChatboxCtor();
@@ -870,7 +817,6 @@ async function loadBingosAndPopulate() {
     }
     chatReader = new ChatboxCtor();
 
-    // Do not overwrite default readargs/colors; only add safe extras.
     if (!chatReader.readargs) chatReader.readargs = {};
     if (!Array.isArray(chatReader.readargs.colors)) chatReader.readargs.colors = [];
 
@@ -897,7 +843,7 @@ async function loadBingosAndPopulate() {
         chatState.locked = true;
         chatState.usingFallback = false;
         chatState.confPct = 95;
-        setChatPillLocked(chatState.confPct, "locked");
+        setChatPillLocked();
         addFeed("Chatbox loaded from calibration ✅", "ok");
       } catch (e) {
         clearChatPos();
@@ -918,7 +864,7 @@ async function loadBingosAndPopulate() {
         chatState.locked = false;
         chatState.usingFallback = true;
         chatState.confPct = 70;
-        setChatPillLocked(chatState.confPct, "fallback");
+        setChatPillLocked();
         addFeed(`Chatbox auto-detected (${tag}).`, "ok");
         return true;
       }
@@ -966,7 +912,7 @@ async function loadBingosAndPopulate() {
         chatState.locked = true;
         chatState.usingFallback = false;
         chatState.confPct = 95;
-        setChatPillLocked(chatState.confPct, "locked");
+        setChatPillLocked();
         addFeed("Chatbox calibrated & locked ✅", "ok");
         tryOverlayRect(chatReader.pos, true);
         return true;
@@ -982,13 +928,12 @@ async function loadBingosAndPopulate() {
   }
 
   // ---------- chat scanning + selection ----------
-  let scannedChats = []; // {id, pos, rect}
+  let scannedChats = [];
 
   function describeRect(r) {
     if (!r) return "—";
     return `x=${r.x},y=${r.y},w=${r.width},h=${r.height}`;
   }
-
   function extractRectFromPos(pos) {
     if (!pos) return null;
     if (pos.mainbox && pos.mainbox.rect) return pos.mainbox.rect;
@@ -999,6 +944,8 @@ async function loadBingosAndPopulate() {
 
   function populateChatSelect(list) {
     scannedChats = list || [];
+    if (!ui.chatSelect || !ui.btnLockChat || !ui.btnHighlightChat) return;
+
     ui.chatSelect.innerHTML = "";
     if (!scannedChats.length) {
       ui.chatSelect.disabled = true;
@@ -1045,7 +992,6 @@ async function loadBingosAndPopulate() {
       found = [];
     }
 
-    // Normalise output
     const list = [];
     if (Array.isArray(found)) {
       for (const pos of found) {
@@ -1062,6 +1008,7 @@ async function loadBingosAndPopulate() {
   }
 
   function lockSelectedChat() {
+    if (!ui.chatSelect) return;
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (!sel) { addFeed("Select a chatbox first.", "bad"); return; }
@@ -1075,7 +1022,7 @@ async function loadBingosAndPopulate() {
       chatState.locked = true;
       chatState.usingFallback = false;
       chatState.confPct = 95;
-      setChatPillLocked(chatState.confPct, "locked");
+      setChatPillLocked();
       tryOverlayRect(sel.pos, true);
       addFeed("Chatbox locked ✅", "ok");
     } catch (e) {
@@ -1128,8 +1075,6 @@ async function loadBingosAndPopulate() {
 
   async function poll() {
     if (!running || !chatReader) return;
-
-    // Guard: auto-submit only once setup locked
     if (!isSetupReady()) return;
 
     if (chatReader.pos === null) {
@@ -1181,7 +1126,9 @@ async function loadBingosAndPopulate() {
       if (!parsed) continue;
 
       const canonicalName = await resolveCanonicalName(parsed.drop_name);
-      const key = `${canonicalName}||${parsed.amount || ""}`;
+
+      // slightly stronger dupe key
+      const key = `${canonicalName}||${parsed.amount || ""}||${chatState.lastLine}`;
       if (recentSet.has(key)) continue;
 
       rememberKey(key);
@@ -1198,65 +1145,68 @@ async function loadBingosAndPopulate() {
   }
 
   // ---------- events ----------
-  // ---------- events ----------
-  // Main overlay opens Settings in a separate popup window (Alt1 can't render outside its window)
   if (!__settingsOnly) {
     ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
   } else {
-    // Settings-only window uses the in-window drawer
     ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openDrawer);
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
   }
 
-ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
+  ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (__settingsOnly) {
       try { window.close(); } catch (e) {}
       return;
     }
     closeDrawer();
   });
-  ui.backdrop.addEventListener("click", closeDrawer);
 
-  ui.optAutoDetect.addEventListener("change", (e) => {
+  // FIX: null-guard backdrop
+  ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
+
+  ui.optAutoDetect && ui.optAutoDetect.addEventListener("change", (e) => {
     settings = saveSettings({ autoDetect: !!e.target.checked });
     addFeed("Auto-detect fallback: " + (settings.autoDetect ? "ON" : "OFF"), "ok");
   });
-  ui.optHighlight.addEventListener("change", (e) => {
+  ui.optHighlight && ui.optHighlight.addEventListener("change", (e) => {
     settings = saveSettings({ highlight: !!e.target.checked });
     addFeed("Highlight during locate: " + (settings.highlight ? "ON" : "OFF"), "ok");
   });
 
-  ui.btnLockSetup.addEventListener("click", () => {
-    const bingoObj = (ui.bingoSelectWrap && ui.teamSelectWrap) ? getBingoById(getSelectedBingoId()) : null;
-    const teamObj = (ui.bingoSelectWrap && ui.teamSelectWrap && bingoObj) ? getTeamByNo(bingoObj, getSelectedTeamNo()) : null;
+  // FIX: btnLockSetup uses existing helpers; no missing functions
+  ui.btnLockSetup && ui.btnLockSetup.addEventListener("click", () => {
+    const b = getSavedBingoId();
+    const t = getSavedTeamNo();
 
-    const b = parseInt((bingoObj ? bingoObj.id : ui.bingoId.value) || "0", 10);
-    const t = parseInt((teamObj ? teamObj.team_number : ui.teamNumber.value) || "0", 10);
-    if (!b || b < 1) { addFeed("Set a valid Bingo #.", "bad"); return; }
-    if (!t || t < 1) { addFeed("Set a valid Team #.", "bad"); return; }
+    if (!b || b < 1) { addFeed("Set a valid Bingo.", "bad"); return; }
+    if (!t || t < 1) { addFeed("Set a valid Team.", "bad"); return; }
+
+    // ensure hidden inputs also set
+    setHiddenIds(b, t);
+
+    // keep names in sync with cache when available
+    const bingoObj = findBingoById(b);
+    const teamObj = bingoObj ? findTeamByNo(bingoObj, t) : null;
+    if (bingoObj) localStorage.setItem("irb.bingoName", String(bingoObj.name || `Bingo ${b}`));
+    if (teamObj) localStorage.setItem("irb.teamName", String(teamObj.name || `Team ${t}`));
 
     localStorage.setItem(LS.bingoId, String(b));
     localStorage.setItem(LS.team, String(t));
-    if (bingoObj && teamObj) saveSetupFromSelection(bingoObj, teamObj);
+
     setSetupLocked(true);
     addFeed("Bingo/Team locked ✅", "ok");
-
-    // Re-ping with correct bingo path
     pingApi();
-
-    // If IGN already locked too, auto start
     if (isSetupReady()) start();
   });
 
-  ui.btnUnlockSetup.addEventListener("click", () => {
+  ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     setSetupLocked(false);
     addFeed("Bingo/Team unlocked. Set values then Lock again.", "warn");
     stop();
   });
 
-  ui.btnLockIgn.addEventListener("click", () => {
-    const ign = (ui.ign.value || "").trim();
+  ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
+    const ign = (ui.ign?.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
     localStorage.setItem(LS.ign, ign);
     localStorage.setItem(LS.ignLocked, "1");
@@ -1267,7 +1217,7 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (isSetupReady()) start();
   });
 
-  ui.btnResetIgn.addEventListener("click", () => {
+  ui.btnResetIgn && ui.btnResetIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
@@ -1276,23 +1226,23 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     stop();
   });
 
-  ui.btnRecalibrate.addEventListener("click", () => {
+  ui.btnRecalibrate && ui.btnRecalibrate.addEventListener("click", () => {
     locateChatboxAndStore();
   });
 
-  ui.btnScanChats.addEventListener("click", () => {
-    // Ensure chatReader exists for best compatibility
+  ui.btnScanChats && ui.btnScanChats.addEventListener("click", () => {
     if (!chatReader) initChatReader();
     scanChatboxes();
   });
 
-  ui.chatSelect.addEventListener("change", () => {
+  ui.chatSelect && ui.chatSelect.addEventListener("change", () => {
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (sel) tryOverlayRect(sel.pos, true);
   });
 
-  ui.btnHighlightChat.addEventListener("click", () => {
+  ui.btnHighlightChat && ui.btnHighlightChat.addEventListener("click", () => {
+    if (!ui.chatSelect) return;
     const idx = parseInt(ui.chatSelect.value || "-1", 10);
     const sel = scannedChats[idx];
     if (!sel) { addFeed("Select a chatbox first.", "bad"); return; }
@@ -1300,23 +1250,21 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     addFeed("Highlight shown.", "ok");
   });
 
-  ui.btnLockChat.addEventListener("click", lockSelectedChat);
-  ui.btnUnlockChat.addEventListener("click", unlockChat);
-// --- WebAudio "beep" (no file needed) ---
+  ui.btnLockChat && ui.btnLockChat.addEventListener("click", lockSelectedChat);
+  ui.btnUnlockChat && ui.btnUnlockChat.addEventListener("click", unlockChat);
+
+  // --- WebAudio beep ---
   let __irbAudioCtx = null;
   function playBeep(type = "ok") {
     try {
       if (!__irbAudioCtx) __irbAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const ctx = __irbAudioCtx;
-
-      // Some browsers require resume after user gesture; best-effort
       if (ctx.state === "suspended") ctx.resume().catch(() => {});
 
       const o = ctx.createOscillator();
       const g = ctx.createGain();
-
-      // Tones: ok=880Hz, warn=660Hz, bad=220Hz
       const freq = type === "bad" ? 220 : (type === "warn" ? 660 : 880);
+
       o.type = "sine";
       o.frequency.value = freq;
 
@@ -1327,13 +1275,12 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
 
       o.connect(g);
       g.connect(ctx.destination);
-
       o.start(now);
       o.stop(now + 0.13);
     } catch(e) {}
   }
 
-  // --- Dev: add mock drop to feed ---
+  // --- Dev: mock drop ---
   function addMockDrop() {
     const picks = [
       ["Magic logs", 71],
@@ -1348,20 +1295,15 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
   }
   window.addMockDrop = addMockDrop;
 
-
   // ---------- boot ----------
-
-  // If this is the settings-only popup view, hide the compact overlay UI and open the drawer immediately
   if (__settingsOnly) {
     try {
-      // Make the drawer fill the popup (no dead space)
       if (ui.drawer) {
         ui.drawer.style.width = "100vw";
         ui.drawer.style.maxWidth = "100vw";
         ui.drawer.style.transform = "translateX(0)";
       }
 
-      // Dedicated "Close Settings" button (closes the popup cleanly)
       const hdr = document.querySelector(".drawerHeader");
       if (hdr && !document.getElementById("btnClosePopup")) {
         const btn = document.createElement("button");
@@ -1377,7 +1319,6 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
         hdr.appendChild(btn);
       }
 
-      // Hide the in-drawer close button if it exists (we use the dedicated one in popup)
       if (ui.btnCloseSettings) ui.btnCloseSettings.style.display = "none";
 
       const topbar = document.querySelector(".topbar");
@@ -1397,34 +1338,27 @@ ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
       if (feed) feed.style.display = "none";
 
       openDrawer();
-      // In popup, backdrop isn't needed (click outside won't exist meaningfully)
       if (ui.backdrop) ui.backdrop.style.display = "none";
     } catch (e) {}
   }
-  addFeed("Plugin loaded.", "ok");
-  // Debug hook (safe) - available even if later init fails
-  window.IRB = window.IRB || {};
-  window.IRB.reloadBingos = () => loadBingosAndPopulate();
-  window.IRB.version = "v2026-02-20-premium-select-fixed3";
 
+  addFeed("Plugin loaded.", "ok");
   pingApi();
-  setupPremiumSelectUI();
+
+  // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   loadBingosAndPopulate();
 
+  window.IRB = window.IRB || {};
+  window.IRB.reloadBingos = loadBingosAndPopulate;
 
   if (isAlt1) {
     initChatReader();
     refreshSummary();
     refreshSetupState();
 
-    // If setup already ready, auto-start
-    if (isSetupReady()) {
-      start();
-    } else {
-      addFeed("Finish setup to enable auto-submit.", "warn");
-    }
+    if (isSetupReady()) start();
+    else addFeed("Finish setup to enable auto-submit.", "warn");
 
-    // If no stored calibration and autoDetect enabled, attempt a single early find
     if (!loadChatPos() && loadSettings().autoDetect) {
       tryFindChatbox("startup");
     }
