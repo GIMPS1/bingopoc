@@ -326,7 +326,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   text-overflow:ellipsis;
   font-weight:800;
   letter-spacing:.1px;
-  font-size:12.5px;
+  font-size:10px;
 }
 .pselectChevron{ color: rgba(214,178,94,.9); font-weight:900; }
 .pselectBtn[aria-expanded="true"] .pselectChevron{ transform: rotate(180deg); }
@@ -360,7 +360,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   border:1px solid transparent;
   color: var(--text);
   background: rgba(255,255,255,.02);
-  font-size:12px;
+  font-size:10px;
   font-weight:800;
 }
 .pselectItem:hover{
