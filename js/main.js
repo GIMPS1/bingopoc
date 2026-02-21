@@ -41,6 +41,11 @@
     summaryMeta: $("summaryMeta"),
     btnOpenSettings2: $("btnOpenSettings2"),
 
+    // Step 3: chat locate/lock
+    chatStep3: $("chatStep3"),
+    btnLocateLockChat: $("btnLocateLockChat"),
+    chatLockHint: $("chatLockHint"),
+
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
@@ -252,7 +257,19 @@
     setVisible(ui.setupSummary, locked);
     refreshSummary();
     refreshSetupState();
+    try { renderChatStepUI(); } catch (e) {}
   }
+
+  function renderChatStepUI() {
+    // Step 3 button is shown only after setup is locked, and hides once chat is locked.
+    const setupLocked = (localStorage.getItem(LS.setupLocked) || "") === "1";
+    const chatLocked = !!localStorage.getItem(LS.chatPos);
+
+    setVisible(ui.chatStep3, setupLocked && !chatLocked);
+    if (ui.btnLocateLockChat) ui.btnLocateLockChat.disabled = !setupLocked;
+  }
+
+
 
   
   function setSetupSelectionEnabled(enabled) {
@@ -396,6 +413,7 @@ function renderIgnLockedUI(locked) {
   setIgnLocked(ignLocked);
   setSetupLocked(setupLocked);
   try { syncUiFromStorage(); } catch (e) {}
+  try { renderChatStepUI(); } catch (e) {}
 
   // ---------- settings init ----------
   let settings = loadSettings();
@@ -943,6 +961,7 @@ function renderIgnLockedUI(locked) {
       if (typeof running !== "undefined" && running) {
         showEvent("Running. Waiting for drops…", "Status", "ok", true, false);
       }
+      try { renderChatStepUI(); } catch (e) {}
     } catch (e) {
       // Avoid throwing inside the storage handler
       try { addFeed("Chat calibration sync failed: " + e.message, "bad"); } catch (_) {}
@@ -1400,7 +1419,59 @@ function initChatReader() {
     if (isSetupReady()) start();
   });
 
-  ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
+  
+
+  // Step 3: Manual chat auto-locate & lock (one-time)
+  ui.btnLocateLockChat && ui.btnLocateLockChat.addEventListener("click", () => {
+    if (!isAlt1) {
+      addFeed("Alt1 is required to locate the chatbox.", "bad");
+      playBeep("bad");
+      return;
+    }
+    if (!chatReader) {
+      const ok = initChatReader();
+      if (!ok) {
+        playBeep("bad");
+        return;
+      }
+    }
+
+    showEvent("Locating chatbox…", "Status", "warn", false, false);
+    try { chatReader.pos = null; } catch (e) {}
+
+    try {
+      chatReader.find();
+    } catch (e) {}
+
+    if (chatReader.pos) {
+      try {
+        saveChatPos(chatReader.pos);
+        if (typeof chatState !== "undefined" && chatState) {
+          chatState.locked = true;
+          chatState.usingFallback = false;
+          chatState.confPct = 95;
+        }
+        setChatPillLocked();
+        tryOverlayRect(chatReader.pos, true);
+        addFeed("Chatbox located & locked ✅", "ok");
+        showEvent("Running. Waiting for drops…", "Status", "ok", false, false);
+        playBeep("ok");
+        refreshSummary();
+        refreshSetupState();
+        renderChatStepUI();
+        if (isSetupReady()) start();
+      } catch (e) {
+        addFeed("Found chatbox, but failed to save calibration.", "bad");
+        playBeep("bad");
+      }
+    } else {
+      addFeed("Could not locate chatbox. Make sure the RS client and chatbox are visible on-screen, then try again.", "warn");
+      showEvent("Chatbox not found. Try again.", "Status", "warn", false, false);
+      playBeep("warn");
+    }
+  });
+
+ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     setSetupLocked(false);
     addFeed("Bingo/Team unlocked. Set values then Lock again.", "warn");
     playBeep("warn");
