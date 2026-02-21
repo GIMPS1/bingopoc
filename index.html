@@ -34,9 +34,27 @@
 
       <!-- Setup (auto-hides once locked) -->
       <div id="setupBlock">
+        <div class="grid2">
+          <div class="field">
+            <label>Step 1: IGN</label>
+            <div class="rowInline">
+              <input id="ign" placeholder="Your RSN" />
+              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
+            </div>
+            <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
+          </div>
+
+          <div class="field">
+            <label>Status</label>
+            <div class="hint" id="setupHint">
+              Step 1: Lock IGN. Step 2: Choose Bingo + Team and lock them. Chat will auto-locate &amp; lock if Auto-detect is enabled.
+            </div>
+          </div>
+        </div>
+
         <div class="grid3">
           <div class="field">
-            <label>Bingo</label>
+            <label>Step 2: Bingo</label>
             <div class="pselect" id="bingoSelectWrap" data-select="bingoSelect">
               <button type="button" class="pselectBtn" id="bingoSelectBtn" aria-haspopup="listbox" aria-expanded="false">
                 <span class="pselectValue" id="bingoSelectValue">Select a bingo…</span>
@@ -52,7 +70,7 @@
           </div>
 
           <div class="field">
-            <label>Team</label>
+            <label>Step 2: Team</label>
             <div class="pselect" id="teamSelectWrap" data-select="teamSelect">
               <button type="button" class="pselectBtn" id="teamSelectBtn" aria-haspopup="listbox" aria-expanded="false">
                 <span class="pselectValue" id="teamSelectValue">Select a team…</span>
@@ -69,30 +87,11 @@
 
           <div class="field">
             <label>&nbsp;</label>
-            <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team" disabled>Lock</button>
-          </div>
-        </div>
-
-        <div class="grid2">
-          <div class="field">
-            <label>IGN</label>
-            <div class="rowInline">
-              <input id="ign" placeholder="Your RSN" />
-              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
-            </div>
-            <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
-          </div>
-
-          <div class="field">
-            <label>Status</label>
-            <div class="hint" id="setupHint">
-              Choose Bingo/Team, lock them, then lock your IGN. Chatbox can be set in Settings.
-            </div>
+            <button class="btn primary" id="btnLockSetup" title="Lock Bingo &amp; Team" disabled>Lock</button>
           </div>
         </div>
       </div>
-
-      <!-- Compact summary (shown once setup is locked) -->
+<!-- Compact summary (shown once setup is locked) -->
       <div class="setupSummary" id="setupSummary" style="display:none;">
         <div class="summaryLeft">
           <div class="summaryTitle">Configured ✅</div>
@@ -103,9 +102,9 @@
 
       
       <!-- Premium single-line event (replaces activity list visually) -->
-      <div id="eventLine" class="eventLine ok show" style="margin-bottom:10px;">
+      <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
         <div class="eventLeft">
-          <div class="eventIcon" id="eventIcon">✓</div>
+          
           <div class="eventText">
             <div class="line1" id="eventTitle">Waiting for drops…</div>
             <div class="line2" id="eventSub">Auto-submit armed</div>
@@ -184,12 +183,12 @@
           <div class="hint">Tip: scanning lets you pick the right tab when you have multiple chat windows.</div>
         </div>
 
-        <div class="section">
-          <div class="sectionTitle">Runtime</div>
+        <div class="section" style="display:none;>
+          <div class="sectionTitle" >Runtime</div>
           <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnUnlockChat">Unlock chat</button>
+            <button class="btn secondary small" id="btnUnlockChat" style="display:none;>Unlock chat</button>
           </div>
-          <div class="hint" style="margin-top:8px;">Auto-submit runs automatically once Setup + IGN + Chat are locked.</div>
+          
         </div>
 
         <!-- Debug tools are intentionally hidden for now -->
