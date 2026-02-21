@@ -302,7 +302,7 @@ function renderIgnLockedUI(locked) {
   }
 
   // Keep setup steps in order
-  try { setSetupSelectionEnabled(locked); } catch (e) {}
+  try { setSetupSelectionEnabled(ignLocked); } catch (e) {}
 
   function syncUiFromStorage() {
     const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
@@ -1416,7 +1416,7 @@ function initChatReader() {
     addFeed("Bingo/Team locked ✅", "ok");
     playBeep("ok");
     pingApi();
-    if (isSetupReady()) start();
+    if (isRunReady()) start();
   });
 
   
@@ -1459,7 +1459,7 @@ function initChatReader() {
         refreshSummary();
         refreshSetupState();
         renderChatStepUI();
-        if (isSetupReady()) start();
+        if (isRunReady()) start();
       } catch (e) {
         addFeed("Found chatbox, but failed to save calibration.", "bad");
         playBeep("bad");
@@ -1488,7 +1488,7 @@ ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     playBeep("ok");
     refreshSummary();
     refreshSetupState();
-    if (isSetupReady()) start();
+    if (isRunReady()) start();
   });
 
   ui.btnResetIgn && ui.btnResetIgn.addEventListener("click", () => {
@@ -1631,7 +1631,7 @@ ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
     refreshSummary();
     refreshSetupState();
 
-    if (isSetupReady()) { start(); addFeed("Running. Waiting for drops…", "ok"); }
+    if (isRunReady()) { start(); addFeed("Running. Waiting for drops…", "ok"); }
     else addFeed("Finish setup to enable auto-submit.", "warn");
 
     if (!loadChatPos() && loadSettings().autoDetect) {
