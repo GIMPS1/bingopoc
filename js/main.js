@@ -798,7 +798,7 @@
 
   function detectHasTimestamps(lines) {
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
-      const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
+      const raw = lineToText(lines[i]);
       if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
     }
     return false;
@@ -813,7 +813,7 @@
     return false;
   }
 
-  function 
+  
   function toPlainText(v) {
     if (v == null) return "";
     if (typeof v === "string") return v;
