@@ -836,7 +836,7 @@
     return toPlainText(line);
   }
 
-stitchChatMessages(lines) {
+function stitchChatMessages(lines) {
     const rawLines = (lines || []).map(lineToText).filter(Boolean);
     const hasTs = detectHasTimestamps(lines || []);
     const out = [];
