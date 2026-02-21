@@ -103,9 +103,9 @@
 
       
       <!-- Premium single-line event (replaces activity list visually) -->
-      <div id="eventLine" class="eventLine ok show" style="margin-bottom:10px;">
+      <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
         <div class="eventLeft">
-          <div class="eventIcon" id="eventIcon">✓</div>
+          
           <div class="eventText">
             <div class="line1" id="eventTitle">Waiting for drops…</div>
             <div class="line2" id="eventSub">Auto-submit armed</div>
@@ -184,12 +184,12 @@
           <div class="hint">Tip: scanning lets you pick the right tab when you have multiple chat windows.</div>
         </div>
 
-        <div class="section">
-          <div class="sectionTitle">Runtime</div>
+        <div class="section" style="display:none;>
+          <div class="sectionTitle" >Runtime</div>
           <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnUnlockChat">Unlock chat</button>
+            <button class="btn secondary small" id="btnUnlockChat" style="display:none;>Unlock chat</button>
           </div>
-          <div class="hint" style="margin-top:8px;">Auto-submit runs automatically once Setup + IGN + Chat are locked.</div>
+          
         </div>
 
         <!-- Debug tools are intentionally hidden for now -->
