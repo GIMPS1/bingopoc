@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <title>Iron Rivals Bingo (Alt1)</title>
-<link rel="stylesheet" href="./css/style.css" />
+  <link rel="stylesheet" href="./css/style.css" />
 
   <script src="https://runeapps.org/runeappslib.js"></script>
   <script src="https://www.unpkg.com/alt1/dist/base/index.js"></script>
@@ -29,41 +29,62 @@
     </header>
 
     <section class="panel">
-      <!-- API base is locked/hidden -->
+
       <input id="apiBase" type="hidden" value="https://colorado-textiles-polished-camcorder.trycloudflare.com" />
 
-      <!-- Setup (auto-hides once locked) -->
+      <!-- Setup -->
       <div id="setupBlock">
+
+        <!-- IGN FIRST -->
+        <div class="grid2">
+          <div class="field">
+            <label>IGN</label>
+            <div class="rowInline">
+              <input id="ign" placeholder="Your RSN" />
+              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
+            </div>
+            <div class="hint" id="ignHint">
+              Tip: lock your IGN once so submissions can’t be spoofed accidentally.
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Setup Instructions</label>
+            <div class="hint" id="setupHint">
+              1. Type IGN and lock it in.<br>
+              2. Choose Bingo & Team, lock it in.<br>
+              3. Chatbox MUST be set in Settings.
+            </div>
+          </div>
+        </div>
+
+        <!-- Bingo & Team SECOND -->
         <div class="grid3">
           <div class="field">
             <label>Bingo</label>
             <div class="pselect" id="bingoSelectWrap" data-select="bingoSelect">
-              <button type="button" class="pselectBtn" id="bingoSelectBtn" aria-haspopup="listbox" aria-expanded="false">
+              <button type="button" class="pselectBtn" id="bingoSelectBtn">
                 <span class="pselectValue" id="bingoSelectValue">Select a bingo…</span>
-                <span class="pselectChevron" aria-hidden="true">▾</span>
+                <span class="pselectChevron">▾</span>
               </button>
-              <div class="pselectMenu" id="bingoSelectMenu" role="listbox" tabindex="-1" aria-label="Bingo">
+              <div class="pselectMenu" id="bingoSelectMenu">
                 <div class="pselectEmpty">Loading…</div>
-                <!-- items injected -->
               </div>
             </div>
-            <!-- Hidden numeric id used by backend routes -->
             <input id="bingoId" type="hidden" value="1" />
           </div>
 
           <div class="field">
             <label>Team</label>
             <div class="pselect" id="teamSelectWrap" data-select="teamSelect">
-              <button type="button" class="pselectBtn" id="teamSelectBtn" aria-haspopup="listbox" aria-expanded="false">
+              <button type="button" class="pselectBtn" id="teamSelectBtn">
                 <span class="pselectValue" id="teamSelectValue">Select a team…</span>
-                <span class="pselectChevron" aria-hidden="true">▾</span>
+                <span class="pselectChevron">▾</span>
               </button>
-              <div class="pselectMenu" id="teamSelectMenu" role="listbox" tabindex="-1" aria-label="Team">
+              <div class="pselectMenu" id="teamSelectMenu">
                 <div class="pselectEmpty">Select a bingo first…</div>
-                <!-- items injected -->
               </div>
             </div>
-            <!-- Hidden numeric team used by backend routes -->
             <input id="teamNumber" type="hidden" value="1" />
           </div>
 
@@ -73,39 +94,20 @@
           </div>
         </div>
 
-        <div class="grid2">
-          <div class="field">
-            <label>IGN</label>
-            <div class="rowInline">
-              <input id="ign" placeholder="Your RSN" />
-              <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
-            </div>
-            <div class="hint" id="ignHint">Tip: lock your IGN once so submissions can’t be spoofed accidentally.</div>
-          </div>
-
-          <div class="field">
-            <label>Status</label>
-            <div class="hint" id="setupHint">
-              Choose Bingo/Team, lock them, then lock your IGN. Chatbox can be set in Settings.
-            </div>
-          </div>
-        </div>
       </div>
 
-      <!-- Compact summary (shown once setup is locked) -->
+      <!-- Summary -->
       <div class="setupSummary" id="setupSummary" style="display:none;">
         <div class="summaryLeft">
           <div class="summaryTitle">Configured ✅</div>
           <div class="summaryMeta" id="summaryMeta">—</div>
         </div>
-        <button class="btn secondary small" id="btnOpenSettings2" title="Open settings">Settings</button>
+        <button class="btn secondary small" id="btnOpenSettings2">Settings</button>
       </div>
 
-      
-      <!-- Premium single-line event (replaces activity list visually) -->
+      <!-- Event Line -->
       <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
         <div class="eventLeft">
-          
           <div class="eventText">
             <div class="line1" id="eventTitle">Waiting for drops…</div>
             <div class="line2" id="eventSub">Auto-submit armed</div>
@@ -121,13 +123,16 @@
         <div class="feedMeta" id="feedMeta">—</div>
       </div>
       <div class="feed" id="feed"></div>
+
     </section>
 
-    <!-- Settings drawer -->
+    <!-- Settings Drawer -->
     <aside class="drawer" id="settingsDrawer" aria-hidden="true">
       <div class="drawerHeader">
         <div class="drawerTitle">Settings</div>
-        <button class="iconBtn" id="btnCloseSettings" title="Close"><span class="icon">✕</span></button>
+        <button class="iconBtn" id="btnCloseSettings">
+          <span class="icon">✕</span>
+        </button>
       </div>
 
       <div class="drawerBody">
@@ -139,8 +144,8 @@
             <div class="pill" id="apiPill">API: …</div>
             <div class="pill" id="chatPill">Chat: …</div>
           </div>
-          <div class="hint" style="margin-top:8px;">These update live while the plugin is running.</div>
         </div>
+
         <div class="section">
           <div class="sectionTitle">Setup</div>
           <div class="hint" id="setupState">—</div>
@@ -148,12 +153,10 @@
             <button class="btn secondary small" id="btnUnlockSetup">Unlock Bingo/Team</button>
             <button class="btn danger small" id="btnResetIgn">Reset IGN</button>
           </div>
-          <div class="hint" style="margin-top:8px;">Unlock only if you need to change values.</div>
         </div>
 
         <div class="section">
           <div class="sectionTitle">Chatbox</div>
-
           <button class="btn secondary" id="btnScanChats">Scan & highlight chatboxes</button>
 
           <div class="field" style="margin-top:10px;">
@@ -169,47 +172,26 @@
             <button class="btn secondary small" id="btnRecalibrate">Auto-locate (quick)</button>
           </div>
 
-          <div class="toggleRow" style="margin-top:10px;">
+          <div class="toggleRow">
             <label class="toggle">
               <input type="checkbox" id="optAutoDetect" />
               <span>Auto-detect fallback</span>
             </label>
           </div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optHighlight" />
-              <span>Highlight during locate</span>
-            </label>
-          </div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optStrictDrops" />
-              <span>Strict drop validation (allowlist)</span>
-            </label>
-          </div>
-          <div class="toggleRow">
-            <label class="toggle">
-              <input type="checkbox" id="optUseWikiCanonical" />
-              <span>Use wiki to canonicalise name</span>
-            </label>
-          </div>
-
-          <div class="hint">Tip: scanning lets you pick the right tab when you have multiple chat windows.</div>
         </div>
 
-        <div class="section" style="display:none;>
-          <div class="sectionTitle" >Runtime</div>
+        <!-- Hidden runtime section -->
+        <div class="section" style="display:none;">
+          <div class="sectionTitle">Runtime</div>
           <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnUnlockChat" style="display:none;>Unlock chat</button>
+            <button class="btn secondary small" id="btnUnlockChat" style="display:none;">Unlock chat</button>
           </div>
-          
         </div>
 
-        <!-- Debug tools are intentionally hidden for now -->
         <div class="section adminGate" id="adminGate" style="display:none;">
           <div class="sectionTitle">Admin tools</div>
-          <div class="hint">Hidden placeholder for future password-protected debug tools.</div>
         </div>
+
       </div>
     </aside>
 
