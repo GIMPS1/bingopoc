@@ -1184,7 +1184,7 @@
     const ok = tryFindChatbox("empty-read");
     if (ok) {
       chatState.consecutiveEmpty = 0;
-      addFeed("Chat moved. Lock it again from Settings.", "warn");
+      addFeed("Re-calibrate chat in Seffings and reload plugin.", "warn");
     }
   }
   return;
