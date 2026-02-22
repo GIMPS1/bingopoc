@@ -1057,19 +1057,28 @@ function stitchChatMessages(lines) {
     return { messages: out, rawCount: rawLines.length, stitchedCount: out.length, hasTimestamps: hasTs };
   }
 
-  // Duplicate protection
-  const recentKeys = [];
-  const recentSet = new Set();
-  function rememberKey(k) {
-    recentKeys.push(k);
-    recentSet.add(k);
-    while (recentKeys.length > 80) {
-      const old = recentKeys.shift();
-      recentSet.delete(old);
-    }
-  }
+  // Duplicate protection (centralised + time-based)
+  const recentDrops = new Map(); // key -> lastSeenMs
+  function seenRecently(key, windowMs = 8000) {
+    const now = Date.now();
+    const last = recentDrops.get(key) || 0;
+    if (now - last < windowMs) return true;
+    recentDrops.set(key, now);
 
-  // ---------- chat reader ----------
+    // lightweight cleanup to avoid unbounded growth
+    if (recentDrops.size > 250) {
+      for (const [k, ts] of recentDrops) {
+        if (now - ts > windowMs * 4) recentDrops.delete(k);
+      }
+      // still too big? drop oldest-ish by iter order
+      while (recentDrops.size > 200) {
+        const firstKey = recentDrops.keys().next().value;
+        recentDrops.delete(firstKey);
+      }
+    }
+    return false;
+  }
+// ---------- chat reader ----------
   let chatReader = null;
   let running = false;
   let pollTimer = null;
@@ -1505,11 +1514,11 @@ function stitchChatMessages(lines) {
       }
 
 
-      // slightly stronger dupe key
-      const key = `${canonicalName}||${parsed.amount || ""}||${chatState.lastLine}`;
-      if (recentSet.has(key)) continue;
+      // De-dupe across ALL detection paths (broadcast, "You received", etc.)
+      const amtKey = (parsed.amount || "1").toString().trim();
+      const key = `${canonicalName}`.toLowerCase().trim() + "||" + amtKey;
+      if (seenRecently(key, 8000)) continue;
 
-      rememberKey(key);
       addFeed(`Drop: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
 
       try {
@@ -1765,3 +1774,45 @@ function stitchChatMessages(lines) {
   }
 
 })();
+
+
+// --- Added: Universal broadcast drop detection ---
+function stripChatPrefix(s) {
+  return (s || "")
+    .replace(/^\s*(?:\[[^\]]+\]\s*)+/i, "")
+    .replace(/^\s*news\s*:\s*/i, "")
+    .trim();
+}
+
+
+// Patch into existing parse function if present
+if (typeof _tryParseReceive === "function") {
+  const __originalTryParseReceive = _tryParseReceive;
+  _tryParseReceive = function(text) {
+    let result = __originalTryParseReceive(text);
+    if (result) return result;
+
+    let t = stripTimestampPrefix(text);
+    t = stripChatPrefix(t);
+
+    const lockedIgn = (localStorage.getItem(LS.ign) || "").trim();
+    if (!lockedIgn) return null;
+
+    const ignEsc = lockedIgn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const reBroadcast = new RegExp(
+      "^" + ignEsc + "\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop!?\\s*$",
+      "i"
+    );
+
+    const m = t.match(reBroadcast);
+    if (m) {
+      const item = (m[1] || "").trim();
+      const amt = (m[2] || "1").trim();
+      return { drop_name: item, amount: amt };
+    }
+
+    return null;
+  };
+}
+// --- End broadcast patch ---
+
