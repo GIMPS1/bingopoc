@@ -38,7 +38,7 @@
         <!-- IGN FIRST -->
         <div class="grid2">
           <div class="field">
-            <label>IGN</label>
+            <label for="ign">IGN</label>
             <div class="rowInline">
               <input id="ign" placeholder="Your RSN" />
               <button class="btn secondary small" id="btnLockIgn" title="Lock IGN">Lock</button>
@@ -49,7 +49,8 @@
           </div>
 
           <div class="field">
-            <label>Setup Instructions</label>
+            <label for="setupInstructionsDummy">Setup Instructions</label>
+            <input id="setupInstructionsDummy" type="hidden" value="1" />
             <div class="hint" id="setupHint">
               1. Type IGN and lock it in.<br>
               2. Choose Bingo & Team, lock it in.<br>
@@ -61,7 +62,7 @@
         <!-- Bingo & Team SECOND -->
         <div class="grid3">
           <div class="field">
-            <label>Bingo</label>
+            <label for="bingoSelectBtn">Bingo</label>
             <div class="pselect" id="bingoSelectWrap" data-select="bingoSelect">
               <button type="button" class="pselectBtn" id="bingoSelectBtn">
                 <span class="pselectValue" id="bingoSelectValue">Select a bingo…</span>
@@ -75,7 +76,7 @@
           </div>
 
           <div class="field">
-            <label>Team</label>
+            <label for="teamSelectBtn">Team</label>
             <div class="pselect" id="teamSelectWrap" data-select="teamSelect">
               <button type="button" class="pselectBtn" id="teamSelectBtn">
                 <span class="pselectValue" id="teamSelectValue">Select a team…</span>
@@ -89,7 +90,7 @@
           </div>
 
           <div class="field">
-            <label>&nbsp;</label>
+            <label for="btnLockSetup">&nbsp;</label>
             <button class="btn primary" id="btnLockSetup" title="Lock Bingo & Team" disabled>Lock</button>
           </div>
         </div>
@@ -187,7 +188,7 @@
           <button class="btn secondary" id="btnScanChats">Scan & highlight chatboxes</button>
 
           <div class="field" style="margin-top:10px;">
-            <label>Choose chatbox</label>
+            <label for="chatSelect">Choose chatbox</label>
             <select id="chatSelect" disabled>
               <option value="">Scan first…</option>
             </select>
