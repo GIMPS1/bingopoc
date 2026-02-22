@@ -124,7 +124,34 @@
       </div>
       <div class="feed" id="feed"></div>
 
+    
+
+
     </section>
+
+<!-- Drop History Panel (collapsed by default) -->
+<section class="panel panelHistory" id="historyPanel">
+  <div class="panelHeaderRow">
+    <div class="panelHeaderTitle">Drop History</div>
+    <div class="panelHeaderToggle">
+      <label class="switchToggle" title="Show/Hide drop history">
+        <input type="checkbox" id="toggleHistory" />
+        <span class="switchTrack"></span>
+        <span class="switchKnob"></span>
+      </label>
+      <div class="switchLabel">Show</div>
+    </div>
+  </div>
+
+  <div class="collapseBody" id="historyBody" aria-hidden="true">
+    <div class="historyMetaRow">
+      <div class="historyMeta" id="historyMeta">—</div>
+      <button class="btn small secondary" id="btnRefreshHistory" type="button">Refresh</button>
+    </div>
+    <div class="historyList" id="historyList"></div>
+    <div class="hint" id="historyHint">Tip: history is fetched from the API using your selected Bingo + Team + IGN.</div>
+  </div>
+</section>
 
     <!-- Settings Drawer -->
     <aside class="drawer" id="settingsDrawer" aria-hidden="true">

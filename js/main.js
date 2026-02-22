@@ -41,6 +41,14 @@
     summaryMeta: $("summaryMeta"),
     btnOpenSettings2: $("btnOpenSettings2"),
 
+    // Drop history
+    toggleHistory: $("toggleHistory"),
+    historyBody: $("historyBody"),
+    historyList: $("historyList"),
+    historyMeta: $("historyMeta"),
+    historyHint: $("historyHint"),
+    btnRefreshHistory: $("btnRefreshHistory"),
+
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
@@ -103,6 +111,7 @@
     ignLocked: "irb.ignLocked",
     chatPos: "irb.chatPos",
     settings: "irb.settings",
+    historyOpen: "irb.historyOpen",
   };
 
   // API base is locked (hidden in UI)
@@ -254,6 +263,7 @@
   function renderSetupLockedUI(locked) {
     setVisible(ui.setupBlock, !locked);
     setVisible(ui.setupSummary, locked);
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
@@ -389,7 +399,165 @@
   // ---------- Premium Selects (Bingo + Team) ----------
   let _bingosCache = [];
   let _selectedBingo = null;
-  let _selectedTeam = null;
+  let _selectedTeam = null
+
+// ---------- Drop history panel ----------
+let historyLoadedOnce = false;
+let historyLoading = false;
+
+function setHistoryOpen(isOpen) {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+  ui.toggleHistory.checked = !!isOpen;
+  ui.historyBody.classList.toggle("open", !!isOpen);
+  ui.historyBody.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  const lbl = document.querySelector("#historyPanel .switchLabel");
+  if (lbl) lbl.textContent = isOpen ? "Hide" : "Show";
+  try { localStorage.setItem(LS.historyOpen, isOpen ? "1" : "0"); } catch(e) {}
+}
+
+function getHistoryContext() {
+  const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+  const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+  const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  return { bingoId, team_number, ign };
+}
+
+function normalizeHistoryPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.rows)) return payload.rows;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.history && Array.isArray(payload.history)) return payload.history;
+  return [];
+}
+
+function fmtWhen(ts) {
+  try {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString();
+  } catch(e) { return String(ts || "—"); }
+}
+
+function renderHistory(items) {
+  if (!ui.historyList) return;
+  ui.historyList.innerHTML = "";
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) {
+    const div = document.createElement("div");
+    div.className = "historyEmpty";
+    div.textContent = "No drops found.";
+    ui.historyList.appendChild(div);
+    return;
+  }
+
+  for (const it of arr) {
+    const name = (it.drop_name || it.drop || it.name || it.item || "").toString();
+    const amt = (it.amount ?? it.qty ?? it.count ?? "").toString();
+    const when = fmtWhen(it.ts_iso || it.ts || it.created_at || it.time);
+
+    const row = document.createElement("div");
+    row.className = "historyItem";
+
+    const left = document.createElement("div");
+    left.className = "historyLeft";
+    const nm = document.createElement("div");
+    nm.className = "historyName";
+    nm.textContent = name || "(unknown drop)";
+    const sub = document.createElement("div");
+    sub.className = "historySub";
+    sub.textContent = when;
+    left.appendChild(nm);
+    left.appendChild(sub);
+
+    const right = document.createElement("div");
+    right.className = "historyAmt";
+    right.textContent = amt ? `x${amt}` : "";
+
+    row.appendChild(left);
+    row.appendChild(right);
+    ui.historyList.appendChild(row);
+  }
+}
+
+async function fetchDropHistoryFromApi() {
+  const base = getApiBase();
+  const { bingoId, team_number, ign } = getHistoryContext();
+
+  if (!bingoId || !team_number || !ign) {
+    throw new Error("Complete setup (IGN + Bingo + Team) to view history.");
+  }
+
+  // Confirmed admin endpoint used by the web admin UI.
+  const url = `${base}/b/${bingoId}/api/admin/recent-drops`;
+
+  const r = await fetch(url, { method: "GET", cache: "no-store", credentials: "omit" });
+  if (!r.ok) throw new Error(`HTTP ${r.status} loading drop history`);
+
+  const payload = await r.json();
+  const all = normalizeHistoryPayload(payload);
+
+  const ignKey = String(ign).trim().toLowerCase();
+  const teamKey = String(team_number).trim();
+
+  // Filter to the user's selected team + IGN from setup.
+  const filtered = (Array.isArray(all) ? all : []).filter(x => {
+    const t = String(x?.team_id ?? x?.team_number ?? "").trim();
+    const i = String(x?.ign ?? "").trim().toLowerCase();
+    return t === teamKey && i === ignKey;
+  });
+
+  // Sort newest first if timestamps exist
+  filtered.sort((a, b) => {
+    const ta = new Date(a?.ts_iso || a?.ts || a?.timestamp || 0).getTime();
+    const tb = new Date(b?.ts_iso || b?.ts || b?.timestamp || 0).getTime();
+    return (tb || 0) - (ta || 0);
+  });
+
+  return filtered;
+}
+
+async function loadHistory() {
+  if (!ui.historyMeta || !ui.historyList) return;
+  if (historyLoading) return;
+  historyLoading = true;
+
+  ui.historyMeta.textContent = "Loading…";
+  renderHistory([]);
+
+  try {
+    const items = await fetchDropHistoryFromApi();
+    renderHistory(items);
+    ui.historyMeta.textContent = `${items.length} drop(s)`;
+    historyLoadedOnce = true;
+  } catch (e) {
+    ui.historyMeta.textContent = "Failed";
+    ui.historyList.innerHTML = `<div class="historyEmpty">${escapeHtml(e.message || "Unable to load history.")}</div>`;
+  } finally {
+    historyLoading = false;
+  }
+}
+
+function initHistoryPanel() {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+
+  const open = (localStorage.getItem(LS.historyOpen) || "0") === "1";
+  setHistoryOpen(open);
+
+  ui.toggleHistory.addEventListener("change", () => {
+    const isOpen = !!ui.toggleHistory.checked;
+    setHistoryOpen(isOpen);
+    if (isOpen && !historyLoadedOnce) loadHistory();
+  });
+
+  if (ui.btnRefreshHistory) {
+    ui.btnRefreshHistory.addEventListener("click", () => loadHistory());
+  }
+}
+
+;
 
   function pselectOpen(wrap, open) {
     if (!wrap) return;
@@ -1561,6 +1729,7 @@ function stitchChatMessages(lines) {
 
   if (isAlt1) {
     initChatReader();
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
 
@@ -1573,6 +1742,7 @@ function stitchChatMessages(lines) {
   } else {
     setPill(ui.apiPill, "API: —", "warn");
     setPill(ui.chatPill, "Chat: —", "warn");
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
