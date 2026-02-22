@@ -235,7 +235,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   display:flex; flex-direction:column;
 }
 .drawer.open{transform:translateX(0);}
-.drawerHeader{display:flex; align-items:center; justify-content:flex-start; padding:12px; border-bottom:1px solid rgba(255,255,255,.08);}
+.drawerHeader{display:flex; align-items:center; justify-content:space-between; padding:12px; border-bottom:1px solid rgba(255,255,255,.08);}
 .drawerTitle{font-weight:950; letter-spacing:.25px;}
 .drawerBody{padding:12px; overflow:auto;}
 .section{margin-bottom:14px; padding:12px; border-radius:14px; border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.03);}
