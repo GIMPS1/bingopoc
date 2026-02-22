@@ -1777,13 +1777,24 @@ function stitchChatMessages(lines) {
 
 
 // --- Added: Universal broadcast drop detection ---
+function normalizeIgn(raw) {
+  raw = (raw || "").toString().trim();
+  // Anchor to the first capital letter (RSN display starts with A-Z; ironman icons/prefixes may precede it)
+  const i = raw.search(/[A-Z]/);
+  if (i >= 0) return raw.slice(i).trim();
+  return raw;
+}
+
 function stripChatPrefix(s) {
   return (s || "")
+    // remove timestamp/channel bracket prefixes like "[17:36:57]" "[CC]" etc
     .replace(/^\s*(?:\[[^\]]+\]\s*)+/i, "")
+    // remove leading % and optional bracket tag before "News:"
+    .replace(/^\s*%\s*(?:\[[^\]]+\]\s*)?/i, "")
+    // remove "News:" label (case-insensitive)
     .replace(/^\s*news\s*:\s*/i, "")
     .trim();
 }
-
 
 // Patch into existing parse function if present
 if (typeof _tryParseReceive === "function") {
@@ -1795,19 +1806,27 @@ if (typeof _tryParseReceive === "function") {
     let t = stripTimestampPrefix(text);
     t = stripChatPrefix(t);
 
-    const lockedIgn = (localStorage.getItem(LS.ign) || "").trim();
-    if (!lockedIgn) return null;
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
+    if (!lockedIgnRaw) return null;
+    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
 
-    const ignEsc = lockedIgn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Accept relayed/broadcast formats where the sender name may include icon prefixes (e.g. ironman),
+    // and anchor the "real" IGN to the first capital letter before comparing to the locked IGN.
     const reBroadcast = new RegExp(
-      "^" + ignEsc + "\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop!?\\s*$",
+      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop\\b.*$",
       "i"
     );
 
     const m = t.match(reBroadcast);
     if (m) {
-      const item = (m[1] || "").trim();
-      const amt = (m[2] || "1").trim();
+      const ignRaw = (m[1] || "").trim();
+      const ign = normalizeIgn(ignRaw).toLowerCase();
+      if (ign !== lockedIgn) return null;
+
+      const item = (m[2] || "").trim();
+      const amt = (m[3] || "1").trim();
+      if (!item) return null;
+
       return { drop_name: item, amount: amt };
     }
 
