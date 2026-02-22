@@ -52,7 +52,7 @@ body{
 .wrap{ padding:10px; max-width:520px; overflow:visible; }
 
 .topbar{
-  display:flex; align-items:center; justify-content:flex-start;
+  display:flex; align-items:center; justify-content:space-between;
   gap:10px; margin-bottom:10px;
 }
 .brand{display:flex; align-items:center; gap:10px; min-width:0;}
