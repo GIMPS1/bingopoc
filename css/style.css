@@ -505,6 +505,38 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   max-height: 220px;
   overflow:auto;
 }
+/* Gold scrollbars for Drop History */
+.historyList{
+  scrollbar-width: thin;
+  scrollbar-color: rgba(214,178,94,.65) rgba(255,255,255,.05);
+}
+
+.historyList::-webkit-scrollbar{
+  width:10px;
+}
+
+.historyList::-webkit-scrollbar-track{
+  background: rgba(255,255,255,.04);
+  border-radius: 10px;
+}
+
+.historyList::-webkit-scrollbar-thumb{
+  background: linear-gradient(
+    180deg,
+    rgba(214,178,94,.85),
+    rgba(214,178,94,.55)
+  );
+  border-radius: 10px;
+  border: 2px solid rgba(12,18,32,.90);
+}
+
+.historyList::-webkit-scrollbar-thumb:hover{
+  background: linear-gradient(
+    180deg,
+    rgba(214,178,94,1),
+    rgba(214,178,94,.75)
+  );
+}
 .historyItem{
   display:flex;
   align-items:center;
