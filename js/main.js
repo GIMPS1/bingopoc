@@ -453,6 +453,8 @@ function renderHistory(items) {
     return;
   }
 
+  const base = getApiBase();
+
   for (const it of arr) {
     const name = (it.drop_name || it.drop || it.name || it.item || "").toString();
     const amt = (it.amount ?? it.qty ?? it.count ?? "").toString();
@@ -461,14 +463,27 @@ function renderHistory(items) {
     const row = document.createElement("div");
     row.className = "historyItem";
 
+    // icon (RuneScape Wiki proxy)
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "historyIcon";
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = `${base}/wiki/icon?item=${encodeURIComponent(name || "")}&size=52`;
+    img.onerror = () => { iconWrap.style.display = "none"; };
+    iconWrap.appendChild(img);
+
     const left = document.createElement("div");
     left.className = "historyLeft";
+
     const nm = document.createElement("div");
     nm.className = "historyName";
     nm.textContent = name || "(unknown drop)";
+
     const sub = document.createElement("div");
     sub.className = "historySub";
     sub.textContent = when;
+
     left.appendChild(nm);
     left.appendChild(sub);
 
@@ -476,8 +491,10 @@ function renderHistory(items) {
     right.className = "historyAmt";
     right.textContent = amt ? `x${amt}` : "";
 
+    row.appendChild(iconWrap);
     row.appendChild(left);
     row.appendChild(right);
+
     ui.historyList.appendChild(row);
   }
 }
