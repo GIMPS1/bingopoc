@@ -145,7 +145,7 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   position:relative;
   display:flex;
   align-items:center;
-  justify-content:flex-start;
+  justify-content:space-between;
   gap:10px;
   padding:10px 12px;
   border-radius:14px;
