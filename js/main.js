@@ -434,14 +434,21 @@ async function manualSubmit() {
       setManualStatus("Prepare… 1", "warn");
       await sleep(700);
 
-      var bound = bindRegionAroundMouse(300, 120, 120); // bias down for context menu
-      var boundTooltip = null;
-      if (!bound) {
-        setManualStatus("Failed to bind region around mouse", "bad");
-        addFeed("Manual submit failed: bindRegion failed", "bad");
-        return;
-      }
+      var pos = getMouseXY();
+if (!pos) {
+  setManualStatus("Mouse position unavailable", "bad");
+  return;
+}
 
+var left = (pos.x + 20) | 0;
+var top  = (pos.y + 20) | 0;
+
+var rid = alt1.bindRegion(left, top, 260, 220);
+if (typeof rid !== "number") {
+  setManualStatus("Failed to bind region around mouse", "bad");
+  addFeed("Manual submit failed: bindRegion failed", "bad");
+  return;
+}
       // 1) Try context menu first (fast)
       setManualStatus("Scanning right-click menu…", "warn");
       var found = findDropCandidateFast(bound.rid, "menu");
