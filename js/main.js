@@ -257,10 +257,38 @@
     }
   }
 
-function safeBindReadString(rid, font, x, y) {
+  function _mixColor(r,g,b){
     try {
+      var lib = window.a1lib || window.A1lib;
+      if (lib && typeof lib.mixcolor === "function") return lib.mixcolor(r|0,g|0,b|0);
+    } catch(e) {}
+    // fallback: pack as 0xAABBGGRR (Alt1 uses 8bpp rgba int); this is a best-effort
+    return ((255<<24) | ((b&255)<<16) | ((g&255)<<8) | (r&255))|0;
+  }
+
+  function safeBindReadString(rid, font, x, y) {
+    try {
+      var id = rid|0;
+      var fx = x|0, fy = y|0;
+      var fname = String(font||"chat");
+
+      // Prefer bindReadStringEx when available: lets us pass colors + allowgap.
+      if (typeof alt1.bindReadStringEx === "function") {
+        var args = {
+          fontname: fname,
+          allowgap: true,
+          colors: [
+            _mixColor(255,255,255), // white
+            _mixColor(255,255,0),   // yellow
+            _mixColor(255,204,0)    // orange/yellow
+          ]
+        };
+        return String(alt1.bindReadStringEx(id, fx, fy, JSON.stringify(args)) || "").trim();
+      }
+
+      // Fallback to plain bindReadString.
       if (typeof alt1.bindReadString === "function") {
-        return String(alt1.bindReadString(rid|0, String(font||"chat"), x|0, y|0) || "").trim();
+        return String(alt1.bindReadString(id, fname, fx, fy) || "").trim();
       }
     } catch (e) {}
     return "";
@@ -2039,4 +2067,3 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-
