@@ -80,11 +80,10 @@
     eventLine: $("eventLine"),
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
-
-    // Manual submit
-    btnManualSubmit: $("btnManualSubmit"),
+      btnManualSubmit: $("btnManualSubmit"),
+    manualStatus: $("manualStatus"),
     manualHint: $("manualHint"),
-  };
+};
 
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
@@ -202,241 +201,7 @@
     if (sound) playChime();
   }
 
-  
-  // ---------- Manual submit OCR (300x300 around mouse) ----------
-  function getMousePos() {
-    try {
-      // Preferred: a1lib helper returns {x,y}
-      if (window.a1lib && typeof window.a1lib.mousePosition === "function") return window.a1lib.mousePosition();
-      if (window.A1lib && typeof window.A1lib.mousePosition === "function") return window.A1lib.mousePosition();
-
-      // Some builds may expose a function returning {x,y}
-      if (alt1 && typeof alt1.mousePosition === "function") return alt1.mousePosition();
-
-      // Alt1 v1.6 exposes mousePosition as Int32 packed (x<<16 | y)
-      if (alt1 && typeof alt1.mousePosition === "number") {
-        const r = alt1.mousePosition >>> 0;
-        const x = (r >>> 16) & 0xFFFF;
-        const y = r & 0xFFFF;
-        return { x, y };
-      }
-
-      // Rare variants
-      if (alt1 && alt1.mousePosition && typeof alt1.mousePosition.x === "number") return alt1.mousePosition;
-      if (alt1 && alt1.mousePos && typeof alt1.mousePos.x === "number") return alt1.mousePos;
-      if (alt1 && typeof alt1.getMousePosition === "function") return alt1.getMousePosition();
-    } catch (e) {}
-    return null;
-  }
-
-
-  function getOcrCtor() {
-    // alt1/dist/ocr typically exposes window.OCR (default export) or window.alt1ocr
-    return (window.OCR && (OCR.default || OCR.OCR || OCR)) ||
-           (window.alt1ocr && (alt1ocr.default || alt1ocr.OCR || alt1ocr)) ||
-           (window.Alt1Ocr && (Alt1Ocr.default || Alt1Ocr.OCR || Alt1Ocr)) ||
-           null;
-  }
-
-  function ocrReadAny(ocr, img) {
-    // Try common method names across alt1 OCR builds
-    if (!ocr) return null;
-    try {
-      if (typeof ocr.read === "function") return ocr.read(img);
-      if (typeof ocr.recognize === "function") return ocr.recognize(img);
-      if (typeof ocr.findText === "function") return ocr.findText(img);
-      if (typeof ocr.readString === "function") return ocr.readString(img);
-    } catch (e) {
-      return null;
-    }
-    return null;
-  }
-
-  function normalizeOcrOutput(out) {
-    if (!out) return "";
-    if (typeof out === "string") return out;
-    // Some OCR libs return arrays of strings / lines / objects
-    if (Array.isArray(out)) {
-      return out.map(x => (typeof x === "string" ? x : (x && (x.text || x.str || x.value) ? (x.text || x.str || x.value) : "")))
-                .filter(Boolean)
-                .join("\n");
-    }
-    if (typeof out === "object") {
-      if (typeof out.text === "string") return out.text;
-      if (Array.isArray(out.lines)) return out.lines.map(l => l.text || l.str || "").filter(Boolean).join("\n");
-    }
-    return "";
-  }
-
-  async function ocrRegionAroundMouse(size = 300) {
-    if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
-    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
-
-    const pos = getMousePos();
-    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
-      return { ok: false, reason: "Mouse position not available (Alt1 API)." };
-    }
-
-    const half = Math.floor(size / 2);
-    const x = Math.max(0, (pos.x | 0) - half) | 0;
-    const y = Math.max(0, (pos.y | 0) - half) | 0;
-    const w = size | 0, h = size | 0;
-
-    let id = 1;
-    try {
-      // bindRegion requires Int32 args (Alt1 v1.6)
-      id = alt1.bindRegion(x, y, w, h);
-    } catch (e) {
-      return { ok: false, reason: "bindRegion failed: " + (e?.message || String(e)) };
-    }
-
-    // We don't have a full-page OCR engine available reliably in v1.6.
-    // Instead, we scan rows using Alt1's OCR reader and join results.
-    const lines = [];
-    const args = JSON.stringify({
-      fontname: "chat",
-      allowgap: true
-      // colors: can be added later if needed
-    });
-
-    // Step through vertical space; 14px works well for RS chat-like fonts.
-    for (let yy = 0; yy < h; yy += 14) {
-      let s = "";
-      try {
-        // Alt1 v1.6 bindReadString expects (regionId, fontName, x, y)
-        s = alt1.bindReadString(id, "chat", 0, yy) || "";
-      } catch (e) {
-        return { ok: false, reason: "No OCR reader available (bindReadString)." };
-      }
-      s = String(s).trim();
-      if (s) lines.push(s);
-    }
-
-    // De-duplicate obvious repeats
-    const uniq = [];
-    const seen = new Set();
-    for (const l of lines) {
-      const k = l.toLowerCase();
-      if (seen.has(k)) continue;
-      seen.add(k);
-      uniq.push(l);
-    }
-
-    const text = uniq.join("\n").trim();
-    
-    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
-
-    return { ok: true, text, x, y, w, h };
-  }
-
-
-  function extractCandidatesFromOcrText(ocrText) {
-    const t = (ocrText || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
-    if (!t) return [];
-
-    const cands = [];
-    // Common verbs around loot / interfaces / menus
-    const verbRe = /\b(?:Take|Open|Search|Claim|Collect|Withdraw|Pick up|Loot|Receive|Received)\s+([A-Za-z0-9'’:\-(),. ]{2,80})/gi;
-    let m;
-    while ((m = verbRe.exec(t))) {
-      const name = (m[1] || "").replace(/\s+(?:x|\*)\s*\d+$/i, "").replace(/[\.,;:]+$/g, "").trim();
-      if (name) cands.push(name);
-    }
-
-    // Also consider standalone “nice looking” chunks (fallback)
-    const words = t.split(" ");
-    if (words.length >= 2) {
-      // sliding window up to 5 words
-      for (let i = 0; i < words.length; i++) {
-        for (let len = 2; len <= 5; len++) {
-          const seg = words.slice(i, i + len).join(" ").replace(/[\.,;:]+$/g, "").trim();
-          if (seg.length >= 3 && /[A-Za-z]/.test(seg)) cands.push(seg);
-        }
-      }
-    }
-
-    // De-dupe, keep longer first
-    return Array.from(new Set(cands)).sort((a,b)=>b.length-a.length).slice(0, 20);
-  }
-
-  async function manualSubmitFlow() {
-    if (!isSetupReady()) {
-      showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
-      return;
-    }
-
-    // Countdown
-    const steps = ["3", "2", "1"];
-    for (const s of steps) {
-      showEvent("Manual submit", `Hover drop name near cursor… scanning in ${s}`, "ok", true, false);
-      try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip(`Manual submit: ${s}`); } catch(e){}
-      await new Promise(r => setTimeout(r, 1000));
-    }
-    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch(e){}
-
-    // OCR around mouse
-    const ocrRes = await ocrRegionAroundMouse(300);
-    if (!ocrRes.ok) {
-      addFeed("Manual submit OCR failed: " + (ocrRes.reason || "no text"), "warn");
-      showEvent("Manual submit", "OCR failed (see feed).", "warn", true, true);
-      return;
-    }
-
-    addFeed("Manual submit OCR raw:\n" + ocrRes.text, "ok");
-
-    const candidates = extractCandidatesFromOcrText(ocrRes.text);
-    if (!candidates.length) {
-      addFeed("Manual submit: OCR text found but no item candidates parsed. OCR: " + ocrRes.text, "warn");
-      showEvent("Manual submit", "No item name found in OCR.", "warn", true, true);
-      return;
-    }
-
-    const settings = loadSettings();
-    const strictOn = settings.strictDrops && canonicalMap.size > 0;
-
-    // Pick first candidate that passes allowlist (if strict), else first candidate
-    let chosen = null;
-    for (const cand of candidates) {
-      if (strictOn) {
-        const v = validateDropName(cand);
-        if (v.valid) { chosen = v.canonical; break; }
-      } else {
-        chosen = cand;
-        break;
-      }
-    }
-    if (!chosen) {
-      addFeed("Manual submit rejected (not in allowlist). OCR candidates: " + candidates.join(" | "), "warn");
-      showEvent("Manual submit", "Not in allowlist.", "warn", true, true);
-      return;
-    }
-
-    // Optional wiki canonicalisation
-    if (settings.useWikiCanonical) {
-      const wikiName = await resolveCanonicalName(chosen);
-      if (strictOn) {
-        const v2 = validateDropName(wikiName);
-        if (v2.valid) chosen = v2.canonical;
-      } else {
-        chosen = wikiName;
-      }
-    }
-
-    // Submit as amount 1 (manual tooltip path rarely includes qty)
-    const payload = { drop_name: chosen, amount: "1" };
-
-    try {
-      showEvent("Submitting…", `${payload.drop_name} × ${payload.amount}`, "ok", true, false);
-      await submitDrop(payload);
-      showEvent("Submitted ✅", `${payload.drop_name} × ${payload.amount}`, "ok", true, true);
-    } catch (e) {
-      const msg = e && e.message ? e.message : String(e);
-      addFeed("Manual submit failed: " + msg, "bad");
-      showEvent("Submit failed", msg, "bad", true, true);
-    }
-  }
-
-function escapeHtml(s) {
+  function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
   }
 
@@ -469,6 +234,197 @@ function escapeHtml(s) {
       }).join("");
     }
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
+  }
+
+
+  function setManualStatus(text, level) {
+    try {
+      if (!ui.manualStatus) return;
+      ui.manualStatus.className = "manualStatus" + (level ? (" " + level) : "");
+      ui.manualStatus.textContent = text || "";
+    } catch (e) {}
+  }
+
+  function getMousePos() {
+    try {
+      if (window.A1lib && typeof A1lib.mousePosition === "function") {
+        return A1lib.mousePosition();
+      }
+    } catch (e) {}
+
+    try {
+      const packed = alt1 && alt1.mousePosition;
+      if (typeof packed === "number") {
+        return { x: (packed >> 16), y: (packed & 0xFFFF) };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async function ocrRegionAroundMouse(size) {
+    if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
+    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    const pos = getMousePos();
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return { ok: false, reason: "Mouse position unavailable." };
+    }
+
+    const w = (size | 0), h = (size | 0);
+    const half = (w / 2) | 0;
+    const x = Math.max(0, (pos.x | 0) - half) | 0;
+    const y = Math.max(0, (pos.y | 0) - half) | 0;
+
+    let id;
+    try {
+      id = alt1.bindRegion(x, y, w, h);
+    } catch (e) {
+      return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) };
+    }
+
+    // Brute-force scan for tooltip text baseline; this is manual so a few thousand calls is acceptable.
+    const fonts = ["chat", "chatmono", "xpcounter"];
+    const argsBase = { allowgap: true };
+
+    // Optional: prefer bright tooltip-ish colors if mixcolor exists
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        argsBase.colors = [
+          A1lib.mixcolor(255,255,255), // white
+          A1lib.mixcolor(255,255,0),   // yellow
+          A1lib.mixcolor(255,200,80),  // gold-ish
+          A1lib.mixcolor(200,255,200)  // pale green
+        ];
+      }
+    } catch (e) {}
+
+    const found = [];
+    const seen = {};
+    const yStep = 2;
+    const xStep = 10;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
+
+      for (let yy = 0; yy < h; yy += yStep) {
+        for (let xx = 0; xx < w; xx += xStep) {
+          let s = "";
+          try {
+            s = alt1.bindReadStringEx(id, xx, yy, args) || "";
+          } catch (e) {
+            // If Ex fails, fallback to basic reader (much less flexible)
+            try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; }
+          }
+          s = String(s).trim();
+          if (!s) continue;
+
+          // De-dup
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          found.push(s);
+
+          // Early exit if we already see a likely tooltip/menu verb
+          if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(s)) {
+            // grab a few more lines around for context by continuing small amount, then stop
+          }
+          if (found.length >= 30) break;
+        }
+        if (found.length >= 30) break;
+      }
+      if (found.length) break;
+    }
+
+    const text = found.join("\n").trim();
+    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
+
+    return { ok: true, text: text, x: x, y: y, w: w, h: h };
+  }
+
+  function extractDropCandidatesFromOcr(text) {
+    const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+    if (!t) return [];
+
+    const out = [];
+    // Handle patterns like: "Take Uncut onyx", "Withdraw-All X", "Withdraw-1 X", etc.
+    const re1 = /\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\s+([A-Za-z0-9'’:\-(),. ]{2,80})/gi;
+    let m;
+    while ((m = re1.exec(t))) {
+      let name = (m[1] || "").trim();
+      name = name.replace(/\s+(?:x|\*)\s*\d+$/i, "").trim();
+      name = name.replace(/[\.,;:]+$/g, "").trim();
+      if (name && out.indexOf(name) === -1) out.push(name);
+    }
+    return out;
+  }
+
+  async function manualSubmitFlow() {
+    if (!isSetupReady()) {
+      showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
+      setManualStatus("Setup not locked/ready.", "warn");
+      return;
+    }
+
+    setManualStatus("Ready…", "ok");
+    const steps = ["3", "2", "1"];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      showEvent("Manual submit", "Hover tooltip text… scanning in " + s, "ok", true, false);
+      setManualStatus("Scanning in " + s + "…", "ok");
+      try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
+      await new Promise(function (r) { setTimeout(r, 1000); });
+    }
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+
+    showEvent("Manual submit", "Scanning tooltip text…", "ok", true, false);
+    setManualStatus("OCR scanning…", "ok");
+
+    const ocrRes = await ocrRegionAroundMouse(300);
+    if (!ocrRes.ok) {
+      showEvent("Manual submit", "OCR failed: " + (ocrRes.reason || "no text"), "warn", true, true);
+      setManualStatus("OCR failed: " + (ocrRes.reason || "no text"), "warn");
+      return;
+    }
+
+    // Try to parse + validate candidates against allowlist/canonical map
+    const candidates = extractDropCandidatesFromOcr(ocrRes.text);
+    let chosen = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const v = validateDropName(candidates[i]);
+      if (v && v.valid) { chosen = (v.canonical || candidates[i]); break; }
+    }
+
+    if (!chosen) {
+      // As a fallback, try validating each line directly
+      const lines = ocrRes.text.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const v = validateDropName(lines[i]);
+        if (v && v.valid) { chosen = (v.canonical || lines[i]); break; }
+      }
+    }
+
+    if (!chosen) {
+      showEvent("Manual submit", "OCR found text but no valid drop matched.", "warn", true, true);
+      setManualStatus("OCR saw text but no valid drop matched.", "warn");
+      return;
+    }
+
+    showEvent("Manual submit", "Submitting: " + chosen, "ok", true, false);
+    setManualStatus("Submitting: " + chosen, "ok");
+
+    try {
+      const res = await submitDrop({ drop_name: chosen, amount: "1" });
+      showEvent("Manual submit", "Submitted: " + chosen, "ok", true, true);
+      setManualStatus("Submitted: " + chosen, "ok");
+      playBeep("ok");
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      showEvent("Manual submit", "Submit failed: " + msg, "bad", true, true);
+      setManualStatus("Submit failed: " + msg, "bad");
+      playBeep("bad");
+    }
   }
 
   function setPill(pill, label, state) {
@@ -1786,6 +1742,8 @@ function stitchChatMessages(lines) {
     closeDrawer();
   });
 
+  ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", function () { manualSubmitFlow(); });
+
   // FIX: null-guard backdrop
   ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
@@ -1890,12 +1848,6 @@ function stitchChatMessages(lines) {
 
   ui.btnLockChat && ui.btnLockChat.addEventListener("click", lockSelectedChat);
   ui.btnUnlockChat && ui.btnUnlockChat.addEventListener("click", unlockChat);
-
-
-  // Manual submit button
-  ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", () => {
-    manualSubmitFlow();
-  });
 
   // --- WebAudio beep ---
   let __irbAudioCtx = null;
@@ -2078,3 +2030,4 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
+
