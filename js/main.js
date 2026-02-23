@@ -308,7 +308,7 @@
 
     // Common RS3 context menu / tooltip headers
     // Examples: "Take Uncut onyx", "Withdraw-All Robe bottom ...", "Pick up Dragon bones"
-    var m = t.match(/^(Take|Pick up|Loot|Open|Claim|Collect)\s+(.+)$/i);
+    var m = t.match(/^(Take|Pick up|Loot|Open|Claim|Collect|Bank|Discard|Examine)\s+(.+)$/i);
     if (m) return m[2].trim();
 
     m = t.match(/^Withdraw(?:-[A-Za-z0-9]+)?\s+(.+)$/i);
@@ -332,44 +332,48 @@ function _isGarbageText(s) {
 }
 
 function readRightClickCandidate(rid) {
-  // Dedicated right-click menu reader. Much more reliable than bindReadString for menus.
-  // Still requires an exact-ish baseline y, so we sweep a small range.
-  if (typeof alt1.bindReadRightClickString !== "function") return null;
+  // Alt1 has a dedicated reader for the right-click menu.
+  // Important: it returns best results when called at (0,0) inside the bound region.
+  if (!window.alt1 || typeof alt1.bindReadRightClickString !== "function") return null;
 
-  var xs = [0, 6, 12, 18, 24, 36];
-  var yStart = 24;
-  var yEnd = 288;
-  var yStep = 4;
+  var block = "";
+  try {
+    block = alt1.bindReadRightClickString(rid, 0, 0);
+  } catch (e) {
+    return null;
+  }
+  if (!block) return null;
 
-  for (var y = yStart; y <= yEnd; y += yStep) {
-    for (var xi = 0; xi < xs.length; xi++) {
-      var x = xs[xi];
-      var raw = "";
-      try {
-        raw = String(alt1.bindReadRightClickString(rid|0, x|0, y|0) || "").trim();
-      } catch (e) { raw = ""; }
-      if (!raw) continue;
+  // Split lines, trim, remove empties
+  var rawLines = String(block).split(/?
+/);
+  var lines = [];
+  for (var i = 0; i < rawLines.length; i++) {
+    var t = stripTags(rawLines[i]).trim();
+    if (t) lines.push(t);
+  }
+  if (!lines.length) return null;
 
-      // raw may contain multiple lines
-      var cleanAll = stripTags(raw).replace(/\r/g, "").trim();
-      if (_isGarbageText(cleanAll)) continue;
+  // Look for actionable menu lines and extract item names
+  for (var j = 0; j < lines.length; j++) {
+    var line = lines[j];
 
-      var lines = cleanAll.split(/\n+/);
-      for (var li = 0; li < lines.length; li++) {
-        var line = String(lines[li]||"").trim();
-        if (!line) continue;
-        if (/^(Choose Option|Cancel)$/i.test(line)) continue;
-        if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit|Bank)\b/i.test(line)) continue;
+    // Skip headers / cancel
+    if (/^Choose Option$/i.test(line)) continue;
+    if (/^Cancel$/i.test(line)) continue;
 
-        var item = extractActionItem(line);
-        if (item) return { item: item, raw: line, x: x, y: y, method: "rightclick" };
-      }
+    // Menu actions we care about
+    if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit|Bank|Discard|Examine)/i.test(line)) continue;
 
-      // If we got readable text but no actionable line, report as "text seen"
-      return { item: null, raw: cleanAll, x: x, y: y, method: "rightclick" };
+    var item = extractActionItem(line);
+    if (item) {
+      return { item: item, raw: line, method: "rightclick" };
     }
   }
-  return null;
+
+  // If we got readable text but no actionable line, return raw for debugging
+  var joined = lines.join(" | ");
+  return { item: null, raw: joined, method: "rightclick" };
 }
 
 function findDropCandidateFast(rid, mode) {
