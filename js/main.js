@@ -345,8 +345,7 @@ function readRightClickCandidate(rid) {
   if (!block) return null;
 
   // Split lines, trim, remove empties
-  var rawLines = String(block).split(/?
-/);
+  var rawLines = String(block).split(/\r?\n/);
   var lines = [];
   for (var i = 0; i < rawLines.length; i++) {
     var t = stripTags(rawLines[i]).trim();
