@@ -320,7 +320,65 @@
     return null;
   }
 
-  function findDropCandidateFast(rid, mode) {
+  
+function _isGarbageText(s) {
+  s = String(s||"").trim();
+  if (!s) return true;
+  if (s.length < 3) return true;
+  // mostly junk glyphs we saw during probing
+  if (/^[ij14\[\]^N\s]+$/i.test(s)) return true;
+  if (/^4{8,}$/.test(s.replace(/\s+/g,''))) return true;
+  return false;
+}
+
+function readRightClickCandidate(rid) {
+  // Dedicated right-click menu reader. Much more reliable than bindReadString for menus.
+  // Still requires an exact-ish baseline y, so we sweep a small range.
+  if (typeof alt1.bindReadRightClickString !== "function") return null;
+
+  var xs = [0, 6, 12, 18, 24, 36];
+  var yStart = 24;
+  var yEnd = 288;
+  var yStep = 4;
+
+  for (var y = yStart; y <= yEnd; y += yStep) {
+    for (var xi = 0; xi < xs.length; xi++) {
+      var x = xs[xi];
+      var raw = "";
+      try {
+        raw = String(alt1.bindReadRightClickString(rid|0, x|0, y|0) || "").trim();
+      } catch (e) { raw = ""; }
+      if (!raw) continue;
+
+      // raw may contain multiple lines
+      var cleanAll = stripTags(raw).replace(/\r/g, "").trim();
+      if (_isGarbageText(cleanAll)) continue;
+
+      var lines = cleanAll.split(/\n+/);
+      for (var li = 0; li < lines.length; li++) {
+        var line = String(lines[li]||"").trim();
+        if (!line) continue;
+        if (/^(Choose Option|Cancel)$/i.test(line)) continue;
+        if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit|Bank)\b/i.test(line)) continue;
+
+        var item = extractActionItem(line);
+        if (item) return { item: item, raw: line, x: x, y: y, method: "rightclick" };
+      }
+
+      // If we got readable text but no actionable line, report as "text seen"
+      return { item: null, raw: cleanAll, x: x, y: y, method: "rightclick" };
+    }
+  }
+  return null;
+}
+
+function findDropCandidateFast(rid, mode) {
+if (mode === "menu") {
+  var rc = readRightClickCandidate(rid);
+  if (rc) return rc;
+}
+
+
     // Fast scan for an action line inside the currently bound region.
     // NOTE: alt1.bindReadString reads from an exact baseline; we sweep Y in small steps.
     var fonts = ["chat", "chatmono"];
@@ -399,6 +457,13 @@ async function manualSubmit() {
       if (!found) {
         setManualStatus("No text detected near mouse", "bad");
         showEvent("Manual submit", "No text detected in 300×300 near mouse", "bad", true, false);
+        return;
+      }
+
+      if (!found.item) {
+        var rawSeen = (found.raw ? (": " + String(found.raw).slice(0, 80)) : "");
+        setManualStatus("OCR saw text but could not parse a drop" + rawSeen, "bad");
+        showEvent("Manual submit", "OCR saw text but could not parse a drop" + rawSeen, "bad", true, false);
         return;
       }
 
