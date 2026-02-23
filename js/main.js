@@ -206,13 +206,29 @@
   // ---------- Manual submit OCR (300x300 around mouse) ----------
   function getMousePos() {
     try {
+      // Preferred: a1lib helper returns {x,y}
+      if (window.a1lib && typeof window.a1lib.mousePosition === "function") return window.a1lib.mousePosition();
+      if (window.A1lib && typeof window.A1lib.mousePosition === "function") return window.A1lib.mousePosition();
+
+      // Some builds may expose a function returning {x,y}
       if (alt1 && typeof alt1.mousePosition === "function") return alt1.mousePosition();
+
+      // Alt1 v1.6 exposes mousePosition as Int32 packed (x<<16 | y)
+      if (alt1 && typeof alt1.mousePosition === "number") {
+        const r = alt1.mousePosition >>> 0;
+        const x = (r >>> 16) & 0xFFFF;
+        const y = r & 0xFFFF;
+        return { x, y };
+      }
+
+      // Rare variants
       if (alt1 && alt1.mousePosition && typeof alt1.mousePosition.x === "number") return alt1.mousePosition;
       if (alt1 && alt1.mousePos && typeof alt1.mousePos.x === "number") return alt1.mousePos;
       if (alt1 && typeof alt1.getMousePosition === "function") return alt1.getMousePosition();
     } catch (e) {}
     return null;
   }
+
 
   function getOcrCtor() {
     // alt1/dist/ocr typically exposes window.OCR (default export) or window.alt1ocr
@@ -254,39 +270,69 @@
 
   async function ocrRegionAroundMouse(size = 300) {
     if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
+    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
     const pos = getMousePos();
-    if (!pos) return { ok: false, reason: "Mouse position not available (Alt1 API)." };
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return { ok: false, reason: "Mouse position not available (Alt1 API)." };
+    }
 
     const half = Math.floor(size / 2);
-    const x = Math.max(0, (pos.x | 0) - half);
-    const y = Math.max(0, (pos.y | 0) - half);
-    const w = size, h = size;
+    const x = Math.max(0, (pos.x | 0) - half) | 0;
+    const y = Math.max(0, (pos.y | 0) - half) | 0;
+    const w = size | 0, h = size | 0;
 
-    // capture region
-    let img = null;
+    let id = 1;
     try {
-      if (typeof alt1.captureRegion === "function") {
-        img = alt1.captureRegion(x, y, w, h);
-      } else if (typeof alt1.capture === "function") {
-        // some builds: alt1.capture(x,y,w,h)
-        img = alt1.capture(x, y, w, h);
-      }
+      // bindRegion requires Int32 args (Alt1 v1.6)
+      id = alt1.bindRegion(x, y, w, h);
     } catch (e) {
-      return { ok: false, reason: "captureRegion failed: " + (e && e.message ? e.message : e) };
+      return { ok: false, reason: "bindRegion failed: " + (e?.message || String(e)) };
     }
-    if (!img) return { ok: false, reason: "Pixel capture not supported (missing captureRegion)." };
 
-    // OCR
-    const OcrCtor = getOcrCtor();
-    if (!OcrCtor) return { ok: false, reason: "OCR library not loaded (window.OCR missing)." };
+    // We don't have a full-page OCR engine available reliably in v1.6.
+    // Instead, we scan rows using Alt1's OCR reader and join results.
+    const lines = [];
+    const args = JSON.stringify({
+      fontname: "chat",
+      allowgap: true
+      // colors: can be added later if needed
+    });
 
-    let ocrInst = null;
-    try { ocrInst = new OcrCtor(); } catch (e) { ocrInst = OcrCtor; }
+    // Step through vertical space; 14px works well for RS chat-like fonts.
+    for (let yy = 0; yy < h; yy += 14) {
+      let s = "";
+      try {
+        s = alt1.bindReadStringEx(id, 0, yy, args) || "";
+      } catch (e) {
+        // Some builds don't support bindReadStringEx; fall back to bindReadString
+        try {
+          s = alt1.bindReadString(id, "chat", 0, yy) || "";
+        } catch (e2) {
+          return { ok: false, reason: "No OCR reader available (bindReadStringEx/bindReadString)." };
+        }
+      }
+      s = String(s).trim();
+      if (s) lines.push(s);
+    }
 
-    const out = ocrReadAny(ocrInst, img);
-    const text = normalizeOcrOutput(out).trim();
-    return { ok: !!text, text };
+    // De-duplicate obvious repeats
+    const uniq = [];
+    const seen = new Set();
+    for (const l of lines) {
+      const k = l.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(l);
+    }
+
+    const text = uniq.join("
+").trim();
+    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
+
+    return { ok: true, text, x, y, w, h };
   }
+
 
   function extractCandidatesFromOcrText(ocrText) {
     const t = (ocrText || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
@@ -339,6 +385,8 @@
       showEvent("Manual submit", "OCR failed (see feed).", "warn", true, true);
       return;
     }
+
+    addFeed("Manual submit OCR raw:\n" + ocrRes.text, "ok");
 
     const candidates = extractCandidatesFromOcrText(ocrRes.text);
     if (!candidates.length) {
