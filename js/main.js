@@ -326,8 +326,7 @@
       uniq.push(l);
     }
 
-    const text = uniq.join("
-").trim();
+    const text = uniq.join("\n").trim();
     if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
 
     return { ok: true, text, x, y, w, h };
