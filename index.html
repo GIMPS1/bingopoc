@@ -106,15 +106,25 @@
         <button class="btn secondary small" id="btnOpenSettings2">Settings</button>
       </div>
 
-
       <!-- Manual submit -->
-      <div class="manualSubmitBlock">
-        <button class="btn primary full" id="btnManualSubmit">Manual submit</button>
-        <div id="manualHint" class="manualHint">Click, hover the drop/loot tooltip text in-game. A 3…2…1 countdown will run, then the app OCRs a 300×300 region around your mouse and submits if valid.</div>
-        <div id="manualStatus" class="manualStatus"></div>
+      <div id="manualBlock" class="manualBlock">
+        <button id="btnManualSubmit" class="btn primary">Manual submit</button>
+        <div class="manualHelp">
+          Click, then <b>right-click</b> the item (recommended) or hover the tooltip. A 300×300 OCR scan around your mouse will run after a 3..2..1 countdown.
+        </div>
+
+        <div id="manualStatus" class="manualStatus ok">
+          <div class="manualStatusLeft">
+            <div class="manualStatusTitle">Manual submit</div>
+            <div class="manualStatusMsg" id="manualStatusMsg">Ready</div>
+          </div>
+          <div class="manualStatusRight">
+            <div class="pill ok" id="manualStatusPill">✓</div>
+          </div>
+        </div>
       </div>
 
-      <!-- Event Line -->
+<!-- Event Line -->
       <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
         <div class="eventLeft">
           <div class="eventText">

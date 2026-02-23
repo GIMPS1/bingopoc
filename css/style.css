@@ -606,9 +606,13 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 }
 
 
-.manualSubmitBlock{margin: 10px 0 10px; padding: 10px; border: 1px solid rgba(255,255,255,.08); background: rgba(0,0,0,.18); border-radius: 12px;}
-.manualSubmitBlock .btn.full{width: 100%;}
-.manualStatus{margin-top: 8px; font-size: 12px; opacity: .9;}
-.manualStatus.ok{color: rgba(180,255,180,.95);}
-.manualStatus.warn{color: rgba(255,220,140,.95);}
-.manualStatus.bad{color: rgba(255,160,160,.95);}
+/* Manual submit block */
+.manualBlock{margin:10px 0 10px 0;}
+.manualHelp{margin:8px 2px 10px 2px; color:var(--muted); font-size:12px; line-height:1.25;}
+.manualStatus{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,.10); background: rgba(255,255,255,.04);} 
+.manualStatus.ok{border-color:rgba(78,227,138,.35); background: rgba(78,227,138,.06);} 
+.manualStatus.warn{border-color:rgba(214,178,94,.35); background: rgba(214,178,94,.06);} 
+.manualStatus.bad{border-color:rgba(255,90,106,.35); background: rgba(255,90,106,.06);} 
+.manualStatusTitle{font-weight:900;}
+.manualStatusMsg{color:var(--muted); font-size:12px; margin-top:2px;}
+.manualStatusRight .pill{min-width:24px; text-align:center; font-weight:900; padding:4px 8px; border-radius:999px;}
