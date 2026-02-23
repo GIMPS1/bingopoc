@@ -1847,6 +1847,12 @@ function stitchChatMessages(lines) {
   ui.btnLockChat && ui.btnLockChat.addEventListener("click", lockSelectedChat);
   ui.btnUnlockChat && ui.btnUnlockChat.addEventListener("click", unlockChat);
 
+
+  // Manual submit button
+  ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", () => {
+    manualSubmitFlow();
+  });
+
   // --- WebAudio beep ---
   let __irbAudioCtx = null;
   function playBeep(type = "ok") {
@@ -2028,9 +2034,3 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-  // Manual submit button
-  ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", () => {
-    manualSubmitFlow();
-  });
-
-
