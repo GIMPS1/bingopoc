@@ -234,12 +234,21 @@
     return null;
   }
 
-  function bindRegionAroundMouse(size) {
+  function bindRegionAroundMouse(size, offsetX, offsetY) {
+    // Binds a square region around the mouse. Optional offsets bias the region
+    // (useful for right-click menus which tend to open below the cursor).
     var pos = getMouseXY();
     if (!pos) return null;
     var half = (size / 2);
-    var left = Math.max(0, (pos.x - half)) | 0;
-    var top  = Math.max(0, (pos.y - half)) | 0;
+    var ox = (typeof offsetX === "number" ? offsetX : 0);
+    var oy = (typeof offsetY === "number" ? offsetY : 0);
+
+    var cx = (pos.x + ox);
+    var cy = (pos.y + oy);
+
+    var left = Math.max(0, (cx - half)) | 0;
+    var top  = Math.max(0, (cy - half)) | 0;
+
     try {
       var rid = alt1.bindRegion(left, top, size|0, size|0);
       return { rid: (typeof rid === "number" ? rid : 0), left: left, top: top, size: size|0 };
@@ -248,7 +257,7 @@
     }
   }
 
-  function safeBindReadString(rid, font, x, y) {
+function safeBindReadString(rid, font, x, y) {
     try {
       if (typeof alt1.bindReadString === "function") {
         return String(alt1.bindReadString(rid|0, String(font||"chat"), x|0, y|0) || "").trim();
@@ -284,44 +293,41 @@
   }
 
   function findDropCandidateFast(rid, mode) {
-    // mode: "menu" (right-click) or "tooltip" fallback
-    // Keep call count low for speed; early exit on match.
+    // Fast scan for an action line inside the currently bound region.
+    // NOTE: alt1.bindReadString reads from an exact baseline; we sweep Y in small steps.
     var fonts = ["chat", "chatmono"];
-    var points;
-
-    if (mode === "menu") {
-      // Context menu tends to be close to cursor; probe a few likely baselines.
-      points = [
-        [8, 18],[8, 36],[8, 54],[8, 72],[8, 90],
-        [40,18],[40,36],[40,54],
-        [80,18],[80,36]
-      ];
-    } else {
-      // Tooltip can be offset; probe a slightly wider set but still bounded.
-      points = [
-        [8, 18],[8, 40],[8, 62],[8, 84],[8, 106],[8, 128],[8, 150],
-        [40,18],[40,40],[40,62],[40,84]
-      ];
-    }
+    var xs = (mode === "menu") ? [6, 36] : [6, 36, 72];
+    var yStart = 12;
+    var yEnd = 288;
+    var yStep = (mode === "menu") ? 6 : 10;
 
     for (var f = 0; f < fonts.length; f++) {
       var font = fonts[f];
-      for (var i = 0; i < points.length; i++) {
-        var p = points[i];
-        var line = safeBindReadString(rid, font, p[0], p[1]);
-        if (!line) continue;
 
-        // Quick check for action verbs before heavier parsing
-        if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit)\b/i.test(stripTags(line))) continue;
+      for (var y = yStart; y <= yEnd; y += yStep) {
+        for (var xi = 0; xi < xs.length; xi++) {
+          var x = xs[xi];
 
-        var item = extractActionItem(line);
-        if (item) return { item: item, raw: line, font: font, x: p[0], y: p[1] };
+          var line = safeBindReadString(rid, font, x, y);
+          if (!line) continue;
+
+          var clean = stripTags(line);
+          if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit)\b/i.test(clean)) continue;
+
+          var item = extractActionItem(clean);
+          if (item) return { item: item, raw: clean, font: font, x: x, y: y };
+        }
       }
+
+      // If we saw any text at all in this font but no match, no need to try other fonts for tooltip.
+      // (keeps things snappy on slow setups)
+      if (mode !== "menu") break;
     }
+
     return null;
   }
 
-  async function manualSubmit() {
+async function manualSubmit() {
     if (!ui.btnManualSubmit) return;
     if (!window.alt1 || !alt1.rsLinked) {
       setManualStatus("Alt1 not linked to RuneScape", "bad");
@@ -339,7 +345,8 @@
       setManualStatus("Prepare… 1", "warn");
       await sleep(700);
 
-      var bound = bindRegionAroundMouse(300);
+      var bound = bindRegionAroundMouse(300, 0, 100); // bias down for context menu
+      var boundTooltip = null;
       if (!bound) {
         setManualStatus("Failed to bind region around mouse", "bad");
         addFeed("Manual submit failed: bindRegion failed", "bad");
@@ -353,7 +360,12 @@
       // 2) Tooltip fallback (same 300x300 region)
       if (!found) {
         setManualStatus("Menu not found — scanning tooltip…", "warn");
-        found = findDropCandidateFast(bound.rid, "tooltip");
+        boundTooltip = bindRegionAroundMouse(300, 0, 0);
+        if (boundTooltip) {
+          found = findDropCandidateFast(boundTooltip.rid, "tooltip");
+        } else {
+          found = null;
+        }
       }
 
       if (!found) {
