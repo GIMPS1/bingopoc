@@ -80,7 +80,12 @@
     eventLine: $("eventLine"),
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
+
+    // Manual
+    btnManualSubmit: $("btnManualSubmit"),
   };
+
+  const wait = (ms) => new Promise((res) => setTimeout(res, ms));
 
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
@@ -1531,7 +1536,110 @@ function stitchChatMessages(lines) {
     }
   }
 
-  // ---------- events ----------
+  
+  async function manualSubmitFlow() {
+    if (!isAlt1) { addFeed("Alt1 not detected.", "bad"); showEvent("Manual submit failed", "Alt1 not detected", "bad"); return; }
+    if (!isSetupReady()) { addFeed("Setup not complete. Lock IGN, Bingo/Team, and Chatbox first.", "warn"); showEvent("Manual submit", "Finish setup first (IGN + Bingo/Team + Chatbox)", "warn"); return; }
+    if (!chatReader || chatReader.pos === null) { addFeed("Chatbox not locked. Open Settings → Scan/locate.", "warn"); showEvent("Manual submit", "Chatbox not locked. Open Settings → Scan/locate.", "warn"); return; }
+
+    // Countdown
+    try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = true); } catch(e){}
+    for (const n of [3,2,1]) {
+      showEvent("Manual submit", `Hover the drop line… scanning in ${n}`, "warn", true, false);
+      try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip(`Manual submit: scanning in ${n}`); } catch(e){}
+      await wait(900);
+    }
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch(e){}
+
+    let lines = [];
+    try {
+      lines = chatReader.read() || [];
+    } catch (e) {
+      addFeed("Chat read error: " + e.message, "bad");
+      showEvent("Manual submit failed", "Chat read error", "bad");
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+      return;
+    }
+
+    if (!lines.length) {
+      addFeed("No chat lines read. Make sure chat is visible and correctly positioned.", "warn");
+      showEvent("Manual submit", "No chat lines read (chat not visible?)", "warn");
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+      return;
+    }
+
+    const stitched = stitchChatMessages(lines);
+
+    // Find the most recent parsable drop line (two-step parsing uses the next line too)
+    let best = null;
+    for (let i = stitched.messages.length - 1; i >= 0; i--) {
+      const raw = stitched.messages[i];
+      if (!raw) continue;
+      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
+      const parsed = parseDropLine(raw, nextRaw);
+      if (parsed) { best = { raw, nextRaw, parsed }; break; }
+    }
+
+    if (!best) {
+      addFeed("Manual submit: couldn't find a drop line in recent chat text.", "warn");
+      showEvent("Manual submit", "No drop line detected in chat", "warn");
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+      return;
+    }
+
+    const settings = loadSettings();
+    const parsed = best.parsed;
+
+    // Reject rich-fragment stringify artifacts
+    if (best.raw.includes("[object Object]")) {
+      addFeed("Manual submit ignored (unparsed rich text).", "warn");
+      showEvent("Manual submit", "Ignored rich text artifact", "warn");
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+      return;
+    }
+
+    // Allowlist validation (primary gate)
+    const strictOn = settings.strictDrops && canonicalMap.size > 0;
+    let canonicalName = parsed.drop_name;
+
+    if (strictOn) {
+      const v = validateDropName(parsed.drop_name);
+      if (!v.valid) {
+        addFeed(`Manual submit rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+        showEvent("Manual submit", `Rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+        try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+        return;
+      }
+      canonicalName = v.canonical;
+    }
+
+    // Optional wiki canonicalisation (secondary; never bypass allowlist)
+    if (settings.useWikiCanonical) {
+      const wikiName = await resolveCanonicalName(canonicalName);
+      if (strictOn) {
+        const v2 = validateDropName(wikiName);
+        canonicalName = v2.valid ? v2.canonical : canonicalName;
+      } else {
+        canonicalName = wikiName;
+      }
+    }
+
+    showEvent("Manual submit", `Submitting ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}…`, "ok", true, false);
+
+    try {
+      await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+      playBeep("ok");
+      addFeed(`Manual submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
+      showEvent("Submitted ✅", `${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok", true, false);
+    } catch (e) {
+      addFeed(`Manual submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
+      showEvent("Manual submit failed ❌", `${canonicalName}: ${e.message}`, "bad", true, false);
+    } finally {
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+    }
+  }
+
+// ---------- events ----------
   if (!__settingsOnly) {
     ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
@@ -1540,7 +1648,9 @@ function stitchChatMessages(lines) {
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openDrawer);
   }
 
-  ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
+    ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", () => { manualSubmitFlow(); });
+
+ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
     if (__settingsOnly) {
       try { window.close(); } catch (e) {}
       return;
