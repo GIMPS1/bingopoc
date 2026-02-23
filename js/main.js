@@ -303,14 +303,10 @@
     for (let yy = 0; yy < h; yy += 14) {
       let s = "";
       try {
-        s = alt1.bindReadStringEx(id, 0, yy, args) || "";
+        // Alt1 v1.6 bindReadString expects (regionId, fontName, x, y)
+        s = alt1.bindReadString(id, "chat", 0, yy) || "";
       } catch (e) {
-        // Some builds don't support bindReadStringEx; fall back to bindReadString
-        try {
-          s = alt1.bindReadString(id, "chat", 0, yy) || "";
-        } catch (e2) {
-          return { ok: false, reason: "No OCR reader available (bindReadStringEx/bindReadString)." };
-        }
+        return { ok: false, reason: "No OCR reader available (bindReadString)." };
       }
       s = String(s).trim();
       if (s) lines.push(s);
@@ -327,6 +323,7 @@
     }
 
     const text = uniq.join("\n").trim();
+    
     if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
 
     return { ok: true, text, x, y, w, h };
