@@ -156,6 +156,16 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
   transition: transform .18s ease;
 }
 .eventLine:hover{ transform: translateY(-1px); }
+
+/* Manual submit hint */
+.manualHint{
+  margin: 6px 2px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+  opacity: 0.78;
+  color: rgba(255,255,255,.78);
+  user-select: none;
+}
 .eventLeft{display:flex; align-items:center; gap:10px; min-width:0;}
 .eventIcon{
   width:34px;height:34px;border-radius:12px;

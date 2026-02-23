@@ -904,7 +904,7 @@ function initHistoryPanel() {
   }
 
   // FIX: submitDrop does NOT resolve canonical again (poll already does it)
-  async function submitDrop({ drop_name, amount }) {
+  async function submitDrop({ drop_name, amount, boss = "", result = "success" }) {
     const base = getApiBase();
     const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
     const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
@@ -917,9 +917,9 @@ function initHistoryPanel() {
     fd.append("ts_iso", ts_iso);
     fd.append("ign", ign);
     fd.append("team_number", String(team_number));
-    fd.append("boss", "");
+    fd.append("boss", boss || "");
     fd.append("drop_name", canonical);
-    fd.append("result", "success");
+    fd.append("result", result || "success");
     fd.append("amount", amount || "");
 
     const url = `${base}/b/${bingoId}/api/mock_drop`;
@@ -994,7 +994,7 @@ function initHistoryPanel() {
     if (!t) return false;
     if (/^(You\b|Your\b|News:|A\b)/.test(t)) return true;
     if (/^[^a-z\s][^:]{1,40}:\s+/.test(t)) return true;
-    if (/^[A-Z][A-Za-z0-9' _-]{1,30}:\s+/.test(t)) return true;
+    if (/^[A-Za-z0-9][A-Za-z0-9' _-]{1,30}:\s+/.test(t)) return true;
     return false;
   }
 
@@ -1606,6 +1606,10 @@ function stitchChatMessages(lines) {
   ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     const ign = (ui.ign?.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
+    if (!/^[A-Za-z0-9][A-Za-z0-9 _-]*$/.test(ign)) {
+      addFeed("IGN must start with A–Z, a–z, or 0–9 and only use A–Z, a–z, 0–9, space, _ or -.", "bad");
+      return;
+    }
     localStorage.setItem(LS.ign, ign);
     localStorage.setItem(LS.ignLocked, "1");
     setIgnLocked(true);
@@ -1691,8 +1695,232 @@ function stitchChatMessages(lines) {
     ];
     const [name, amt] = picks[Math.floor(Math.random() * picks.length)];
     addFeed(`Mock Drop: ${name} x${amt}`, "ok");
-    playBeep("ok");
+    
+  // ---------- Manual loot/tooltip scan (under-mouse) ----------
+  // Usage (console): IRB.manualLootScan()
+  // Hover the loot icon so the tooltip is visible, then run the command.
+  // This is intentionally single-shot (no polling) and safe (re-entrancy guarded).
+  let __manualBusy = false;
+
+  function _getAlt1MousePos() {
+    try {
+      if (!window.alt1) return null;
+      if (typeof alt1.getMousePosition === "function") return alt1.getMousePosition();
+      if (typeof alt1.mousePosition === "function") return alt1.mousePosition();
+      if (alt1.mouse && typeof alt1.mouse.x === "number") return { x: alt1.mouse.x, y: alt1.mouse.y };
+    } catch (e) {}
+    return null;
   }
+
+  function _clampRect(x, y, w, h) {
+    x = Math.max(0, Math.floor(x));
+    y = Math.max(0, Math.floor(y));
+    w = Math.max(1, Math.floor(w));
+    h = Math.max(1, Math.floor(h));
+    return { x, y, w, h };
+  }
+
+  function _captureRect(rect) {
+    if (!window.alt1 || typeof alt1.capture !== "function") return null;
+    try {
+      return alt1.capture(rect.x, rect.y, rect.w, rect.h);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function _getOcrReader() {
+    // Alt1 OCR globals vary by bundling; try the common ones.
+    // We only need a "read" function that returns text/lines.
+    return (
+      window.alt1ocr ||
+      window.OCR ||
+      window.Ocr ||
+      (window.ocr && window.ocr.default) ||
+      window.ocr ||
+      null
+    );
+  }
+
+  function _extractStringsFromOcrResult(res) {
+    if (!res) return [];
+    if (typeof res === "string") return [res];
+    if (Array.isArray(res)) return res.map(x => (typeof x === "string" ? x : (x && x.text) || "")).filter(Boolean);
+    if (Array.isArray(res.text)) return res.text.map(String).filter(Boolean);
+    if (typeof res.text === "string") return [res.text];
+    if (Array.isArray(res.lines)) return res.lines.map(x => (typeof x === "string" ? x : (x && x.text) || "")).filter(Boolean);
+    return [];
+  }
+
+  function _bestItemFromLines(lines) {
+    const strictOn = (settings && settings.strictDrops) && canonicalMap && canonicalMap.size > 0;
+
+    const cleaned = (lines || [])
+      .map(s => String(s || "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    // Prefer allowlist hit (most reliable)
+    for (const s of cleaned) {
+      const v = validateDropName(s);
+      if (v && v.valid) return { name: v.canonical, source: "allowlist" };
+    }
+
+    // Fallback: heuristics for tooltip format (first non-empty line)
+    const first = cleaned[0] || "";
+    if (!first) return null;
+
+    if (strictOn) {
+      // Strict mode but no allowlist match => refuse to submit
+      return null;
+    }
+    return { name: first, source: "raw" };
+  }
+
+  function _tryExtractQty(lines) {
+    const cleaned = (lines || []).map(s => String(s || "").replace(/\s+/g, " ").trim()).filter(Boolean);
+
+    // Sometimes tooltips include "Quantity: 123" or "Stack: 123"
+    for (const s of cleaned) {
+      let m = s.match(/\b(?:quantity|stack|amount)\s*:\s*(\d{1,6})\b/i);
+      if (m) return m[1];
+    }
+
+    // Sometimes OCR grabs the "x 123" from loot messages/overlays
+    for (const s of cleaned) {
+      let m = s.match(/\bx\s*(\d{1,6})\b/i);
+      if (m) return m[1];
+    }
+
+    return "";
+  }
+
+  function _findRecentKillLine() {
+    // Reads the *already locked* chatbox (fast + reliable, no fullscreen OCR).
+    if (!chatReader) return null;
+    let lines = [];
+    try { lines = chatReader.read() || []; } catch (e) { return null; }
+    if (!lines.length) return null;
+
+    const stitched = stitchChatMessages(lines);
+    const recent = stitched.messages.slice(0, 18); // backwards=true, so index 0 is newest
+
+    // Examples:
+    // "You have killed 23 Vindicta in hard mode."
+    // "You have killed 1 Telos in practice mode."
+    const re = /^You\s+have\s+killed\s+(\d+)\s+(.+?)\s+in\s+(.+?)\.\s*$/i;
+
+    for (const raw of recent) {
+      const t = stripChatPrefix(stripTimestampPrefix(raw));
+      const m = t.match(re);
+      if (m) {
+        return {
+          qty: (m[1] || "").trim(),
+          boss: (m[2] || "").trim(),
+          mode: (m[3] || "").trim(),
+          line: t
+        };
+      }
+    }
+    return null;
+  }
+
+  async function manualLootScan() {
+    if (__manualBusy) return;
+    __manualBusy = true;
+
+    try {
+      if (!isAlt1) { addFeed("Manual scan requires Alt1.", "bad"); return; }
+      if (!isSetupReady()) { addFeed("Finish setup first (lock Bingo/Team + IGN + Chat).", "bad"); return; }
+
+      const mp = _getAlt1MousePos();
+      if (!mp) { addFeed("Mouse position unavailable in Alt1 (need overlay permission + not exclusive fullscreen).", "bad"); return; }
+
+      // Recommended approach: TWO regional scans (fast + reliable)
+      // 1) Tooltip scan: modest box around mouse (captures tooltip even if it grows up/down)
+      // 2) Qty scan: small box near mouse (sometimes catches stack number or tooltip quantity)
+      //
+      // 480x320 is usually enough for RS3 tooltip without being too heavy.
+      const tipRect = _clampRect(mp.x - 240, mp.y - 160, 480, 320);
+      const qtyRect = _clampRect(mp.x - 60, mp.y - 40, 140, 90);
+
+      // Optional highlight for debugging
+      tryOverlayRect({ x: tipRect.x, y: tipRect.y, width: tipRect.w, height: tipRect.h }, false);
+
+      const capTip = _captureRect(tipRect);
+      const capQty = _captureRect(qtyRect);
+
+      if (!capTip) { addFeed("Capture failed (tooltip). Check Alt1 permissions / windowed mode.", "bad"); return; }
+
+      const ocr = _getOcrReader();
+      if (!ocr) { addFeed("OCR library not detected. (alt1/dist/ocr not available as a global)", "bad"); return; }
+
+      // Try a few common OCR call patterns without hard-coding one.
+      const ocrRead = async (cap) => {
+        if (!cap) return [];
+        try {
+          if (typeof ocr.read === "function") return _extractStringsFromOcrResult(await ocr.read(cap));
+          if (typeof ocr.readText === "function") return _extractStringsFromOcrResult(await ocr.readText(cap));
+          if (typeof ocr.findText === "function") return _extractStringsFromOcrResult(await ocr.findText(cap));
+          if (typeof ocr.recognize === "function") return _extractStringsFromOcrResult(await ocr.recognize(cap));
+        } catch (e) {}
+        return [];
+      };
+
+      const tipLines = await ocrRead(capTip);
+      const qtyLines = await ocrRead(capQty);
+
+      const best = _bestItemFromLines(tipLines);
+      if (!best) {
+        addFeed("Manual scan: couldn't read a valid item name (strict mode may be rejecting).", "bad");
+        return;
+      }
+
+      const qty = _tryExtractQty(qtyLines) || _tryExtractQty(tipLines) || "1";
+
+      // Optional: verify a recent kill line exists before submitting
+      const kill = _findRecentKillLine();
+      if (!kill) {
+        addFeed(`Manual scan read: ${best.name} x${qty} — but no recent 'You have killed …' line found in chat. Not submitted.`, "warn");
+        playBeep("warn");
+        return;
+      }
+
+      // De-dupe key (same as automatic path)
+      const key = `${best.name}`.toLowerCase().trim() + "||" + String(qty).trim();
+      if (seenRecently(key, 8000)) {
+        addFeed(`Manual scan: duplicate suppressed (${best.name} x${qty}).`, "warn");
+        return;
+      }
+
+      addFeed(`Manual scan: ${best.name} x${qty} • Kill verified: ${kill.boss} (${kill.mode})`, "ok");
+
+      // Canonicalise if enabled (still respect allowlist when strict)
+      let canonicalName = best.name;
+      const strictOn = settings.strictDrops && canonicalMap.size > 0;
+      if (settings.useWikiCanonical) {
+        const wikiName = await resolveCanonicalName(canonicalName);
+        if (strictOn) {
+          const v2 = validateDropName(wikiName);
+          canonicalName = v2.valid ? v2.canonical : canonicalName;
+        } else {
+          canonicalName = wikiName;
+        }
+      }
+
+      await submitDrop({ drop_name: canonicalName, amount: qty, boss: kill.boss, result: "success" });
+      playBeep("ok");
+      addFeed(`Manual submit ✅ ${canonicalName} x${qty}`, "ok");
+    } catch (e) {
+      addFeed("Manual scan failed: " + (e && e.message ? e.message : String(e)), "bad");
+    } finally {
+      __manualBusy = false;
+    }
+  }
+
+  // expose console helpers
+  window.IRB = window.IRB || {};
+  window.IRB.manualLootScan = manualLootScan;
+  window.IRB._findRecentKillLine = _findRecentKillLine;
   window.addMockDrop = addMockDrop;
 
   // ---------- boot ----------
@@ -1779,8 +2007,10 @@ function stitchChatMessages(lines) {
 // --- Added: Universal broadcast drop detection ---
 function normalizeIgn(raw) {
   raw = (raw || "").toString().trim();
-  // Anchor to the first capital letter (RSN display starts with A-Z; ironman icons/prefixes may precede it)
-  const i = raw.search(/[A-Z]/);
+
+  // RSN can start with A-Z, a-z, or 0-9. Broadcast lines may include icon prefixes before the RSN.
+  // Strategy: strip any leading non [A-Za-z0-9], then take the remainder.
+  const i = raw.search(/[A-Za-z0-9]/);
   if (i >= 0) return raw.slice(i).trim();
   return raw;
 }
@@ -1811,7 +2041,7 @@ if (typeof _tryParseReceive === "function") {
     const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
 
     // Accept relayed/broadcast formats where the sender name may include icon prefixes (e.g. ironman),
-    // and anchor the "real" IGN to the first capital letter before comparing to the locked IGN.
+    // and anchor the "real" IGN to the first alphanumeric character before comparing to the locked IGN.
     const reBroadcast = new RegExp(
       "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop\\b.*$",
       "i"
