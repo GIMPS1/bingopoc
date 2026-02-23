@@ -434,7 +434,7 @@ async function manualSubmit() {
       setManualStatus("Prepare… 1", "warn");
       await sleep(700);
 
-      var bound = bindRegionAroundMouse(300, 0, 100); // bias down for context menu
+      var bound = bindRegionAroundMouse(300, 120, 120); // bias down for context menu
       var boundTooltip = null;
       if (!bound) {
         setManualStatus("Failed to bind region around mouse", "bad");
