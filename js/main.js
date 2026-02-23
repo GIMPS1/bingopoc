@@ -72,6 +72,11 @@
     optUseWikiCanonical: $("optUseWikiCanonical"),
     btnUnlockChat: $("btnUnlockChat"),
 
+    // Settings - hotkeys
+    hotkeyManualSubmit: $("hotkeyManualSubmit"),
+    btnSetHotkeyManualSubmit: $("btnSetHotkeyManualSubmit"),
+    btnClearHotkeyManualSubmit: $("btnClearHotkeyManualSubmit"),
+
     // Runtime// Feed
     feed: $("feed"),
     feedMeta: $("feedMeta"),
@@ -80,13 +85,7 @@
     eventLine: $("eventLine"),
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
-
-    // Manual submit
-    btnManualSubmit: $("btnManualSubmit"),
-    manualStatus: $("manualStatus"),
-    manualStatusMsg: $("manualStatusMsg"),
-    manualStatusPill: $("manualStatusPill"),
-  };
+};
 
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
@@ -132,6 +131,7 @@
       highlight: s.highlight === true,
       strictDrops: s.strictDrops !== false,
       useWikiCanonical: s.useWikiCanonical !== false,
+      manualHotkey: typeof s.manualHotkey === "string" ? s.manualHotkey : "",
     };
   }
   function saveSettings(patch) {
@@ -204,305 +204,7 @@
     if (sound) playChime();
   }
 
-  
-  // ---------- manual submit helpers ----------
-  function setManualStatus(msg, level) {
-    if (!ui.manualStatus || !ui.manualStatusMsg || !ui.manualStatusPill) return;
-    ui.manualStatusMsg.textContent = msg || "";
-    ui.manualStatus.classList.remove("ok","warn","bad");
-    ui.manualStatus.classList.add(level || "ok");
-    ui.manualStatusPill.classList.remove("ok","warn","bad");
-    ui.manualStatusPill.classList.add(level || "ok");
-    ui.manualStatusPill.textContent = (level === "bad") ? "!" : (level === "warn" ? "…" : "✓");
-  }
-
-  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
-
-  function getMouseXY() {
-    try {
-      // Alt1 v1.6 often uses packed int: x<<16 | y
-      var mp = alt1 && alt1.mousePosition;
-      if (mp && typeof mp === "object" && typeof mp.x === "number" && typeof mp.y === "number") {
-        return { x: mp.x|0, y: mp.y|0 };
-      }
-      if (typeof mp === "number" && isFinite(mp)) {
-        var x = mp >> 16;
-        var y = mp & 0xFFFF;
-        return { x: x|0, y: y|0 };
-      }
-    } catch(e) {}
-    return null;
-  }
-
-  function bindRegionAroundMouse(size, offsetX, offsetY) {
-    // Binds a square region around the mouse. Optional offsets bias the region
-    // (useful for right-click menus which tend to open below the cursor).
-    var pos = getMouseXY();
-    if (!pos) return null;
-    var half = (size / 2);
-    var ox = (typeof offsetX === "number" ? offsetX : 0);
-    var oy = (typeof offsetY === "number" ? offsetY : 0);
-
-    var cx = (pos.x + ox);
-    var cy = (pos.y + oy);
-
-    var left = Math.max(0, (cx - half)) | 0;
-    var top  = Math.max(0, (cy - half)) | 0;
-
-    try {
-      var rid = alt1.bindRegion(left, top, size|0, size|0);
-      return { rid: (typeof rid === "number" ? rid : 0), left: left, top: top, size: size|0 };
-    } catch (e) {
-      return null;
-    }
-  }
-
-  function _mixColor(r,g,b){
-    try {
-      var lib = window.a1lib || window.A1lib;
-      if (lib && typeof lib.mixcolor === "function") return lib.mixcolor(r|0,g|0,b|0);
-    } catch(e) {}
-    // fallback: pack as 0xAABBGGRR (Alt1 uses 8bpp rgba int); this is a best-effort
-    return ((255<<24) | ((b&255)<<16) | ((g&255)<<8) | (r&255))|0;
-  }
-
-  function safeBindReadString(rid, font, x, y) {
-    try {
-      var id = rid|0;
-      var fx = x|0, fy = y|0;
-      var fname = String(font||"chat");
-
-      // Prefer bindReadStringEx when available: lets us pass colors + allowgap.
-      if (typeof alt1.bindReadStringEx === "function") {
-        var args = {
-          fontname: fname,
-          allowgap: true,
-          colors: [
-            _mixColor(255,255,255), // white
-            _mixColor(255,255,0),   // yellow
-            _mixColor(255,204,0)    // orange/yellow
-          ]
-        };
-        return String(alt1.bindReadStringEx(id, fx, fy, JSON.stringify(args)) || "").trim();
-      }
-
-      // Fallback to plain bindReadString.
-      if (typeof alt1.bindReadString === "function") {
-        return String(alt1.bindReadString(id, fname, fx, fy) || "").trim();
-      }
-    } catch (e) {}
-    return "";
-  }
-
-  function stripTags(s) {
-    return String(s||"")
-      .replace(/<[^>]*>/g, "")
-      .replace(/\u00A0/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
-
-  function extractActionItem(line) {
-    var t = stripTags(line);
-    if (!t) return null;
-
-    // Common RS3 context menu / tooltip headers
-    // Examples: "Take Uncut onyx", "Withdraw-All Robe bottom ...", "Pick up Dragon bones"
-    var m = t.match(/^(Take|Pick up|Loot|Open|Claim|Collect|Bank|Discard|Examine)\s+(.+)$/i);
-    if (m) return m[2].trim();
-
-    m = t.match(/^Withdraw(?:-[A-Za-z0-9]+)?\s+(.+)$/i);
-    if (m) return m[1].trim();
-
-    m = t.match(/^Deposit(?:-[A-Za-z0-9]+)?\s+(.+)$/i);
-    if (m) return m[1].trim();
-
-    return null;
-  }
-
-  
-function _isGarbageText(s) {
-  s = String(s||"").trim();
-  if (!s) return true;
-  if (s.length < 3) return true;
-  // mostly junk glyphs we saw during probing
-  if (/^[ij14\[\]^N\s]+$/i.test(s)) return true;
-  if (/^4{8,}$/.test(s.replace(/\s+/g,''))) return true;
-  return false;
-}
-
-function readRightClickCandidate(rid) {
-  // Alt1 has a dedicated reader for the right-click menu.
-  // Important: it returns best results when called at (0,0) inside the bound region.
-  if (!window.alt1 || typeof alt1.bindReadRightClickString !== "function") return null;
-
-  var block = "";
-  try {
-    block = alt1.bindReadRightClickString(rid, 0, 0);
-  } catch (e) {
-    return null;
-  }
-  if (!block) return null;
-
-  // Split lines, trim, remove empties
-  var rawLines = String(block).split(/\r?\n/);
-  var lines = [];
-  for (var i = 0; i < rawLines.length; i++) {
-    var t = stripTags(rawLines[i]).trim();
-    if (t) lines.push(t);
-  }
-  if (!lines.length) return null;
-
-  // Look for actionable menu lines and extract item names
-  for (var j = 0; j < lines.length; j++) {
-    var line = lines[j];
-
-    // Skip headers / cancel
-    if (/^Choose Option$/i.test(line)) continue;
-    if (/^Cancel$/i.test(line)) continue;
-
-    // Menu actions we care about
-    if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit|Bank|Discard|Examine)/i.test(line)) continue;
-
-    var item = extractActionItem(line);
-    if (item) {
-      return { item: item, raw: line, method: "rightclick" };
-    }
-  }
-
-  // If we got readable text but no actionable line, return raw for debugging
-  var joined = lines.join(" | ");
-  return { item: null, raw: joined, method: "rightclick" };
-}
-
-function findDropCandidateFast(rid, mode) {
-if (mode === "menu") {
-  var rc = readRightClickCandidate(rid);
-  if (rc) return rc;
-}
-
-
-    // Fast scan for an action line inside the currently bound region.
-    // NOTE: alt1.bindReadString reads from an exact baseline; we sweep Y in small steps.
-    var fonts = ["chat", "chatmono"];
-    var xs = (mode === "menu") ? [6, 36] : [6, 36, 72];
-    var yStart = 12;
-    var yEnd = 288;
-    var yStep = (mode === "menu") ? 6 : 10;
-
-    for (var f = 0; f < fonts.length; f++) {
-      var font = fonts[f];
-
-      for (var y = yStart; y <= yEnd; y += yStep) {
-        for (var xi = 0; xi < xs.length; xi++) {
-          var x = xs[xi];
-
-          var line = safeBindReadString(rid, font, x, y);
-          if (!line) continue;
-
-          var clean = stripTags(line);
-          if (!/^(Take|Withdraw|Pick up|Loot|Open|Claim|Collect|Deposit)\b/i.test(clean)) continue;
-
-          var item = extractActionItem(clean);
-          if (item) return { item: item, raw: clean, font: font, x: x, y: y };
-        }
-      }
-
-      // If we saw any text at all in this font but no match, no need to try other fonts for tooltip.
-      // (keeps things snappy on slow setups)
-      if (mode !== "menu") break;
-    }
-
-    return null;
-  }
-
-async function manualSubmit() {
-    if (!ui.btnManualSubmit) return;
-    if (!window.alt1 || !alt1.rsLinked) {
-      setManualStatus("Alt1 not linked to RuneScape", "bad");
-      addFeed("Alt1 not linked to RuneScape", "bad");
-      return;
-    }
-
-    ui.btnManualSubmit.disabled = true;
-    try {
-      showEvent("Manual submit", "3..2..1 countdown", "warn", true, false);
-      setManualStatus("Prepare… 3", "warn");
-      await sleep(700);
-      setManualStatus("Prepare… 2", "warn");
-      await sleep(700);
-      setManualStatus("Prepare… 1", "warn");
-      await sleep(700);
-
-      var pos = getMouseXY();
-if (!pos) {
-  setManualStatus("Mouse position unavailable", "bad");
-  return;
-}
-
-var left = (pos.x + 20) | 0;
-var top  = (pos.y + 20) | 0;
-
-var rid = alt1.bindRegion(left, top, 260, 220);
-if (typeof rid !== "number") {
-  setManualStatus("Failed to bind region around mouse", "bad");
-  addFeed("Manual submit failed: bindRegion failed", "bad");
-  return;
-}
-      // 1) Try context menu first (fast)
-      setManualStatus("Scanning right-click menu…", "warn");
-      var found = findDropCandidateFast(bound.rid, "menu");
-
-      // 2) Tooltip fallback (same 300x300 region)
-      if (!found) {
-        setManualStatus("Menu not found — scanning tooltip…", "warn");
-        boundTooltip = bindRegionAroundMouse(300, 0, 0);
-        if (boundTooltip) {
-          found = findDropCandidateFast(boundTooltip.rid, "tooltip");
-        } else {
-          found = null;
-        }
-      }
-
-      if (!found) {
-        setManualStatus("No text detected near mouse", "bad");
-        showEvent("Manual submit", "No text detected in 300×300 near mouse", "bad", true, false);
-        return;
-      }
-
-      if (!found.item) {
-        var rawSeen = (found.raw ? (": " + String(found.raw).slice(0, 80)) : "");
-        setManualStatus("OCR saw text but could not parse a drop" + rawSeen, "bad");
-        showEvent("Manual submit", "OCR saw text but could not parse a drop" + rawSeen, "bad", true, false);
-        return;
-      }
-
-      var candidate = found.item;
-      var v = validateDropName(candidate);
-      if (!v || !v.valid) {
-        setManualStatus("OCR found text but no valid drop matched", "bad");
-        showEvent("Manual submit", "OCR found text but no valid drop matched", "bad", true, false);
-        return;
-      }
-
-      var canonicalName = v.canonical || candidate;
-      canonicalName = await resolveCanonicalName(canonicalName);
-
-      setManualStatus("Submitting: " + canonicalName, "warn");
-      await submitDrop({ drop_name: canonicalName, amount: "1" });
-      playBeep("ok");
-      setManualStatus("Submitted: " + canonicalName, "ok");
-      addFeed("Submitted ✅ " + canonicalName, "ok");
-
-    } catch (e) {
-      setManualStatus("Manual submit failed", "bad");
-      addFeed("Manual submit failed ❌: " + (e && e.message ? e.message : String(e)), "bad");
-    } finally {
-      ui.btnManualSubmit.disabled = false;
-    }
-  }
-
-function escapeHtml(s) {
+  function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
   }
 
@@ -535,6 +237,249 @@ function escapeHtml(s) {
       }).join("");
     }
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
+  }
+
+  function getMousePos() {
+    try {
+      if (window.A1lib && typeof A1lib.mousePosition === "function") {
+        return A1lib.mousePosition();
+      }
+    } catch (e) {}
+
+    try {
+      const packed = alt1 && alt1.mousePosition;
+      if (typeof packed === "number") {
+        return { x: (packed >> 16), y: (packed & 0xFFFF) };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async function ocrRegionAroundMouse(size) {
+    if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
+    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    const pos = getMousePos();
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return { ok: false, reason: "Mouse position unavailable." };
+    }
+
+    const w = (size | 0), h = (size | 0);
+    const half = (w / 2) | 0;
+    const x = Math.max(0, (pos.x | 0) - half) | 0;
+    const y = Math.max(0, (pos.y | 0) - half) | 0;
+
+    let id;
+    try {
+      id = alt1.bindRegion(x, y, w, h);
+    } catch (e) {
+      return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) };
+    }
+
+    // Brute-force scan for tooltip text baseline; this is manual so a few thousand calls is acceptable.
+    const fonts = ["chat", "chatmono", "xpcounter"];
+    const argsBase = { allowgap: true };
+
+    // Optional: prefer bright tooltip-ish colors if mixcolor exists
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        argsBase.colors = [
+          A1lib.mixcolor(255,255,255), // white
+          A1lib.mixcolor(255,255,0),   // yellow
+          A1lib.mixcolor(255,200,80),  // gold-ish
+          A1lib.mixcolor(200,255,200)  // pale green
+        ];
+      }
+    } catch (e) {}
+
+    const found = [];
+    const seen = {};
+    const yStep = 2;
+    const xStep = 10;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
+
+      for (let yy = 0; yy < h; yy += yStep) {
+        for (let xx = 0; xx < w; xx += xStep) {
+          let s = "";
+          try {
+            s = alt1.bindReadStringEx(id, xx, yy, args) || "";
+          } catch (e) {
+            // If Ex fails, fallback to basic reader (much less flexible)
+            try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; }
+          }
+          s = String(s).trim();
+          if (!s) continue;
+
+          // De-dup
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          found.push(s);
+
+          // Early exit if we already see a likely tooltip/menu verb
+          if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(s)) {
+            // grab a few more lines around for context by continuing small amount, then stop
+          }
+          if (found.length >= 30) break;
+        }
+        if (found.length >= 30) break;
+      }
+      if (found.length) break;
+    }
+
+    const text = found.join("\n").trim();
+    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
+
+    return { ok: true, text: text, x: x, y: y, w: w, h: h };
+  
+
+  async function ocrQuantityNearMouse() {
+    // Heuristic: if hovering an item icon with a stack size overlay, try to OCR digits near the mouse.
+    if (!window.alt1) return null;
+    if (!alt1.permissionPixel) return null;
+
+    const pos = getMousePos();
+    if (!pos) return null;
+
+    const w = 140, h = 140;
+    const x = Math.max(0, (pos.x | 0) - ((w / 2) | 0)) | 0;
+    const y = Math.max(0, (pos.y | 0) - ((h / 2) | 0)) | 0;
+
+    let id;
+    try { id = alt1.bindRegion(x, y, w, h); } catch (e) { return null; }
+
+    const fonts = ["chat", "chatmono", "xpcounter"];
+    const argsBase = { allowgap: true };
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        argsBase.colors = [
+          A1lib.mixcolor(255,255,255), // white
+          A1lib.mixcolor(255,255,0),   // yellow
+          A1lib.mixcolor(255,200,80)   // gold-ish
+        ];
+      }
+    } catch (e) {}
+
+    const seen = {};
+    const nums = [];
+    const yStep = 2;
+    const xStep = 6;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
+      for (let yy = 0; yy < h; yy += yStep) {
+        for (let xx = 0; xx < w; xx += xStep) {
+          let s = "";
+          try { s = alt1.bindReadStringEx(id, xx, yy, args) || ""; }
+          catch (e) { try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; } }
+          s = String(s).trim();
+          if (!s) continue;
+
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+
+          const m = s.match(/\b(\d{1,9})\b/);
+          if (m) {
+            const n = parseInt(m[1], 10);
+            if (isFinite(n) && n > 0) nums.push(n);
+          }
+          if (nums.length >= 10) break;
+        }
+        if (nums.length >= 10) break;
+      }
+      if (nums.length) break;
+    }
+
+    if (!nums.length) return null;
+    const max = nums.reduce((a,b)=>Math.max(a,b), 0);
+    if (!max || max < 2) return null;
+    return String(max);
+  }
+
+}
+
+  function extractDropCandidatesFromOcr(text) {
+    const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+    if (!t) return [];
+
+    const out = [];
+    // Handle patterns like: "Take Uncut onyx", "Withdraw-All X", "Withdraw-1 X", etc.
+    const re1 = /\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\s+([A-Za-z0-9'’:\-(),. ]{2,80})/gi;
+    let m;
+    while ((m = re1.exec(t))) {
+      let name = (m[1] || "").trim();
+      name = name.replace(/\s+(?:x|\*)\s*\d+$/i, "").trim();
+      name = name.replace(/[\.,;:]+$/g, "").trim();
+      if (name && out.indexOf(name) === -1) out.push(name);
+    }
+    return out;
+  }
+
+  async function manualSubmitFlow() {
+    if (!isSetupReady()) {
+      showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
+return;
+    }
+const steps = ["3", "2", "1"];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      showEvent("Manual submit", "Hover tooltip text… scanning in " + s, "ok", true, false);
+try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
+      await new Promise(function (r) { setTimeout(r, 1000); });
+    }
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+
+    showEvent("Manual submit", "Scanning tooltip text…", "ok", true, false);
+const ocrRes = await ocrRegionAroundMouse(300);
+    if (!ocrRes.ok) {
+      showEvent("Manual submit", "OCR failed: " + (ocrRes.reason || "no text"), "warn", true, true);
+return;
+    }
+
+    // Try to parse + validate candidates against allowlist/canonical map
+    const candidates = extractDropCandidatesFromOcr(ocrRes.text);
+    let chosen = null;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const v = validateDropName(candidates[i]);
+      if (v && v.valid) { chosen = (v.canonical || candidates[i]); break; }
+    }
+
+    if (!chosen) {
+      // As a fallback, try validating each line directly
+      const lines = ocrRes.text.split(/\r?\n/);
+      for (let i = 0; i < lines.length; i++) {
+        const v = validateDropName(lines[i]);
+        if (v && v.valid) { chosen = (v.canonical || lines[i]); break; }
+      }
+    }
+
+    if (!chosen) {
+      showEvent("Manual submit", "OCR found text but no valid drop matched.", "warn", true, true);
+return;
+    }
+
+    let amount = "1";
+    if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(ocrRes.text)) {
+      const q = await ocrQuantityNearMouse();
+      if (q) amount = q;
+    }
+
+    showEvent("Manual submit", "Submitting: " + chosen, "ok", true, false);
+try {
+      const res = await submitDrop({ drop_name: chosen, amount: amount });
+      showEvent("Manual submit", "Submitted: " + chosen, "ok", true, true);
+playBeep("ok");
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e);
+      showEvent("Manual submit", "Submit failed: " + msg, "bad", true, true);
+playBeep("bad");
+    }
   }
 
   function setPill(pill, label, state) {
@@ -699,6 +644,78 @@ function escapeHtml(s) {
   if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
   if (ui.optStrictDrops) ui.optStrictDrops.checked = settings.strictDrops;
   if (ui.optUseWikiCanonical) ui.optUseWikiCanonical.checked = settings.useWikiCanonical;
+
+  // ---------- Hotkeys ----------
+  let _manualHotkey = settings.manualHotkey || "";
+  let _capturingManualHotkey = false;
+  let _lastManualHotkeyAt = 0;
+
+  function hotkeyToString(e) {
+    const parts = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    if (e.metaKey) parts.push("Meta");
+
+    let k = e.key || "";
+    if (k === " ") k = "Space";
+    if (k === "Esc") k = "Escape";
+    if (k.length === 1) k = k.toUpperCase();
+    // Ignore pure modifier presses
+    if (k === "Control" || k === "Shift" || k === "Alt" || k === "Meta") return "";
+    return parts.concat([k]).join("+");
+  }
+
+  function matchHotkey(e, hotkeyStr) {
+    if (!hotkeyStr) return false;
+    const s = hotkeyToString(e);
+    return s && s.toLowerCase() === String(hotkeyStr).toLowerCase();
+  }
+
+  function setManualHotkey(str) {
+    _manualHotkey = (str || "").trim();
+    saveSettings({ manualHotkey: _manualHotkey });
+    settings = loadSettings();
+    if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = _manualHotkey || "";
+  }
+
+  if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = _manualHotkey || "";
+
+  if (ui.btnSetHotkeyManualSubmit) ui.btnSetHotkeyManualSubmit.addEventListener("click", function () {
+    _capturingManualHotkey = true;
+    if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = "Press keys…";
+    showEvent("Hotkey", "Press the desired key combination now…", "ok", true, true);
+  });
+
+  if (ui.btnClearHotkeyManualSubmit) ui.btnClearHotkeyManualSubmit.addEventListener("click", function () {
+    _capturingManualHotkey = false;
+    setManualHotkey("");
+    showEvent("Hotkey", "Manual submit hotkey cleared.", "ok", true, true);
+  });
+
+  document.addEventListener("keydown", function (e) {
+    try {
+      if (_capturingManualHotkey) {
+        const s = hotkeyToString(e);
+        if (!s) return;
+        e.preventDefault();
+        e.stopPropagation();
+        _capturingManualHotkey = false;
+        setManualHotkey(s);
+        showEvent("Hotkey", "Manual submit hotkey set: " + s, "ok", true, true);
+        return;
+      }
+
+      if (!e.repeat && matchHotkey(e, _manualHotkey)) {
+        const now = Date.now();
+        if (now - _lastManualHotkeyAt < 800) return; // debounce
+        _lastManualHotkeyAt = now;
+        e.preventDefault();
+        manualSubmitFlow();
+      }
+    } catch (err) {}
+  }, true);
+
 
   // ---------- Premium Selects (Bingo + Team) ----------
   let _bingosCache = [];
@@ -1851,8 +1868,7 @@ function stitchChatMessages(lines) {
     }
     closeDrawer();
   });
-
-  // FIX: null-guard backdrop
+// FIX: null-guard backdrop
   ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
   ui.optAutoDetect && ui.optAutoDetect.addEventListener("change", (e) => {
@@ -1932,10 +1948,6 @@ function stitchChatMessages(lines) {
 
   ui.btnRecalibrate && ui.btnRecalibrate.addEventListener("click", () => {
     locateChatboxAndStore();
-  });
-
-  ui.btnManualSubmit && ui.btnManualSubmit.addEventListener("click", () => {
-    manualSubmit();
   });
 
   ui.btnScanChats && ui.btnScanChats.addEventListener("click", () => {
@@ -2142,3 +2154,4 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
+
