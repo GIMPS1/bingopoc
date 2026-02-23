@@ -1537,7 +1537,94 @@ function stitchChatMessages(lines) {
   }
 
   
-  async function manualSubmitFlow() {
+  
+// ---------- manual hover tooltip scan (best-effort) ----------
+function getMousePosInRs() {
+  try {
+    if (window.A1lib && typeof A1lib.mousePosition === "function") {
+      const p = A1lib.mousePosition();
+      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y };
+    }
+  } catch (e) {}
+  try {
+    if (alt1 && typeof alt1.mousePosition === "number") {
+      const r = alt1.mousePosition >>> 0;
+      const x = (r >>> 16) & 0xffff;
+      const y = r & 0xffff;
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function readHoverTooltipName() {
+  // This attempts to OCR any tooltip-ish text near the mouse cursor.
+  // It will not be perfect across themes/scales; it is intended as a fallback for items without chat lines.
+  if (!alt1 || !alt1.permissionPixel) return null;
+
+  const mp = getMousePosInRs();
+  if (!mp) return null;
+
+  // Region around cursor (inside rs client coords)
+  const padX = 220, padY = 140;
+  const x0 = Math.max(0, mp.x - padX);
+  const y0 = Math.max(0, mp.y - padY);
+  const w = Math.min((alt1.rsWidth || 800) - x0, padX * 2);
+  const h = Math.min((alt1.rsHeight || 600) - y0, padY * 2);
+  if (w < 120 || h < 60) return null;
+
+  // Bind region and brute-scan text lines
+  let id = 0;
+  try {
+    id = (typeof alt1.bindRegion === "function") ? alt1.bindRegion(x0, y0, w, h) : 0;
+  } catch (e) {
+    id = 0;
+  }
+  if (!id) return null;
+
+  const candidates = [];
+  const tryRead = (x, y) => {
+    try {
+      if (typeof alt1.bindReadStringEx === "function") {
+        // args is a JSON string in this API surface
+        const args = JSON.stringify({ allowgap: true, fontname: "chat" });
+        return alt1.bindReadStringEx(id, x, y, args) || "";
+      }
+      if (typeof alt1.bindReadString === "function") {
+        return alt1.bindReadString(id, "chat", x, y) || "";
+      }
+    } catch (e) {}
+    return "";
+  };
+
+  // Scan a handful of baselines; tooltip text is usually near the top of the box
+  for (let y = 18; y < Math.min(h - 8, 160); y += 10) {
+    const s = (tryRead(6, y) || "").trim();
+    if (s && s.length >= 2) candidates.push(s);
+  }
+
+  if (!candidates.length) return null;
+
+  // Pick the most "name-like" line: longest, not numeric-heavy, no timestamp bracket, no "x " etc.
+  const scored = candidates.map(s => {
+    const clean = s.replace(/\s+/g, " ").trim();
+    const digitFrac = (clean.match(/\d/g) || []).length / Math.max(1, clean.length);
+    const bad = /^\[\d{1,2}:\d{2}/.test(clean) || /^You (have|received)/i.test(clean);
+    const score = (bad ? -100 : 0) + clean.length - (digitFrac * 10);
+    return { s: clean, score };
+  }).sort((a,b) => b.score - a.score);
+
+  let best = scored[0]?.s || null;
+  if (!best) return null;
+
+  // Strip common suffixes like " (noted)" or commas/periods
+  best = best.replace(/\s*\(noted\)\s*$/i, "").replace(/[\.,;:]+$/g, "").trim();
+  if (!best) return null;
+
+  return best;
+}
+
+async function manualSubmitFlow() {
     if (!isAlt1) { addFeed("Alt1 not detected.", "bad"); showEvent("Manual submit failed", "Alt1 not detected", "bad"); return; }
     if (!isSetupReady()) { addFeed("Setup not complete. Lock IGN, Bingo/Team, and Chatbox first.", "warn"); showEvent("Manual submit", "Finish setup first (IGN + Bingo/Team + Chatbox)", "warn"); return; }
     if (!chatReader || chatReader.pos === null) { addFeed("Chatbox not locked. Open Settings → Scan/locate.", "warn"); showEvent("Manual submit", "Chatbox not locked. Open Settings → Scan/locate.", "warn"); return; }
@@ -1550,6 +1637,61 @@ function stitchChatMessages(lines) {
       await wait(900);
     }
     try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch(e){}
+
+// First try: read hover tooltip text near cursor (fallback for drops that don't appear in chat)
+let hoverName = null;
+try {
+  hoverName = await readHoverTooltipName();
+} catch (e) {
+  hoverName = null;
+}
+
+if (hoverName) {
+  const settings = loadSettings();
+  const parsed = { drop_name: hoverName, amount: "1" };
+
+  // Allowlist validation (primary gate)
+  const strictOn = settings.strictDrops && canonicalMap.size > 0;
+  let canonicalName = parsed.drop_name;
+
+  if (strictOn) {
+    const v = validateDropName(parsed.drop_name);
+    if (!v.valid) {
+      addFeed(`Manual submit rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+      showEvent("Manual submit", `Rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+      try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+      return;
+    }
+    canonicalName = v.canonical;
+  }
+
+  // Optional wiki canonicalisation (secondary; never bypass allowlist)
+  if (settings.useWikiCanonical) {
+    const wikiName = await resolveCanonicalName(canonicalName);
+    if (strictOn) {
+      const v2 = validateDropName(wikiName);
+      canonicalName = v2.valid ? v2.canonical : canonicalName;
+    } else {
+      canonicalName = wikiName;
+    }
+  }
+
+  showEvent("Manual submit", `Submitting (hover) ${canonicalName} x${parsed.amount}…`, "ok", true, false);
+
+  try {
+    await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+    playBeep("ok");
+    addFeed(`Manual submitted ✅ ${canonicalName} x${parsed.amount}`, "ok");
+    showEvent("Submitted ✅", `${canonicalName} x${parsed.amount}`, "ok", true, false);
+  } catch (e) {
+    addFeed(`Manual submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
+    showEvent("Manual submit failed ❌", `${canonicalName}: ${e.message}`, "bad", true, false);
+  } finally {
+    try { ui.btnManualSubmit && (ui.btnManualSubmit.disabled = false); } catch(e){}
+  }
+  return;
+}
+
 
     let lines = [];
     try {
@@ -1944,4 +2086,3 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-
