@@ -158,16 +158,8 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 .eventLine:hover{ transform: translateY(-1px); }
 
 /* Manual submit hint */
-
-.manualSubmitBlock{
-  margin: 6px 2px 10px;
-  display:flex;
-  flex-direction:column;
-  gap:6px;
-}
-#btnManualSubmit{
-  width:100%;
-}
+.manualSubmitBlock{margin-top:10px; margin-bottom:10px;}
+.manualSubmitBlock .btn{margin-bottom:8px;}
 .manualHint{
   margin: 6px 2px 8px;
   font-size: 12px;
