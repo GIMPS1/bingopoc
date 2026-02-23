@@ -1684,18 +1684,7 @@ function stitchChatMessages(lines) {
     } catch(e) {}
   }
 
-  // --- Dev: mock drop ---
-  function addMockDrop() {
-    const picks = [
-      ["Magic logs", 71],
-      ["Ahrim's hood", 1],
-      ["Onyx", 2],
-      ["Rune bar", 50],
-      ["Hydrix bolt tips", 25]
-    ];
-    const [name, amt] = picks[Math.floor(Math.random() * picks.length)];
-    addFeed(`Mock Drop: ${name} x${amt}`, "ok");
-    
+
   // ---------- Manual loot/tooltip scan (under-mouse) ----------
   // Usage (console): IRB.manualLootScan()
   // Hover the loot icon so the tooltip is visible, then run the command.
