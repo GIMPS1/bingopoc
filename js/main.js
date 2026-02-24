@@ -503,6 +503,10 @@
     acceptScore: 0.86 // minimum correlation to accept
   };
 
+  // Debug: set true to log icon matching details on every Alt+1
+  const DEBUG_ICON_MATCH = true;
+
+
   function __getImgProps(img) {
     if (!img) return null;
     const data = img.data || img.imgdata || img.pixels;
@@ -546,6 +550,31 @@ function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
     }
   }
   return out;
+}
+
+
+function __debugGrayToDataURL(gray, size) {
+  // gray: Uint8Array length size*size
+  try {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+    const img = ctx.createImageData(size, size);
+    const d = img.data;
+    let k = 0;
+    for (let i = 0; i < gray.length; i++) {
+      const v = gray[i] | 0;
+      d[k++] = v;
+      d[k++] = v;
+      d[k++] = v;
+      d[k++] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL("image/png");
+  } catch (e) {
+    return null;
+  }
 }
 
   function __centerAndInvStd(gray) {
@@ -813,14 +842,31 @@ function matchIconFromSelection(selection, templates) {
   const candFeat = __centerAndInvStd(gray);
 
   let best = null;
+
+  // Debug: collect top scores (small template count, so OK)
+  const scored = (DEBUG_ICON_MATCH ? [] : null);
+
   for (let i = 0; i < templates.length; i++) {
     const t = templates[i];
     if (!t || !t._feat) continue;
     const score = __znccScore(t._feat, candFeat);
     if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+    if (scored) scored.push({ name: t.name, score });
   }
+
   if (!best) return null;
-  return (best.score >= ICON_MATCH.acceptScore) ? best : best;
+
+  if (DEBUG_ICON_MATCH) {
+    try {
+      scored.sort((a, b) => b.score - a.score);
+      const top = scored.slice(0, 10);
+      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
+      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
+      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
+    } catch (e) {}
+  }
+
+  return best;
 }
 
 async function manualSubmitFlow() {
