@@ -5,7 +5,7 @@
    - Avoids resolving canonical name twice (resolve ONLY in poll; submitDrop trusts input)
    - Fixes duplicate team_number mapping
 */
-(function () {
+(async function () {
 
   console.log("IRB v2026-02-20-premium-select FIXED ✅");
   const $ = (id) => document.getElementById(id);
@@ -41,6 +41,14 @@
     summaryMeta: $("summaryMeta"),
     btnOpenSettings2: $("btnOpenSettings2"),
 
+    // Drop history
+    toggleHistory: $("toggleHistory"),
+    historyBody: $("historyBody"),
+    historyList: $("historyList"),
+    historyMeta: $("historyMeta"),
+    historyHint: $("historyHint"),
+    btnRefreshHistory: $("btnRefreshHistory"),
+
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
@@ -60,6 +68,8 @@
     btnRecalibrate: $("btnRecalibrate"),
     optAutoDetect: $("optAutoDetect"),
     optHighlight: $("optHighlight"),
+    optStrictDrops: $("optStrictDrops"),
+    optUseWikiCanonical: $("optUseWikiCanonical"),
     btnUnlockChat: $("btnUnlockChat"),
 
     // Runtime// Feed
@@ -70,7 +80,7 @@
     eventLine: $("eventLine"),
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
-  };
+};
 
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
@@ -101,6 +111,7 @@
     ignLocked: "irb.ignLocked",
     chatPos: "irb.chatPos",
     settings: "irb.settings",
+    historyOpen: "irb.historyOpen",
   };
 
   // API base is locked (hidden in UI)
@@ -113,6 +124,8 @@
     return {
       autoDetect: s.autoDetect !== false,
       highlight: s.highlight === true,
+      strictDrops: s.strictDrops !== false,
+      useWikiCanonical: s.useWikiCanonical !== false,
     };
   }
   function saveSettings(patch) {
@@ -220,6 +233,898 @@
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
+  function getMousePos() {
+    try {
+      if (window.A1lib && typeof A1lib.mousePosition === "function") {
+        return A1lib.mousePosition();
+      }
+    } catch (e) {}
+
+    try {
+      const packed = alt1 && alt1.mousePosition;
+      if (typeof packed === "number") {
+        return { x: (packed >> 16), y: (packed & 0xFFFF) };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  // ---------- manual submit selection overlay (OCR-only) ----------
+
+  function __getImgProps(img) {
+      if (!img) return null;
+      const data = img.data || img.imgdata || img.pixels;
+      const width = img.width || img.w;
+      const height = img.height || img.h;
+      if (!data || !width || !height) return null;
+      return { data, width, height };
+    }
+
+  function __createOverlay() {
+    const overlay = document.createElement("div");
+    overlay.id = "irbSelectOverlay";
+    overlay.style.position = "fixed";
+    overlay.style.left = "0";
+    overlay.style.top = "0";
+    overlay.style.right = "0";
+    overlay.style.bottom = "0";
+    overlay.style.zIndex = "2147483647";
+    overlay.style.background = "rgba(0,0,0,0.35)";
+    overlay.style.cursor = "crosshair";
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+
+    const wrap = document.createElement("div");
+    wrap.style.position = "relative";
+    wrap.style.boxShadow = "0 8px 30px rgba(0,0,0,0.6)";
+    wrap.style.border = "1px solid rgba(255,255,255,0.15)";
+    wrap.style.background = "rgba(0,0,0,0.35)";
+
+    const canvas = document.createElement("canvas");
+    canvas.id = "irbSelectCanvas";
+    canvas.style.display = "block";
+
+    const label = document.createElement("div");
+    label.style.position = "absolute";
+    label.style.left = "0";
+    label.style.top = "0";
+    label.style.right = "0";
+    label.style.padding = "8px 10px";
+    label.style.font = "12px/1.2 sans-serif";
+    label.style.color = "rgba(255,255,255,0.92)";
+    label.style.background = "linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0))";
+    label.textContent = "Drag a box tightly around the item icon (Esc to cancel)";
+
+    wrap.appendChild(canvas);
+    wrap.appendChild(label);
+    overlay.appendChild(wrap);
+
+    document.body.appendChild(overlay);
+    return { overlay, canvas, wrap };
+  }
+
+  function __drawSelection(ctx, x0, y0, x1, y1, zoom) {
+    const z = (zoom && zoom > 0) ? zoom : 1;
+
+    // draw in zoomed canvas space
+    const zx0 = x0 * z, zy0 = y0 * z, zx1 = x1 * z, zy1 = y1 * z;
+    const x = Math.min(zx0, zx1);
+    const y = Math.min(zy0, zy1);
+    const w = Math.abs(zx1 - zx0);
+    const h = Math.abs(zy1 - zy0);
+
+    // Darken outside selection
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.clearRect(x, y, w, h);
+
+    // Border
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+    ctx.restore();
+  }
+
+  function __snapRectToIcon(cap, rect) {
+    // Best-effort snap: find non-background pixels inside the rough rect and tighten bounds.
+    // If detection fails, returns the original rect.
+    try {
+      const data = cap.data;
+      const W = cap.width, H = cap.height;
+
+      let x0 = rect.x | 0, y0 = rect.y | 0, x1 = (rect.x + rect.w) | 0, y1 = (rect.y + rect.h) | 0;
+      x0 = Math.max(0, Math.min(W - 1, x0));
+      y0 = Math.max(0, Math.min(H - 1, y0));
+      x1 = Math.max(0, Math.min(W, x1));
+      y1 = Math.max(0, Math.min(H, y1));
+      if (x1 <= x0 + 1 || y1 <= y0 + 1) return rect;
+
+      function pix(x, y) {
+        const i = ((y * W + x) << 2) | 0;
+        return [data[i] | 0, data[i + 1] | 0, data[i + 2] | 0];
+      }
+
+      // Sample BG from the 4 corners (inside the rect)
+      const c1 = pix(x0, y0), c2 = pix(x1 - 1, y0), c3 = pix(x0, y1 - 1), c4 = pix(x1 - 1, y1 - 1);
+      const bg = [
+        ((c1[0] + c2[0] + c3[0] + c4[0]) >> 2) | 0,
+        ((c1[1] + c2[1] + c3[1] + c4[1]) >> 2) | 0,
+        ((c1[2] + c2[2] + c3[2] + c4[2]) >> 2) | 0
+      ];
+
+      const TH = 28; // sensitivity: higher => less snapping (safer)
+      let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+
+      for (let y = y0; y < y1; y++) {
+        let row = ((y * W) << 2) | 0;
+        for (let x = x0; x < x1; x++) {
+          const i = row + ((x << 2) | 0);
+          const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+          const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
+          if (d > TH) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      if (maxX < 0) return rect;
+
+      const M = 2; // margin
+      minX = Math.max(0, (minX - M) | 0);
+      minY = Math.max(0, (minY - M) | 0);
+      maxX = Math.min(W - 1, (maxX + M) | 0);
+      maxY = Math.min(H - 1, (maxY + M) | 0);
+
+      const w = (maxX - minX + 1) | 0;
+      const h = (maxY - minY + 1) | 0;
+      if (w < 20 || h < 20) return rect; // don't snap to tiny noise
+
+      return { x: minX, y: minY, w, h };
+    } catch (e) {
+      return rect;
+    }
+  }
+
+  async function __selectIconRegionAroundMouse(captureSize) {
+    if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+    const pos = getMousePos();
+    const mx = pos ? pos.x : 0;
+    const my = pos ? pos.y : 0;
+
+    const capW = captureSize | 0, capH = captureSize | 0;
+    const rx = Math.max(0, mx - (capW >> 1));
+    const ry = Math.max(0, my - (capH >> 1));
+
+    let capImg = null;
+    try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+    if (!capImg) return null;
+
+    const cap = __getImgProps(capImg);
+    if (!cap) return null;
+
+    // ---- Zoomed selection UI ----
+    // Makes it much easier to draw a tight box.
+    const ZOOM = 2; // zoomed out a bit (was 3)
+
+    const { overlay, canvas } = __createOverlay();
+    canvas.width = cap.width * ZOOM;
+    canvas.height = cap.height * ZOOM;
+
+    const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
+
+    // Render capture scaled up (nearest-neighbor)
+    ctx.imageSmoothingEnabled = false;
+
+    const off = document.createElement("canvas");
+    off.width = cap.width;
+    off.height = cap.height;
+    const offCtx = off.getContext("2d", { alpha: true, willReadFrequently: true });
+
+    const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
+    offCtx.putImageData(idata, 0, 0);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(off, 0, 0, cap.width * ZOOM, cap.height * ZOOM);
+
+    let start = null;
+    let end = null;
+    let done = false;
+
+    function cleanup() {
+      if (done) return;
+      done = true;
+      try { overlay.remove(); } catch (e) {}
+      window.removeEventListener("keydown", onKey, true);
+    }
+
+    let resolve;
+
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        cleanup();
+        if (resolve) resolve(null);
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+
+    const prom = new Promise((r) => { resolve = r; });
+
+    const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    function redraw() {
+      ctx.putImageData(baseImage, 0, 0);
+      if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y, ZOOM);
+    }
+
+    function eventToCapXY(ev) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (ev.clientX - rect.left);
+      const my = (ev.clientY - rect.top);
+      const x = Math.max(0, Math.min(cap.width - 1, Math.round(mx / ZOOM)));
+      const y = Math.max(0, Math.min(cap.height - 1, Math.round(my / ZOOM)));
+      return { x, y };
+    }
+
+    canvas.addEventListener("mousedown", (ev) => {
+      start = eventToCapXY(ev);
+      end = { ...start };
+      redraw();
+    });
+
+    canvas.addEventListener("mousemove", (ev) => {
+      if (!start) return;
+      end = eventToCapXY(ev);
+      redraw();
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      if (!start || !end) return;
+
+      const x = Math.min(start.x, end.x);
+      const y = Math.min(start.y, end.y);
+      const w = Math.abs(end.x - start.x);
+      const h = Math.abs(end.y - start.y);
+
+      cleanup();
+
+      // Require a reasonable selection size
+      if (w < 20 || h < 20) return resolve(null);
+
+      const rough = { x, y, w, h };
+      const snapped = __snapRectToIcon(cap, rough);
+
+      resolve({ capImg, capProps: cap, rx, ry, rect: snapped });
+    });
+
+    return await prom;
+  }
+
+  // Expose selection helper for handlers defined outside this scope.
+  // (Alt1 right-click handler calls manualSubmitFlow from global scope.)
+  try { window.__selectIconRegionAroundMouse = __selectIconRegionAroundMouse; } catch (e) {}
+
+  
+
+
+
+  async function ocrRegionAroundMouse(size) {
+    if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
+    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    const pos = getMousePos();
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return { ok: false, reason: "Mouse position unavailable." };
+    }
+
+    const w = (size | 0), h = (size | 0);
+    const half = (w / 2) | 0;
+    const x = Math.max(0, (pos.x | 0) - half) | 0;
+    const y = Math.max(0, (pos.y | 0) - half) | 0;
+
+    let id;
+    try {
+      id = alt1.bindRegion(x, y, w, h);
+    } catch (e) {
+      return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) };
+    }
+
+    // Brute-force scan for tooltip text baseline; this is manual so a few thousand calls is acceptable.
+    const fonts = ["chat", "chatmono", "xpcounter"];
+    const argsBase = { allowgap: true };
+
+    // Optional: prefer bright tooltip-ish colors if mixcolor exists
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        argsBase.colors = [
+          A1lib.mixcolor(255,255,255), // white
+          A1lib.mixcolor(255,255,0),   // yellow
+          A1lib.mixcolor(255,200,80),  // gold-ish
+          A1lib.mixcolor(200,255,200)  // pale green
+        ];
+      }
+    } catch (e) {}
+
+    const found = [];
+    const seen = {};
+    const yStep = 2;
+    const xStep = 10;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
+
+      for (let yy = 0; yy < h; yy += yStep) {
+        for (let xx = 0; xx < w; xx += xStep) {
+          let s = "";
+          try {
+            s = alt1.bindReadStringEx(id, xx, yy, args) || "";
+          } catch (e) {
+            // If Ex fails, fallback to basic reader (much less flexible)
+            try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; }
+          }
+          s = String(s).trim();
+          if (!s) continue;
+
+          // De-dup
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          found.push(s);
+
+          // Early exit if we already see a likely tooltip/menu verb
+          if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(s)) {
+            // grab a few more lines around for context by continuing small amount, then stop
+          }
+          if (found.length >= 30) break;
+        }
+        if (found.length >= 30) break;
+      }
+      if (found.length) break;
+    }
+
+    const text = found.join("\n").trim();
+    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
+
+    return { ok: true, text: text, x: x, y: y, w: w, h: h };
+  }
+
+  function extractDropCandidatesFromOcr(text) {
+    const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+    if (!t) return [];
+
+    const out = [];
+    // Handle patterns like: "Take Uncut onyx", "Withdraw-All X", "Withdraw-1 X", etc.
+    const re1 = /\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\s+([A-Za-z0-9'’:\-(),. ]{2,80})/gi;
+    let m;
+    while ((m = re1.exec(t))) {
+      let name = (m[1] || "").trim();
+      name = name.replace(/\s+(?:x|\*)\s*\d+$/i, "").trim();
+      name = name.replace(/[\.,;:]+$/g, "").trim();
+      if (name && out.indexOf(name) === -1) out.push(name);
+    }
+    return out;
+  }
+
+  // ---------- Fast targeted tooltip OCR (manual submit) ----------
+  // Instead of brute-force scanning a huge region (which can freeze),
+  // we probe a few likely tooltip header areas near the selected icon and read only a handful of lines.
+  function __clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function __looksLikeActionLine(s) {
+    return /\b(?:take|withdraw|withdraw-all|withdraw-\d+|withdraw-x|open|search|claim|collect|pick up|loot)\b/i.test(s || "");
+  }
+
+  function __ocrReadLineBound(boundId, font, x, y, colors) {
+    let s = "";
+    try {
+      const args = JSON.stringify((function () {
+        var o = { fontname: font, allowgap: true };
+        try { if (colors && colors.length) o.colors = colors; } catch (e) {}
+        return o;
+      })());
+      s = alt1.bindReadStringEx(boundId, x, y, args) || "";
+    } catch (e) {
+      try { s = alt1.bindReadString(boundId, font, x, y) || ""; } catch (e2) { s = ""; }
+    }
+    return String(s || "").replace(/\u00A0/g, " ").trim();
+  }
+
+  function __ocrProbeRegion(x, y, w, h) {
+    if (!window.alt1 || !alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    x = Math.max(0, x | 0);
+    y = Math.max(0, y | 0);
+    w = Math.max(20, w | 0);
+    h = Math.max(20, h | 0);
+
+    let id;
+    try { id = alt1.bindRegion(x, y, w, h); }
+    catch (e) { return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) }; }
+
+    // Tooltip headers are usually bright (white/yellow). Constraining colors improves reads.
+    let colors = null;
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        colors = [
+          A1lib.mixcolor(255, 255, 255),
+          A1lib.mixcolor(255, 255, 0),
+          A1lib.mixcolor(255, 200, 80),
+          A1lib.mixcolor(200, 255, 200)
+        ];
+      }
+    } catch (e) {}
+
+    const fonts = ["chat", "small"]; // best for tooltip/menu text
+    const xs = [2, 12, 22];
+    const lines = [];
+    const seen = {};
+
+    // Scan only a handful of baselines (fast). Tooltips are left-aligned so x loop is tiny.
+    const yStep = 7;
+    const yMax = Math.min(h, 170);
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      for (let yy = 0; yy < yMax; yy += yStep) {
+        for (let xi = 0; xi < xs.length; xi++) {
+          const xx = xs[xi];
+          const s = __ocrReadLineBound(id, font, xx, yy, colors);
+          if (!s) continue;
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          lines.push(s);
+
+          // If we saw an action line, it's almost always the one we want, so stop early.
+          if (__looksLikeActionLine(s)) {
+            return { ok: true, text: lines.join("\n"), x, y, w, h };
+          }
+          if (lines.length >= 12) return { ok: true, text: lines.join("\n"), x, y, w, h };
+        }
+      }
+      if (lines.length) break;
+    }
+
+    if (!lines.length) return { ok: false, reason: "No text." };
+    return { ok: true, text: lines.join("\n"), x, y, w, h };
+  }
+
+  // Uses the manual selection to infer likely tooltip locations and OCR only those spots.
+  function ocrTooltipNearSelection(selection) {
+    if (!selection || !selection.rect) return { ok: false, reason: "No selection." };
+    const r = selection.rect;
+
+    // Screen coords of the selected icon center
+    const ix = (selection.rx + r.x + (r.w / 2)) | 0;
+    const iy = (selection.ry + r.y + (r.h / 2)) | 0;
+
+    // Probe rectangles (screen coords). These cover common RS tooltip placements.
+    const probes = [
+      { x: ix - 240, y: iy - 170, w: 480, h: 120 }, // above
+      { x: ix + 35,  y: iy - 120, w: 520, h: 150 }, // right
+      { x: ix - 555, y: iy - 120, w: 520, h: 150 }, // left
+      { x: ix - 240, y: iy + 40,  w: 520, h: 170 }  // below
+    ];
+
+    for (let i = 0; i < probes.length; i++) {
+      const p = probes[i];
+      const res = __ocrProbeRegion(p.x, p.y, p.w, p.h);
+      if (res && res.ok && res.text) return res;
+    }
+    return { ok: false, reason: "No tooltip text found near selection." };
+  }
+
+  // ---------- Manual submit OCR helpers (no icon matching) ----------
+  function __normalizeOcrText(text) {
+    return String(text || "")
+      .replace(/\u00A0/g, " ")
+      .split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function __majorityVote(list) {
+    const m = new Map();
+    for (const v of list) {
+      const k = String(v || "");
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    let best = "", bestN = -1;
+    for (const [k, n] of m.entries()) {
+      if (n > bestN) { bestN = n; best = k; }
+    }
+    return best;
+  }
+
+  async function ocrTooltipNearSelectionStable(selection, tries = 3, delayMs = 55) {
+    const reads = [];
+    for (let i = 0; i < tries; i++) {
+      const r = ocrTooltipNearSelection(selection);
+      if (r && r.ok && r.text) reads.push(__normalizeOcrText(r.text));
+      await new Promise(res => setTimeout(res, delayMs));
+    }
+    if (!reads.length) return { ok: false, reason: "No tooltip text found near selection." };
+
+    const voted = __majorityVote(reads);
+    if (voted) return { ok: true, text: voted };
+
+    reads.sort((a, b) => b.length - a.length);
+    return { ok: true, text: reads[0] };
+  }
+
+/* -----------------------------
+ * Manual-submit OCR fallback: Tesseract.js (WASM)
+ * - Only used for manual submits (chat OCR unchanged)
+ * - Loaded via <script> in index.html
+ * ----------------------------- */
+
+let __tess = { worker: null, ready: false, initPromise: null };
+
+async function __initTesseractOnce() {
+  if (__tess.ready) return true;
+  if (__tess.initPromise) return __tess.initPromise;
+  __tess.initPromise = (async () => {
+    if (typeof Tesseract === "undefined") {
+      console.warn("[TESS] Tesseract.js not loaded. Add tesseract.min.js in index.html.");
+      return false;
+    }
+    // Use CDN assets by default (keeps plugin zip small).
+    // If you prefer fully-offline, host these files locally and change the paths.
+    const worker = await Tesseract.createWorker({
+      workerPath: "https://unpkg.com/tesseract.js@5/dist/worker.min.js",
+      corePath: "https://unpkg.com/tesseract.js-core@5/tesseract-core.wasm.js",
+      langPath: "https://tessdata.projectnaptha.com/4.0.0",
+      logger: () => {}
+    });
+
+    await worker.loadLanguage("eng");
+    await worker.initialize("eng");
+
+    // Defaults tuned for short UI blocks (tooltips/menu)
+    await worker.setParameters({
+      preserve_interword_spaces: "1",
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
+    });
+
+    __tess.worker = worker;
+    __tess.ready = true;
+    return true;
+  })();
+  return __tess.initPromise;
+}
+
+function __imgRefToImageData(imgRef) {
+  // ImgRef-like objects from A1lib.capture expose {width,height,data}
+  try {
+    if (!imgRef || !imgRef.data || !imgRef.width || !imgRef.height) return null;
+    return new ImageData(new Uint8ClampedArray(imgRef.data), imgRef.width, imgRef.height);
+  } catch (e) {
+    return null;
+  }
+}
+
+function __preprocessToCanvasBW(imgData, scale, threshold) {
+  const srcW = imgData.width | 0, srcH = imgData.height | 0;
+  const s = Math.max(1, scale | 0);
+  const t = Math.max(0, Math.min(255, threshold | 0));
+
+  const tmp = document.createElement("canvas");
+  tmp.width = srcW;
+  tmp.height = srcH;
+  tmp.getContext("2d", { willReadFrequently: true }).putImageData(imgData, 0, 0);
+
+  const c = document.createElement("canvas");
+  c.width = srcW * s;
+  c.height = srcH * s;
+
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, c.width, c.height);
+
+  const d = ctx.getImageData(0, 0, c.width, c.height);
+  const p = d.data;
+
+  // Grayscale + hard threshold (fast + works well on RS tooltips)
+  for (let i = 0; i < p.length; i += 4) {
+    const r = p[i], g = p[i + 1], b = p[i + 2];
+    const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) | 0;
+    const v = lum >= t ? 255 : 0;
+    p[i] = p[i + 1] = p[i + 2] = v;
+    p[i + 3] = 255;
+  }
+  ctx.putImageData(d, 0, 0);
+  return c;
+}
+
+function __normalizeOcrText(t) {
+  return String(t || "")
+    .replace(/\u00A0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function __tesseractRecognizeImageData(imgData, opts) {
+  const ok = await __initTesseractOnce();
+  if (!ok || !__tess.worker) return { ok: false, reason: "Tesseract init failed." };
+
+  const scale = (opts && opts.scale) ? opts.scale : 2;
+  const threshold = (opts && opts.threshold) ? opts.threshold : 165;
+  const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_BLOCK;
+  const whitelist = (opts && opts.whitelist) ? opts.whitelist : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-., '";
+
+  try {
+    await __tess.worker.setParameters({
+      tessedit_pageseg_mode: psm,
+      tessedit_char_whitelist: whitelist
+    });
+
+    const canvas = __preprocessToCanvasBW(imgData, scale, threshold);
+    const res = await __tess.worker.recognize(canvas);
+    const text = __normalizeOcrText(res && res.data ? res.data.text : "");
+    return text ? { ok: true, text } : { ok: false, reason: "No text." };
+  } catch (e) {
+    return { ok: false, reason: "Tesseract error: " + (e && e.message ? e.message : String(e)) };
+  }
+}
+
+function __padRect(r, pad) {
+  const p = Math.max(0, pad | 0);
+  const x = Math.max(0, (r.x - p) | 0);
+  const y = Math.max(0, (r.y - p) | 0);
+  const w = Math.max(20, (r.w + (2 * p)) | 0);
+  const h = Math.max(20, (r.h + (2 * p)) | 0);
+  return { x, y, w, h };
+}
+
+async function ocrTooltipNearSelectionTesseract(selection) {
+  if (!selection || !selection.rect) return { ok: false, reason: "No selection." };
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return { ok: false, reason: "A1lib.capture unavailable." };
+
+  const r = selection.rect;
+  const ix = (selection.rx + r.x + (r.w / 2)) | 0;
+  const iy = (selection.ry + r.y + (r.h / 2)) | 0;
+
+  // Same probe strategy as fast OCR, but we capture pixels and run Tesseract.
+  const probes = [
+    { x: ix - 240, y: iy - 170, w: 480, h: 120 }, // above
+    { x: ix + 35,  y: iy - 120, w: 520, h: 150 }, // right
+    { x: ix - 555, y: iy - 120, w: 520, h: 150 }, // left
+    { x: ix - 260, y: iy + 30,  w: 520, h: 150 }, // below
+  ];
+
+  // "Zoom out" a bit for manual debug/robustness by padding the captured region.
+  const PAD = 36;
+
+  const reads = [];
+  for (let pi = 0; pi < probes.length; pi++) {
+    const pr = __padRect(probes[pi], PAD);
+
+    let imgRef = null;
+    try { imgRef = A1lib.capture(pr.x, pr.y, pr.w, pr.h); } catch (e) {}
+    if (!imgRef) continue;
+
+    const imgData = __imgRefToImageData(imgRef);
+    if (!imgData) continue;
+
+    // Try two quick parameter sets; pick best text.
+    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 2, threshold: 165, psm: Tesseract.PSM.SINGLE_BLOCK });
+    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 3, threshold: 155, psm: Tesseract.PSM.SINGLE_BLOCK });
+
+    if (r2 && r2.ok && r2.text) {
+      reads.push(r2.text);
+      // If we already see an action verb, stop early.
+      if (/\b(Take|Open|Search|Claim|Collect|Withdraw|Pick up|Loot)\b/i.test(r2.text)) break;
+    }
+  }
+
+  if (!reads.length) return { ok: false, reason: "No text found (tesseract)." };
+
+  // Prefer the longest (most complete) read.
+  reads.sort((a, b) => (b ? b.length : 0) - (a ? a.length : 0));
+  return { ok: true, text: reads[0] };
+}
+
+  function getQtyFromSelectionOrOcr(selection, ocrText) {
+    // Prefer reading the stack quantity directly from the selected icon.
+    try {
+      if (selection && selection.rect) {
+        const rsX = (selection.rx + selection.rect.x) | 0;
+        const rsY = (selection.ry + selection.rect.y) | 0;
+        const q = readStackQtyAt(rsX, rsY);
+        if (isFinite(q) && q > 0) return q;
+      }
+    } catch (e) {}
+
+    // Fallback: parse quantity markers in text (e.g. x12, (x 12), * 12).
+    try {
+      const t = String(ocrText || "");
+      const m = t.match(/(?:\bx\s*|\(\s*x\s*|\*\s*)(\d[\d,]*)\b/i);
+      if (m) {
+        const n = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+        if (isFinite(n) && n > 0) return n;
+      }
+    } catch (e) {}
+
+    return 1;
+  }
+
+
+
+  
+  function normalizeAlt1OcrResult(val) {
+    if (val == null) return "";
+    if (typeof val === "string") {
+      const s = val.trim();
+      if (!s) return "";
+      if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+        try {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        } catch (e) {}
+      }
+      return s;
+    }
+    if (typeof val === "object") {
+      if (typeof val.text === "string") return val.text.trim();
+      try {
+        const s = String(val);
+        if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        }
+      } catch (e) {}
+    }
+    return String(val).trim();
+  }
+
+  function readStackQtyAt(rsX, rsY) {
+    if (!window.alt1 || !alt1.permissionPixel) return 1;
+    // tight region: top-left corner digits
+    const w = 26, h = 18;
+    const bid = alt1.bindRegion(rsX, rsY, w, h);
+    if (!bid) return 1;
+
+    const optsSmall = JSON.stringify({ fontname: "small", allowgap: true });
+    const optsChat = JSON.stringify({ fontname: "chat", allowgap: true });
+
+    const yOffsets = [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < yOffsets.length; i++) {
+      const y = yOffsets[i];
+      let res = "";
+      try { res = alt1.bindReadStringEx(bid, 0, y, optsSmall); } catch (e) {}
+      let txt = normalizeAlt1OcrResult(res);
+      if (!txt) {
+        try { res = alt1.bindReadStringEx(bid, 0, y, optsChat); } catch (e) {}
+        txt = normalizeAlt1OcrResult(res);
+      }
+      const m = (txt || "").match(/\d[\d,]*/);
+      if (m) {
+        const n = parseInt(m[0].replace(/,/g, ""), 10);
+        if (isFinite(n) && n > 0) return n;
+      }
+    }
+    return 1;
+  }
+
+  
+  
+
+
+async function manualSubmitFlow() {
+  if (!isSetupReady()) {
+    showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
+    return;
+  }
+
+  // User hovers the item so the tooltip/menu appears, then draws a box around the icon.
+  showEvent("Manual submit", "Hover the item (tooltip visible), then draw a box around its icon…", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
+
+  // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
+  const selectionFn = (window && window.__selectIconRegionAroundMouse) ? window.__selectIconRegionAroundMouse : null;
+  const selection = selectionFn ? await selectionFn(700) : null;
+  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+
+  if (!selection) {
+    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+    return;
+  }
+
+  // ---- Manual submit OCR (fast OCR first, Tesseract fallback) ----
+  // 1) Fast: Alt1 tooltip OCR sampled multiple frames and voted.
+  let ocr = await ocrTooltipNearSelectionStable(selection, 3, 55);
+
+  // 2) Fallback: Tesseract.js (WASM) for tougher tooltips/menus.
+  if (!ocr || !ocr.ok || !ocr.text || String(ocr.text).trim().length < 3) {
+    try { ocr = await ocrTooltipNearSelectionTesseract(selection); } catch (e) {}
+  }
+
+  if (!ocr || !ocr.ok || !ocr.text) {
+    showEvent(
+      "Manual submit",
+      "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
+      "warn",
+      true,
+      true
+    );
+    return;
+  }
+
+  const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
+  const cands = extractDropCandidatesFromOcr(ocr.text);
+
+  // Fallback: sometimes OCR gives just the title line without the verb; try first line.
+  if (!cands.length) {
+    const first = String(ocr.text).split(/?
+/).map(s => s.trim()).filter(Boolean)[0] || "";
+    if (first) cands.push(first);
+  }
+
+  // If we still have no candidates, try Tesseract once more (different OCR output can parse differently).
+  if (!cands.length) {
+    try {
+      const o2 = await ocrTooltipNearSelectionTesseract(selection);
+      if (o2 && o2.ok && o2.text) {
+        ocr = o2;
+        const c2 = extractDropCandidatesFromOcr(ocr.text);
+        if (c2 && c2.length) cands.push(...c2);
+        if (!cands.length) {
+          const f2 = String(ocr.text).split(/?
+/).map(s => s.trim()).filter(Boolean)[0] || "";
+          if (f2) cands.push(f2);
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!cands.length) {
+    showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
+    try { console.log("[MANUAL OCR] Raw OCR text:", ocr.text); } catch (e) {}
+    return;
+  }
+
+  // Try candidates in order until one validates.
+  for (let i = 0; i < Math.min(4, cands.length); i++) {
+    const raw = String(cands[i] || "").trim();
+    if (!raw) continue;
+
+    let v = validateDropName(raw);
+    let chosen = (v && v.valid) ? (v.canonical || raw) : null;
+
+    // If allowlist uses canonical wiki title, try resolving canonical once.
+    if (!chosen) {
+      try {
+        const canon = await resolveCanonicalName(raw);
+        v = validateDropName(canon);
+        chosen = (v && v.valid) ? (v.canonical || canon) : null;
+      } catch (e) {}
+    }
+
+    if (chosen) {
+      showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+      try {
+        await submitDrop({ drop_name: chosen, amount: String(qty) });
+        showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+        playOk();
+        return;
+      } catch (e) {
+        showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+        return;
+      }
+    }
+  }
+
+  showEvent("Manual submit", `OCR read "${cands[0]}", but it isn't in the allowlist.`, "warn", true, true);
+}
+
+
+
   function setPill(pill, label, state) {
     if (!pill) return;
     pill.textContent = label;
@@ -250,6 +1155,7 @@
   function renderSetupLockedUI(locked) {
     setVisible(ui.setupBlock, !locked);
     setVisible(ui.setupSummary, locked);
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
@@ -379,11 +1285,188 @@
   let settings = loadSettings();
   if (ui.optAutoDetect) ui.optAutoDetect.checked = settings.autoDetect;
   if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
+  if (ui.optStrictDrops) ui.optStrictDrops.checked = settings.strictDrops;
+  if (ui.optUseWikiCanonical) ui.optUseWikiCanonical.checked = settings.useWikiCanonical;
 
   // ---------- Premium Selects (Bingo + Team) ----------
   let _bingosCache = [];
   let _selectedBingo = null;
-  let _selectedTeam = null;
+  let _selectedTeam = null
+
+// ---------- Drop history panel ----------
+let historyLoadedOnce = false;
+let historyLoading = false;
+
+function setHistoryOpen(isOpen) {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+  ui.toggleHistory.checked = !!isOpen;
+  ui.historyBody.classList.toggle("open", !!isOpen);
+  ui.historyBody.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  const lbl = document.querySelector("#historyPanel .switchLabel");
+  if (lbl) lbl.textContent = isOpen ? "Hide" : "Show";
+  try { localStorage.setItem(LS.historyOpen, isOpen ? "1" : "0"); } catch(e) {}
+}
+
+function getHistoryContext() {
+  const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+  const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+  const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  return { bingoId, team_number, ign };
+}
+
+function normalizeHistoryPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.rows)) return payload.rows;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.history && Array.isArray(payload.history)) return payload.history;
+  return [];
+}
+
+function fmtWhen(ts) {
+  try {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString();
+  } catch(e) { return String(ts || "—"); }
+}
+
+function renderHistory(items) {
+  if (!ui.historyList) return;
+  ui.historyList.innerHTML = "";
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) {
+    const div = document.createElement("div");
+    div.className = "historyEmpty";
+    div.textContent = "No drops found.";
+    ui.historyList.appendChild(div);
+    return;
+  }
+
+  const base = getApiBase();
+
+  for (const it of arr) {
+    const name = (it.drop_name || it.drop || it.name || it.item || "").toString();
+    const amt = (it.amount ?? it.qty ?? it.count ?? "").toString();
+    const when = fmtWhen(it.ts_iso || it.ts || it.created_at || it.time);
+
+    const row = document.createElement("div");
+    row.className = "historyItem";
+
+    // icon (RuneScape Wiki proxy)
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "historyIcon";
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = `${base}/wiki/icon?item=${encodeURIComponent(name || "")}&size=52`;
+    img.onerror = () => { iconWrap.style.display = "none"; };
+    iconWrap.appendChild(img);
+
+    const left = document.createElement("div");
+    left.className = "historyLeft";
+
+    const nm = document.createElement("div");
+    nm.className = "historyName";
+    nm.textContent = name || "(unknown drop)";
+
+    const sub = document.createElement("div");
+    sub.className = "historySub";
+    sub.textContent = when;
+
+    left.appendChild(nm);
+    left.appendChild(sub);
+
+    const right = document.createElement("div");
+    right.className = "historyAmt";
+    right.textContent = amt ? `x${amt}` : "";
+
+    row.appendChild(iconWrap);
+    row.appendChild(left);
+    row.appendChild(right);
+
+    ui.historyList.appendChild(row);
+  }
+}
+
+async function fetchDropHistoryFromApi() {
+  const base = getApiBase();
+  const { bingoId, team_number, ign } = getHistoryContext();
+
+  if (!bingoId || !team_number || !ign) {
+    throw new Error("Complete setup (IGN + Bingo + Team) to view history.");
+  }
+
+  // Confirmed admin endpoint used by the web admin UI.
+  const url = `${base}/b/${bingoId}/api/admin/recent-drops`;
+
+  const r = await fetch(url, { method: "GET", cache: "no-store", credentials: "omit" });
+  if (!r.ok) throw new Error(`HTTP ${r.status} loading drop history`);
+
+  const payload = await r.json();
+  const all = normalizeHistoryPayload(payload);
+
+  const ignKey = String(ign).trim().toLowerCase();
+  const teamKey = String(team_number).trim();
+
+  // Filter to the user's selected team + IGN from setup.
+  const filtered = (Array.isArray(all) ? all : []).filter(x => {
+    const t = String(x?.team_id ?? x?.team_number ?? "").trim();
+    const i = String(x?.ign ?? "").trim().toLowerCase();
+    return t === teamKey && i === ignKey;
+  });
+
+  // Sort newest first if timestamps exist
+  filtered.sort((a, b) => {
+    const ta = new Date(a?.ts_iso || a?.ts || a?.timestamp || 0).getTime();
+    const tb = new Date(b?.ts_iso || b?.ts || b?.timestamp || 0).getTime();
+    return (tb || 0) - (ta || 0);
+  });
+
+  return filtered;
+}
+
+async function loadHistory() {
+  if (!ui.historyMeta || !ui.historyList) return;
+  if (historyLoading) return;
+  historyLoading = true;
+
+  ui.historyMeta.textContent = "Loading…";
+  renderHistory([]);
+
+  try {
+    const items = await fetchDropHistoryFromApi();
+    renderHistory(items);
+    ui.historyMeta.textContent = `${items.length} drop(s)`;
+    historyLoadedOnce = true;
+  } catch (e) {
+    ui.historyMeta.textContent = "Failed";
+    ui.historyList.innerHTML = `<div class="historyEmpty">${escapeHtml(e.message || "Unable to load history.")}</div>`;
+  } finally {
+    historyLoading = false;
+  }
+}
+
+function initHistoryPanel() {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+
+  const open = (localStorage.getItem(LS.historyOpen) || "0") === "1";
+  setHistoryOpen(open);
+
+  ui.toggleHistory.addEventListener("change", () => {
+    const isOpen = !!ui.toggleHistory.checked;
+    setHistoryOpen(isOpen);
+    if (isOpen && !historyLoadedOnce) loadHistory();
+  });
+
+  if (ui.btnRefreshHistory) {
+    ui.btnRefreshHistory.addEventListener("click", () => loadHistory());
+  }
+}
+
+;
 
   function pselectOpen(wrap, open) {
     if (!wrap) return;
@@ -631,7 +1714,64 @@
     }
   }
 
-  // ---------- canonical name resolver ----------
+  
+  // ---------- allowlist (strict validation) ----------
+  let allowlist = { strict: true, drops: [] };
+  const canonicalMap = new Map();
+
+  function normalizeDropName(name) {
+    if (!name) return "";
+    return String(name)
+      .replace(/[’]/g, "'")
+      .trim()
+      .replace(/^[Aa]n?\s+/, "") // leading 'a' / 'an'
+      .replace(/\s+/g, " ")
+      .replace(/[.,;:]+$/g, "")
+      .toLowerCase();
+  }
+
+  function buildCanonicalMap(dropList) {
+    canonicalMap.clear();
+    for (const item of (dropList || [])) {
+      const canon = String(item || "").trim();
+      if (!canon) continue;
+      const n = normalizeDropName(canon);
+      if (!n) continue;
+      canonicalMap.set(n, canon);
+
+      // Safe apostrophe-less variant (Archers ring -> Archers' Ring etc.)
+      const noApos = n.replace(/'/g, "");
+      if (!canonicalMap.has(noApos)) canonicalMap.set(noApos, canon);
+    }
+  }
+
+  function validateDropName(inputName) {
+    const n = normalizeDropName(inputName);
+    if (!n) return { valid: false };
+    const canon = canonicalMap.get(n) || canonicalMap.get(n.replace(/'/g, ""));
+    if (canon) return { valid: true, canonical: canon };
+    return { valid: false };
+  }
+
+  async function loadAllowlistFile() {
+    try {
+      const res = await fetch("./drops_allowlist.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(`allowlist ${res.status}`);
+      const data = await res.json();
+      allowlist = {
+        strict: data && data.strict !== false,
+        drops: Array.isArray(data && data.drops) ? data.drops : [],
+      };
+      buildCanonicalMap(allowlist.drops);
+      addFeed(`Allowlist loaded (${allowlist.drops.length} items)`, "ok");
+    } catch (e) {
+      allowlist = { strict: true, drops: [] };
+      canonicalMap.clear();
+      addFeed("Allowlist not loaded (drops_allowlist.json missing/invalid). Strict validation will be ineffective until provided.", "warn");
+    }
+  }
+
+// ---------- canonical name resolver ----------
   const canonicalCache = new Map();
   async function resolveCanonicalName(rawName) {
     const base = getApiBase();
@@ -735,7 +1875,7 @@
 
   function detectHasTimestamps(lines) {
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
-      const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
+      const raw = lineToText(lines[i]);
       if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
     }
     return false;
@@ -750,8 +1890,31 @@
     return false;
   }
 
-  function stitchChatMessages(lines) {
-    const rawLines = (lines || []).map(l => (l && l.text) ? String(l.text) : String(l || "")).filter(Boolean);
+  
+  function toPlainText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(toPlainText).join("");
+    if (typeof v === "object") {
+      if (typeof v.text === "string") return v.text;
+      if (typeof v.value === "string") return v.value;
+      if (Array.isArray(v.fragments)) return v.fragments.map(toPlainText).join("");
+      if (Array.isArray(v.parts)) return v.parts.map(toPlainText).join("");
+      return "";
+    }
+    return String(v);
+  }
+  function lineToText(line) {
+    if (typeof line === "string") return line;
+    if (line && typeof line === "object") {
+      if (typeof line.text === "string") return line.text;
+      return toPlainText(line.text);
+    }
+    return toPlainText(line);
+  }
+
+function stitchChatMessages(lines) {
+    const rawLines = (lines || []).map(lineToText).filter(Boolean);
     const hasTs = detectHasTimestamps(lines || []);
     const out = [];
 
@@ -786,186 +1949,28 @@
     return { messages: out, rawCount: rawLines.length, stitchedCount: out.length, hasTimestamps: hasTs };
   }
 
-  // Duplicate protection
-  const recentKeys = [];
-  const recentSet = new Set();
-  function rememberKey(k) {
-    recentKeys.push(k);
-    recentSet.add(k);
-    while (recentKeys.length > 80) {
-      const old = recentKeys.shift();
-      recentSet.delete(old);
+  // Duplicate protection (centralised + time-based)
+  const recentDrops = new Map(); // key -> lastSeenMs
+  function seenRecently(key, windowMs = 8000) {
+    const now = Date.now();
+    const last = recentDrops.get(key) || 0;
+    if (now - last < windowMs) return true;
+    recentDrops.set(key, now);
+
+    // lightweight cleanup to avoid unbounded growth
+    if (recentDrops.size > 250) {
+      for (const [k, ts] of recentDrops) {
+        if (now - ts > windowMs * 4) recentDrops.delete(k);
+      }
+      // still too big? drop oldest-ish by iter order
+      while (recentDrops.size > 200) {
+        const firstKey = recentDrops.keys().next().value;
+        recentDrops.delete(firstKey);
+      }
     }
-  }
-
-  // ---------- multi-frame stabilisation (adaptive, lightweight) ----------
-  // Goal: reduce OCR flicker / one-frame garbage reads without slowing normal operation.
-  // Strategy:
-  // - Compute a per-frame confidence estimate from chatReader.read() output (best-effort).
-  // - Require 1/2/3 consecutive frame hits depending on confidence.
-  // - Only enqueue a drop once it is "stable" across frames.
-  const __stab = {
-    frameId: 0,
-    // key -> { lastFrame, streak, lastAcceptedFrame }
-    map: new Map(),
-    // keep small to avoid perf impact
-    maxEntries: 220,
-    pruneAfterFrames: 12,
-  };
-
-  function __normKey(name, amt) {
-    const n = String(name || "")
-      .replace(/[\u00A0\s]+/g, " ")
-      .replace(/[\.,;:]+$/g, "")
-      .trim()
-      .toLowerCase();
-    const a = String(amt || "").trim();
-    return `${n}||${a}`;
-  }
-
-  function __getLineConf(line) {
-    // Alt1 Chatbox line objects sometimes carry confidence/score fields; fall back to 0.
-    const v =
-      (line && typeof line.confidence === "number" ? line.confidence :
-      (line && typeof line.conf === "number" ? line.conf :
-      (line && typeof line.score === "number" ? line.score :
-      (line && typeof line.confPct === "number" ? line.confPct : null))));
-    if (v === null || v === undefined) return null;
-    // Accept either 0..1 or 0..100
-    const n = v > 1 ? (v / 100) : v;
-    if (!isFinite(n)) return null;
-    return Math.max(0, Math.min(1, n));
-  }
-
-  function __estimateFrameConf(lines, stitched) {
-    // Best-effort. If no numeric confidence is present, infer from structure:
-    // timestamps present + reasonable line count => higher confidence.
-    const vals = [];
-    for (let i = 0; i < Math.min(lines.length, 30); i++) {
-      const c = __getLineConf(lines[i]);
-      if (typeof c === "number") vals.push(c);
-    }
-    if (vals.length) {
-      // Use a robust-ish central tendency (median) to avoid spikes.
-      vals.sort((a,b) => a-b);
-      return vals[Math.floor(vals.length / 2)];
-    }
-
-    // Heuristics if confidence isn't provided
-    const hasTs = !!(stitched && stitched.hasTimestamps);
-    const rawCount = stitched && typeof stitched.rawCount === "number" ? stitched.rawCount : (lines ? lines.length : 0);
-    if (hasTs && rawCount >= 6) return 0.88;
-    if (hasTs) return 0.80;
-    if (rawCount >= 8) return 0.78;
-    if (rawCount >= 4) return 0.70;
-    return 0.62;
-  }
-
-  function __requiredHits(conf) {
-    // Adaptive thresholds: high confidence -> 1 frame, medium -> 2, low -> 3.
-    if (conf >= 0.88) return 1;
-    if (conf >= 0.72) return 2;
-    return 3;
-  }
-
-  function __stabPrune() {
-    // prune old entries occasionally
-    if (__stab.map.size <= __stab.maxEntries) return;
-    const cutoff = __stab.frameId - __stab.pruneAfterFrames;
-    for (const [k, v] of __stab.map.entries()) {
-      if (!v || (v.lastFrame || 0) < cutoff) __stab.map.delete(k);
-    }
-    // still too big? delete oldest-ish by lastFrame
-    if (__stab.map.size > __stab.maxEntries) {
-      const arr = [];
-      for (const [k, v] of __stab.map.entries()) arr.push([k, v.lastFrame || 0]);
-      arr.sort((a,b) => a[1]-b[1]);
-      const toDrop = __stab.map.size - __stab.maxEntries;
-      for (let i = 0; i < toDrop; i++) __stab.map.delete(arr[i][0]);
-    }
-  }
-
-  function __stabNextFrame() {
-    __stab.frameId++;
-  }
-
-  function __stabShouldAccept(rawName, amt, frameConf) {
-    const need = __requiredHits(frameConf);
-
-    const key = __normKey(rawName, amt);
-    if (!key || key === "||") return false;
-
-    const prev = __stab.map.get(key) || { lastFrame: 0, streak: 0, lastAcceptedFrame: 0 };
-
-    // Update consecutive streak (same key must appear in consecutive frames)
-    if (prev.lastFrame === __stab.frameId - 1) prev.streak += 1;
-    else prev.streak = 1;
-
-    prev.lastFrame = __stab.frameId;
-    __stab.map.set(key, prev);
-
-    // Avoid immediately re-accepting the same key across adjacent frames once accepted.
-    if (prev.lastAcceptedFrame && (__stab.frameId - prev.lastAcceptedFrame) <= 2) return false;
-
-    if (prev.streak >= need) {
-      prev.lastAcceptedFrame = __stab.frameId;
-      __stab.map.set(key, prev);
-      __stabPrune();
-      return true;
-    }
-
-    __stabPrune();
     return false;
   }
-
-
-  // ---------- submission queue (prevents poll stalls; integrates with stabiliser) ----------
-  const dropQueue = []; // { rawName, amount, rawLine, seenAt }
-  let queueRunning = false;
-
-  function enqueueDrop(job) {
-    if (!job) return;
-    dropQueue.push(job);
-    // kick processor (fire-and-forget)
-    void processDropQueue();
-  }
-
-  async function processDropQueue() {
-    if (queueRunning) return;
-    queueRunning = true;
-    try {
-      while (dropQueue.length) {
-        const job = dropQueue.shift();
-        if (!job) continue;
-
-        // Resolve canonical (network) outside poll loop
-        const canonicalName = await resolveCanonicalName(job.rawName);
-
-        // Time-bucketed dedupe: allow legitimate repeats later, block spam/duplicate reads
-        const bucket = Math.floor((job.seenAt || Date.now()) / 5000); // 5s bucket
-        const key = `${canonicalName}||${job.amount || ""}||${bucket}||${job.rawLine || ""}`;
-        if (recentSet.has(key)) continue;
-
-        rememberKey(key);
-
-        addFeed(`Drop: ${canonicalName}${job.amount ? " x" + job.amount : ""}`, "ok");
-
-        try {
-          await submitDrop({ drop_name: canonicalName, amount: job.amount });
-          playBeep("ok");
-          addFeed(`Submitted ✅ ${canonicalName}${job.amount ? " x" + job.amount : ""}`, "ok");
-        } catch (e) {
-          addFeed(`Submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
-        }
-      }
-    } finally {
-      queueRunning = false;
-    }
-  }
-
-
-
-  // ---------- chat reader ----------
+// ---------- chat reader ----------
   let chatReader = null;
   let running = false;
   let pollTimer = null;
@@ -1307,7 +2312,7 @@
     playBeep("ok");
 
     if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(pollWrapper, 350);
+    pollTimer = setInterval(poll, 350);
   }
 
   function stop() {
@@ -1318,17 +2323,7 @@
     playBeep("warn");
   }
 
-  
-  // Prevent re-entrant polls if a poll cycle takes longer than the interval
-  let __pollRunning = false;
-  async function pollWrapper() {
-    if (__pollRunning) return;
-    __pollRunning = true;
-    try { await poll(); }
-    finally { __pollRunning = false; }
-  }
-
-async function poll() {
+  async function poll() {
     if (!running || !chatReader) return;
     if (!isSetupReady()) return;
 
@@ -1361,7 +2356,7 @@ async function poll() {
     const ok = tryFindChatbox("empty-read");
     if (ok) {
       chatState.consecutiveEmpty = 0;
-      addFeed("Chat moved. Lock it again from Settings.", "warn");
+      addFeed("Re-calibrate chat in Seffings and reload plugin.", "warn");
     }
   }
   return;
@@ -1369,8 +2364,6 @@ async function poll() {
 
     chatState.consecutiveEmpty = 0;
     const stitched = stitchChatMessages(lines);
-    const frameConf = __estimateFrameConf(lines, stitched);
-    __stabNextFrame();
 
     for (let i = 0; i < stitched.messages.length; i++) {
       const raw = stitched.messages[i];
@@ -1382,18 +2375,52 @@ async function poll() {
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
 
-            // Multi-frame stabilisation gate (adaptive)
-      // Only enqueue once the same drop is seen consistently across frames.
-      if (!__stabShouldAccept(parsed.drop_name, parsed.amount, frameConf)) continue;
+      // Reject rich-fragment stringify artifacts
+      if (raw.includes("[object Object]")) {
+        addFeed("Ignored line (unparsed rich text): " + raw, "warn");
+        continue;
+      }
 
-      enqueueDrop({
-        rawName: parsed.drop_name,
-        amount: parsed.amount,
-        rawLine: chatState.lastLine || "",
-        seenAt: Date.now()
-      });
+      // Allowlist validation (primary gate)
+      const strictOn = settings.strictDrops && canonicalMap.size > 0;
+      let canonicalName = parsed.drop_name;
+
+      if (strictOn) {
+        const v = validateDropName(parsed.drop_name);
+        if (!v.valid) {
+          addFeed(`Rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+          continue;
+        }
+        canonicalName = v.canonical;
+      }
+
+      // Optional wiki canonicalisation (secondary; never bypass allowlist)
+      if (settings.useWikiCanonical) {
+        const wikiName = await resolveCanonicalName(canonicalName);
+        if (strictOn) {
+          const v2 = validateDropName(wikiName);
+          canonicalName = v2.valid ? v2.canonical : canonicalName;
+        } else {
+          canonicalName = wikiName;
+        }
+      }
+
+
+      // De-dupe across ALL detection paths (broadcast, "You received", etc.)
+      const amtKey = (parsed.amount || "1").toString().trim();
+      const key = `${canonicalName}`.toLowerCase().trim() + "||" + amtKey;
+      if (seenRecently(key, 8000)) continue;
+
+      addFeed(`Drop: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
+
+      try {
+        await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+        playBeep("ok");
+        addFeed(`Submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
+      } catch (e) {
+        addFeed(`Submit failed ❌ (${canonicalName}): ${e.message}`, "bad");
+      }
     }
-
   }
 
   // ---------- events ----------
@@ -1413,6 +2440,7 @@ async function poll() {
     closeDrawer();
   });
 
+
   // FIX: null-guard backdrop
   ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
@@ -1423,6 +2451,15 @@ async function poll() {
   ui.optHighlight && ui.optHighlight.addEventListener("change", (e) => {
     settings = saveSettings({ highlight: !!e.target.checked });
     addFeed("Highlight during locate: " + (settings.highlight ? "ON" : "OFF"), "ok");
+  });
+
+  ui.optStrictDrops && ui.optStrictDrops.addEventListener("change", (e) => {
+    settings = saveSettings({ strictDrops: !!e.target.checked });
+    addFeed("Strict drop validation: " + (settings.strictDrops ? "ON" : "OFF"), "ok");
+  });
+  ui.optUseWikiCanonical && ui.optUseWikiCanonical.addEventListener("change", (e) => {
+    settings = saveSettings({ useWikiCanonical: !!e.target.checked });
+    addFeed("Wiki canonicalisation: " + (settings.useWikiCanonical ? "ON" : "OFF"), "ok");
   });
 
   // FIX: btnLockSetup uses existing helpers; no missing functions
@@ -1602,6 +2639,8 @@ async function poll() {
   pingApi();
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
+  await loadAllowlistFile();
+
   loadBingosAndPopulate();
 
   window.IRB = window.IRB || {};
@@ -1609,6 +2648,7 @@ async function poll() {
 
   if (isAlt1) {
     initChatReader();
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
 
@@ -1621,8 +2661,93 @@ async function poll() {
   } else {
     setPill(ui.apiPill, "API: —", "warn");
     setPill(ui.chatPill, "Chat: —", "warn");
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
 
+
+  // Alt1 Hotkey: use Alt1's configured "Alt+1" (rightclick) to trigger a manual scan/submit
+  function bindAlt1ManualHotkey() {
+    if (!window.alt1) return;
+    // Preferred newer API (not available in some builds)
+    const rc = window.alt1?.events?.rightclick;
+    if (Array.isArray(rc) && typeof rc.push === "function") {
+      rc.push((obj) => {
+        try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
+        manualSubmitFlow();
+      });
+      return;
+    }
+
+    // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
+    window.alt1onrightclick = (obj) => {
+      try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
+      manualSubmitFlow();
+    };
+  }
+
+  // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
 })();
+
+
+// --- Added: Universal broadcast drop detection ---
+function normalizeIgn(raw) {
+  raw = (raw || "").toString().trim();
+  // Anchor to the first capital letter (RSN display starts with A-Z; ironman icons/prefixes may precede it)
+  const i = raw.search(/[A-Z]/);
+  if (i >= 0) return raw.slice(i).trim();
+  return raw;
+}
+
+function stripChatPrefix(s) {
+  return (s || "")
+    // remove timestamp/channel bracket prefixes like "[17:36:57]" "[CC]" etc
+    .replace(/^\s*(?:\[[^\]]+\]\s*)+/i, "")
+    // remove leading % and optional bracket tag before "News:"
+    .replace(/^\s*%\s*(?:\[[^\]]+\]\s*)?/i, "")
+    // remove "News:" label (case-insensitive)
+    .replace(/^\s*news\s*:\s*/i, "")
+    .trim();
+}
+
+// Patch into existing parse function if present
+if (typeof _tryParseReceive === "function") {
+  const __originalTryParseReceive = _tryParseReceive;
+  _tryParseReceive = function(text) {
+    let result = __originalTryParseReceive(text);
+    if (result) return result;
+
+    let t = stripTimestampPrefix(text);
+    t = stripChatPrefix(t);
+
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
+    if (!lockedIgnRaw) return null;
+    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
+
+    // Accept relayed/broadcast formats where the sender name may include icon prefixes (e.g. ironman),
+    // and anchor the "real" IGN to the first capital letter before comparing to the locked IGN.
+    const reBroadcast = new RegExp(
+      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop\\b.*$",
+      "i"
+    );
+
+    const m = t.match(reBroadcast);
+    if (m) {
+      const ignRaw = (m[1] || "").trim();
+      const ign = normalizeIgn(ignRaw).toLowerCase();
+      if (ign !== lockedIgn) return null;
+
+      const item = (m[2] || "").trim();
+      const amt = (m[3] || "1").trim();
+      if (!item) return null;
+
+      return { drop_name: item, amount: amt };
+    }
+
+    return null;
+  };
+}
+// --- End broadcast patch ---
