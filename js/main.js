@@ -366,7 +366,7 @@
   }
 
   function __localIconUrl(itemName, size) {
-    const base = "./assets/wikiicons";
+    const base = "./assets/icons";
     const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
     return `${base}/${file}`;
   }
