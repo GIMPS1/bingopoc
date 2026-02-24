@@ -779,7 +779,6 @@ async function __initTesseractOnce() {
       workerPath: "https://unpkg.com/tesseract.js@5/dist/worker.min.js",
       corePath: "https://unpkg.com/tesseract.js-core@5/tesseract-core.wasm.js",
       langPath: "https://tessdata.projectnaptha.com/4.0.0",
-      logger: () => {}
     });
 
     await worker.loadLanguage("eng");
