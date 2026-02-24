@@ -249,6 +249,265 @@
     return null;
   }
 
+  // ---------- manual submit selection overlay (OCR-only) ----------
+
+  function __getImgProps(img) {
+      if (!img) return null;
+      const data = img.data || img.imgdata || img.pixels;
+      const width = img.width || img.w;
+      const height = img.height || img.h;
+      if (!data || !width || !height) return null;
+      return { data, width, height };
+    }
+
+  function __createOverlay() {
+    const overlay = document.createElement("div");
+    overlay.id = "irbSelectOverlay";
+    overlay.style.position = "fixed";
+    overlay.style.left = "0";
+    overlay.style.top = "0";
+    overlay.style.right = "0";
+    overlay.style.bottom = "0";
+    overlay.style.zIndex = "2147483647";
+    overlay.style.background = "rgba(0,0,0,0.35)";
+    overlay.style.cursor = "crosshair";
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+
+    const wrap = document.createElement("div");
+    wrap.style.position = "relative";
+    wrap.style.boxShadow = "0 8px 30px rgba(0,0,0,0.6)";
+    wrap.style.border = "1px solid rgba(255,255,255,0.15)";
+    wrap.style.background = "rgba(0,0,0,0.35)";
+
+    const canvas = document.createElement("canvas");
+    canvas.id = "irbSelectCanvas";
+    canvas.style.display = "block";
+
+    const label = document.createElement("div");
+    label.style.position = "absolute";
+    label.style.left = "0";
+    label.style.top = "0";
+    label.style.right = "0";
+    label.style.padding = "8px 10px";
+    label.style.font = "12px/1.2 sans-serif";
+    label.style.color = "rgba(255,255,255,0.92)";
+    label.style.background = "linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0))";
+    label.textContent = "Drag a box tightly around the item icon (Esc to cancel)";
+
+    wrap.appendChild(canvas);
+    wrap.appendChild(label);
+    overlay.appendChild(wrap);
+
+    document.body.appendChild(overlay);
+    return { overlay, canvas, wrap };
+  }
+
+  function __drawSelection(ctx, x0, y0, x1, y1, zoom) {
+    const z = (zoom && zoom > 0) ? zoom : 1;
+
+    // draw in zoomed canvas space
+    const zx0 = x0 * z, zy0 = y0 * z, zx1 = x1 * z, zy1 = y1 * z;
+    const x = Math.min(zx0, zx1);
+    const y = Math.min(zy0, zy1);
+    const w = Math.abs(zx1 - zx0);
+    const h = Math.abs(zy1 - zy0);
+
+    // Darken outside selection
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.clearRect(x, y, w, h);
+
+    // Border
+    ctx.strokeStyle = "rgba(255,255,255,0.9)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+    ctx.restore();
+  }
+
+  function __snapRectToIcon(cap, rect) {
+    // Best-effort snap: find non-background pixels inside the rough rect and tighten bounds.
+    // If detection fails, returns the original rect.
+    try {
+      const data = cap.data;
+      const W = cap.width, H = cap.height;
+
+      let x0 = rect.x | 0, y0 = rect.y | 0, x1 = (rect.x + rect.w) | 0, y1 = (rect.y + rect.h) | 0;
+      x0 = Math.max(0, Math.min(W - 1, x0));
+      y0 = Math.max(0, Math.min(H - 1, y0));
+      x1 = Math.max(0, Math.min(W, x1));
+      y1 = Math.max(0, Math.min(H, y1));
+      if (x1 <= x0 + 1 || y1 <= y0 + 1) return rect;
+
+      function pix(x, y) {
+        const i = ((y * W + x) << 2) | 0;
+        return [data[i] | 0, data[i + 1] | 0, data[i + 2] | 0];
+      }
+
+      // Sample BG from the 4 corners (inside the rect)
+      const c1 = pix(x0, y0), c2 = pix(x1 - 1, y0), c3 = pix(x0, y1 - 1), c4 = pix(x1 - 1, y1 - 1);
+      const bg = [
+        ((c1[0] + c2[0] + c3[0] + c4[0]) >> 2) | 0,
+        ((c1[1] + c2[1] + c3[1] + c4[1]) >> 2) | 0,
+        ((c1[2] + c2[2] + c3[2] + c4[2]) >> 2) | 0
+      ];
+
+      const TH = 28; // sensitivity: higher => less snapping (safer)
+      let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+
+      for (let y = y0; y < y1; y++) {
+        let row = ((y * W) << 2) | 0;
+        for (let x = x0; x < x1; x++) {
+          const i = row + ((x << 2) | 0);
+          const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+          const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
+          if (d > TH) {
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      if (maxX < 0) return rect;
+
+      const M = 2; // margin
+      minX = Math.max(0, (minX - M) | 0);
+      minY = Math.max(0, (minY - M) | 0);
+      maxX = Math.min(W - 1, (maxX + M) | 0);
+      maxY = Math.min(H - 1, (maxY + M) | 0);
+
+      const w = (maxX - minX + 1) | 0;
+      const h = (maxY - minY + 1) | 0;
+      if (w < 20 || h < 20) return rect; // don't snap to tiny noise
+
+      return { x: minX, y: minY, w, h };
+    } catch (e) {
+      return rect;
+    }
+  }
+
+  async function __selectIconRegionAroundMouse(captureSize) {
+    if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+    const pos = getMousePos();
+    const mx = pos ? pos.x : 0;
+    const my = pos ? pos.y : 0;
+
+    const capW = captureSize | 0, capH = captureSize | 0;
+    const rx = Math.max(0, mx - (capW >> 1));
+    const ry = Math.max(0, my - (capH >> 1));
+
+    let capImg = null;
+    try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+    if (!capImg) return null;
+
+    const cap = __getImgProps(capImg);
+    if (!cap) return null;
+
+    // ---- Zoomed selection UI ----
+    // Makes it much easier to draw a tight box.
+    const ZOOM = 3; // 2–3 recommended
+
+    const { overlay, canvas } = __createOverlay();
+    canvas.width = cap.width * ZOOM;
+    canvas.height = cap.height * ZOOM;
+
+    const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
+
+    // Render capture scaled up (nearest-neighbor)
+    ctx.imageSmoothingEnabled = false;
+
+    const off = document.createElement("canvas");
+    off.width = cap.width;
+    off.height = cap.height;
+    const offCtx = off.getContext("2d", { alpha: true, willReadFrequently: true });
+
+    const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
+    offCtx.putImageData(idata, 0, 0);
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(off, 0, 0, cap.width * ZOOM, cap.height * ZOOM);
+
+    let start = null;
+    let end = null;
+    let done = false;
+
+    function cleanup() {
+      if (done) return;
+      done = true;
+      try { overlay.remove(); } catch (e) {}
+      window.removeEventListener("keydown", onKey, true);
+    }
+
+    let resolve;
+
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        cleanup();
+        if (resolve) resolve(null);
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+
+    const prom = new Promise((r) => { resolve = r; });
+
+    const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    function redraw() {
+      ctx.putImageData(baseImage, 0, 0);
+      if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y, ZOOM);
+    }
+
+    function eventToCapXY(ev) {
+      const rect = canvas.getBoundingClientRect();
+      const mx = (ev.clientX - rect.left);
+      const my = (ev.clientY - rect.top);
+      const x = Math.max(0, Math.min(cap.width - 1, Math.round(mx / ZOOM)));
+      const y = Math.max(0, Math.min(cap.height - 1, Math.round(my / ZOOM)));
+      return { x, y };
+    }
+
+    canvas.addEventListener("mousedown", (ev) => {
+      start = eventToCapXY(ev);
+      end = { ...start };
+      redraw();
+    });
+
+    canvas.addEventListener("mousemove", (ev) => {
+      if (!start) return;
+      end = eventToCapXY(ev);
+      redraw();
+    });
+
+    canvas.addEventListener("mouseup", () => {
+      if (!start || !end) return;
+
+      const x = Math.min(start.x, end.x);
+      const y = Math.min(start.y, end.y);
+      const w = Math.abs(end.x - start.x);
+      const h = Math.abs(end.y - start.y);
+
+      cleanup();
+
+      // Require a reasonable selection size
+      if (w < 20 || h < 20) return resolve(null);
+
+      const rough = { x, y, w, h };
+      const snapped = __snapRectToIcon(cap, rough);
+
+      resolve({ capImg, capProps: cap, rx, ry, rect: snapped });
+    });
+
+    return await prom;
+  }
+
+  
+
+
+
   async function ocrRegionAroundMouse(size) {
     if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
     if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
@@ -288,7 +547,7 @@
 
     const found = [];
     const seen = {};
-    const yStep = 5;
+    const yStep = 2;
     const xStep = 10;
 
     for (let fi = 0; fi < fonts.length; fi++) {
@@ -397,13 +656,13 @@
     } catch (e) {}
 
     const fonts = ["chat", "small"]; // best for tooltip/menu text
-    const xs = [0, 8, 16, 24, 32];
+    const xs = [2, 12, 22];
     const lines = [];
     const seen = {};
 
     // Scan only a handful of baselines (fast). Tooltips are left-aligned so x loop is tiny.
-    const yStep = 5;
-    const yMax = Math.min(h, 240);
+    const yStep = 7;
+    const yMax = Math.min(h, 170);
     for (let fi = 0; fi < fonts.length; fi++) {
       const font = fonts[fi];
       for (let yy = 0; yy < yMax; yy += yStep) {
@@ -426,33 +685,6 @@
       if (lines.length) break;
     }
 
-    
-    // Fallback pass: relax color constraints and try chatmono if we got nothing.
-    if (!lines.length) {
-      const fonts2 = ["chat", "chatmono", "small"];
-      const yStep2 = 6;
-      const yMax2 = Math.min(h, 260);
-      for (let fi = 0; fi < fonts2.length; fi++) {
-        const font = fonts2[fi];
-        for (let yy = 0; yy < yMax2; yy += yStep2) {
-          for (let xi = 0; xi < xs.length; xi++) {
-            const xx = xs[xi];
-            const s = __ocrReadLineBound(id, font, xx, yy, null);
-            if (!s) continue;
-            const k = s.toLowerCase();
-            if (seen[k]) continue;
-            seen[k] = true;
-            lines.push(s);
-            if (__looksLikeActionLine(s)) {
-              return { ok: true, text: lines.join("\n"), x, y, w, h };
-            }
-            if (lines.length >= 14) return { ok: true, text: lines.join("\n"), x, y, w, h };
-          }
-        }
-        if (lines.length) break;
-      }
-    }
-
     if (!lines.length) return { ok: false, reason: "No text." };
     return { ok: true, text: lines.join("\n"), x, y, w, h };
   }
@@ -468,10 +700,10 @@
 
     // Probe rectangles (screen coords). These cover common RS tooltip placements.
     const probes = [
-      { x: ix - 320, y: iy - 220, w: 640, h: 160 }, // above
-      { x: ix + 20,  y: iy - 160, w: 720, h: 200 }, // right
-      { x: ix - 740, y: iy - 160, w: 720, h: 200 }, // left
-      { x: ix - 320, y: iy + 20,  w: 720, h: 240 }  // below
+      { x: ix - 240, y: iy - 170, w: 480, h: 120 }, // above
+      { x: ix + 35,  y: iy - 120, w: 520, h: 150 }, // right
+      { x: ix - 555, y: iy - 120, w: 520, h: 150 }, // left
+      { x: ix - 240, y: iy + 40,  w: 520, h: 170 }  // below
     ];
 
     for (let i = 0; i < probes.length; i++) {
@@ -618,7 +850,7 @@ async function manualSubmitFlow() {
   try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selection = await __selectIconRegionAroundMouse(700);
+  const selection = await __selectIconRegionAroundMouse(500);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
