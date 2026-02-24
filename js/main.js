@@ -502,6 +502,9 @@
     step: 3,          // search step (pixels)
     acceptScore: 0.86 // minimum correlation to accept
   };
+  // Debug: set true to log icon matching attempts and scores
+  const DEBUG_ICON_MATCH = true;
+
 
   function __getImgProps(img) {
     if (!img) return null;
@@ -821,6 +824,8 @@ function matchIconFromSelection(capImg, sel, templates) {
   if (!cap) return null;
 
   __buildTemplateFeatures(templates);
+  const __t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  const __top = DEBUG_ICON_MATCH ? [] : null;
 
   // Clamp selection inside capture
   const x = Math.max(0, Math.min(cap.width - 1, sel.x | 0));
@@ -837,7 +842,17 @@ function matchIconFromSelection(capImg, sel, templates) {
     const t = templates[i];
     if (!t || !t._feat) continue;
     const score = __znccScore(t._feat, candFeat);
+    if (__top) __top.push({ name: t.name, score });
     if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+  }
+
+  const __t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  if (DEBUG_ICON_MATCH) {
+    if (__top) {
+      __top.sort((a,b)=>b.score-a.score);
+    }
+    const top5 = __top ? __top.slice(0,5) : [];
+    console.log("[ICON MATCH] selection", {x, y, w, h}, "best=", best, "accept>=", ICON_MATCH.acceptScore, "ms=", (__t1-__t0).toFixed(2), "top5=", top5);
   }
 
   if (best && best.score >= ICON_MATCH.acceptScore) return best;
