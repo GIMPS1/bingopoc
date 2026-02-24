@@ -350,7 +350,7 @@
   
   // ---------- Wiki Icon template matching for manual submit ----------
   const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
-  const ICON_TEMPLATE_SIZES = [32, 48]; // sizes in the bundled icon set
+  const ICON_TEMPLATE_SIZES = [48]; // use ONLY the large icons for speed/accuracy // sizes in the bundled icon set
 
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
@@ -489,29 +489,143 @@
     return 1;
   }
 
-  function findBestIconMatch(captureImg, templates) {
-    if (!templates || !templates.length) return null;
-    let best = null;
+  
+  // -------- Icon matching (fast) --------
+  // We use ONLY the large (48px) icons and perform a small local search around the mouse.
+  // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
+  // This is very fast (few templates) and robust to minor brightness/contrast changes.
+  const ICON_MATCH = {
+    iconSize: 48,     // template icon size (pixels)
+    sampleSize: 16,   // downsample size for matching (pixels)
+    captureSize: 96,  // capture square around mouse (pixels)
+    searchRadius: 18, // +/- pixels around center to search
+    step: 3,          // search step (pixels)
+    acceptScore: 0.86 // minimum correlation to accept
+  };
 
+  function __getImgProps(img) {
+    if (!img) return null;
+    const data = img.data || img.imgdata || img.pixels;
+    const width = img.width || img.w;
+    const height = img.height || img.h;
+    if (!data || !width || !height) return null;
+    return { data, width, height };
+  }
+
+  function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
+    // Nearest-neighbor downsample for speed.
+    const out = new Uint8Array(outSize * outSize);
+    const invW = sw / outSize;
+    const invH = sh / outSize;
+
+    const w = src.width;
+    const data = src.data;
+
+    let k = 0;
+    for (let y = 0; y < outSize; y++) {
+      const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
+      const row = (py * w) | 0;
+      for (let x = 0; x < outSize; x++) {
+        const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
+        const i = ((row + px) << 2) | 0;
+        const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+        // Integer luminance approximation (BT.601)
+        out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
+      }
+    }
+    return out;
+  }
+
+  function __centerAndInvStd(gray) {
+    // Returns { centered:Int16Array, invStd:number } with std computed over centered values.
+    const n = gray.length | 0;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += gray[i];
+    const mean = sum / n;
+
+    const centered = new Int16Array(n);
+    let ss = 0;
+    for (let i = 0; i < n; i++) {
+      const v = (gray[i] - mean);
+      const iv = v | 0;
+      centered[i] = iv;
+      ss += v * v;
+    }
+    // Avoid div-by-zero on flat images.
+    const std = Math.sqrt(ss) || 1e-9;
+    return { centered, invStd: 1 / std };
+  }
+
+  function __znccScore(templateFeat, candFeat) {
+    const a = templateFeat.centered;
+    const b = candFeat.centered;
+    let dot = 0;
+    // 256-length; keep as number (safe)
+    for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+    return dot * templateFeat.invStd * candFeat.invStd;
+  }
+
+  function __buildTemplateFeatures(templates) {
     for (let i = 0; i < templates.length; i++) {
       const t = templates[i];
-      let m = null;
-      try {
-        m = A1lib.ImageDetect.findSubimage(captureImg, t.img);
-      } catch (e) {
-        continue;
+      if (t && !t._feat) {
+        const props = __getImgProps(t.img);
+        if (!props) continue;
+        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        t._feat = __centerAndInvStd(gray);
       }
-      if (!m) continue;
-
-      // normalize match coords
-      const mx = (typeof m.x === "number") ? m.x : (Array.isArray(m) ? m[0] : null);
-      const my = (typeof m.y === "number") ? m.y : (Array.isArray(m) ? m[1] : null);
-      if (mx == null || my == null) continue;
-
-      const score = (typeof m.score === "number") ? m.score : 1;
-      if (!best || score > best.score) best = { name: t.name, size: t.size, x: mx, y: my, score };
     }
-    return best;
+    return templates;
+  }
+
+  function findBestIconMatch(captureImg, templates) {
+    if (!templates || !templates.length || !captureImg) return null;
+
+    const cap = __getImgProps(captureImg);
+    if (!cap) return null;
+
+    __buildTemplateFeatures(templates);
+
+    const iconSz = ICON_MATCH.iconSize;
+    const outSz = ICON_MATCH.sampleSize;
+
+    // Search a small window around capture center.
+    const cx = (cap.width >> 1) - (iconSz >> 1);
+    const cy = (cap.height >> 1) - (iconSz >> 1);
+
+    const r = ICON_MATCH.searchRadius | 0;
+    const step = ICON_MATCH.step | 0;
+
+    let best = null;
+
+    const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+
+    for (let dy = -r; dy <= r; dy += step) {
+      const y = clamp(cy + dy, 0, cap.height - iconSz);
+      for (let dx = -r; dx <= r; dx += step) {
+        const x = clamp(cx + dx, 0, cap.width - iconSz);
+
+        const gray = __downsampleToGray16(cap, x, y, iconSz, iconSz, outSz);
+        const candFeat = __centerAndInvStd(gray);
+
+        // Compare against all templates (small N). Track best.
+        for (let i = 0; i < templates.length; i++) {
+          const t = templates[i];
+          if (!t || !t._feat) continue;
+
+          const score = __znccScore(t._feat, candFeat);
+
+          if (!best || score > best.score) {
+            best = { name: t.name, size: t.size, x, y, score };
+            // Early accept if extremely strong match.
+            if (score >= 0.985) return best;
+          }
+        }
+      }
+    }
+
+    if (best && best.score >= ICON_MATCH.acceptScore) return best;
+    return null;
   }
 
 async function manualSubmitFlow() {
@@ -536,7 +650,7 @@ async function manualSubmitFlow() {
       const pos = getMousePos();
       const mx2 = pos ? pos.x : 0;
       const my2 = pos ? pos.y : 0;
-      const capW = 450, capH = 450;
+      const capW = ICON_MATCH.captureSize, capH = ICON_MATCH.captureSize;
       const rx2 = Math.max(0, mx2 - (capW >> 1));
       const ry2 = Math.max(0, my2 - (capH >> 1));
       let capImg = null;
