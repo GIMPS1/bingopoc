@@ -659,7 +659,8 @@ async function manualSubmitFlow() {
         iconMatch = findBestIconMatch(capImg, templates);
         if (iconMatch && iconMatch.name) {
           // qty OCR: top-left quadrant of the matched icon
-          const qty = readStackQtyAt(rx2 + iconMatch.x, ry2 + iconMatch.y);
+          // Manual submit qty OCR disabled (icon matching only for now)
+          const qty = 1;
           const v = validateDropName(iconMatch.name);
           const chosenIcon = (v && v.valid) ? (v.canonical || iconMatch.name) : null;
           if (chosenIcon) {
