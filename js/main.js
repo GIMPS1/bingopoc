@@ -595,7 +595,28 @@
     for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
     return dot * templateFeat.invStd * candFeat.invStd;
   }
+function __edgeMapFromGray(gray, width, height) {
+  const out = new Float32Array(gray.length);
 
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const i = y * width + x;
+
+      // Simple Sobel-like gradient magnitude
+      const gx =
+        -gray[i - width - 1] - 2 * gray[i - 1] - gray[i + width - 1] +
+         gray[i - width + 1] + 2 * gray[i + 1] + gray[i + width + 1];
+
+      const gy =
+        -gray[i - width - 1] - 2 * gray[i - width] - gray[i - width + 1] +
+         gray[i + width - 1] + 2 * gray[i + width] + gray[i + width + 1];
+
+      out[i] = Math.sqrt(gx * gx + gy * gy);
+    }
+  }
+
+  return out;
+}
   function __buildTemplateFeatures(templates) {
     for (let i = 0; i < templates.length; i++) {
       const t = templates[i];
