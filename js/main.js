@@ -433,53 +433,6 @@
     return __iconTemplatesLoading;
   }
 
-      // load item list
-      try {
-        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
-        __iconItems = await res.json();
-      } catch (e) {
-        console.warn("[icon] failed to load wiki_items.json", e);
-        __iconItems = [];
-      }
-
-      // Filter to allowlist if present
-      let names = Array.isArray(__iconItems) ? __iconItems.slice() : [];
-      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
-        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
-        names = names.filter(n => allowSet.has((n || "").toLowerCase()));
-      }
-
-      // Dedup
-      const seen = new Set();
-      names = names.filter(n => {
-        const k = (n || "").toLowerCase();
-        if (!k || seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-
-      const out = [];
-      for (let i = 0; i < names.length; i++) {
-        const name = names[i];
-        for (let si = 0; si < ICON_TEMPLATE_SIZES.length; si++) {
-          const size = ICON_TEMPLATE_SIZES[si];
-          const url = __localIconUrl(name, size);
-          try {
-            const img = await A1lib.ImageDetect.imageDataFromUrl(url);
-            if (img) out.push({ name, size, img });
-          } catch (e) {
-            // ignore individual failures
-          }
-        }
-      }
-
-      console.log(`[icon] templates loaded: ${out.length} (items: ${names.length})`);
-      __iconTemplates = out;
-      return __iconTemplates;
-    })();
-
-    return __iconTemplatesLoading;
-  }
 
   function normalizeAlt1OcrResult(val) {
     if (val == null) return "";
