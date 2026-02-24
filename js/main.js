@@ -1032,94 +1032,119 @@ async function manualSubmitFlow() {
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
-    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
-    return;
-  }
+  showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+  return;
+}
 
-  // ---- Manual submit OCR (fast OCR first, Tesseract fallback) ----
-  // 1) Fast: Alt1 tooltip OCR sampled multiple frames and voted.
-  let ocr = await ocrTooltipNearSelectionStable(selection, 3, 55);
+// ---- Manual submit OCR (fast OCR first, Tesseract fallback) ----
+// 1) Fast: Alt1 tooltip OCR sampled multiple frames and voted.
+let ocr = await ocrTooltipNearSelectionStable(selection, 3, 55);
 
-  // 2) Fallback: Tesseract.js (WASM) for tougher tooltips/menus.
-  if (!ocr || !ocr.ok || !ocr.text || String(ocr.text).trim().length < 3) {
-    try { ocr = await ocrTooltipNearSelectionTesseract(selection); } catch (e) {}
-  }
+// 2) Fallback: Tesseract.js (WASM) for tougher tooltips/menus.
+const ocrTextLen = (o) => String(o?.text ?? "").trim().length;
 
-  if (!ocr || !ocr.ok || !ocr.text) {
-    showEvent(
-      "Manual submit",
-      "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
-      "warn",
-      true,
-      true
-    );
-    return;
-  }
+if (!ocr || !ocr.ok || ocrTextLen(ocr) < 3) {
+  try {
+    ocr = await ocrTooltipNearSelectionTesseract(selection);
+  } catch (e) {}
+}
 
-  const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
-  const cands = extractDropCandidatesFromOcr(ocr.text);
+if (!ocr || !ocr.ok || !ocr.text) {
+  showEvent(
+    "Manual submit",
+    "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
+    "warn",
+    true,
+    true
+  );
+  return;
+}
 
-  // Fallback: sometimes OCR gives just the title line without the verb; try first line.
-  if (!cands.length) {
-    const first = String(ocr.text).split(/?
-/).map(s => s.trim()).filter(Boolean)[0] || "";
-    if (first) cands.push(first);
-  }
+const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
+const cands = extractDropCandidatesFromOcr(ocr.text);
 
-  // If we still have no candidates, try Tesseract once more (different OCR output can parse differently).
-  if (!cands.length) {
-    try {
-      const o2 = await ocrTooltipNearSelectionTesseract(selection);
-      if (o2 && o2.ok && o2.text) {
-        ocr = o2;
-        const c2 = extractDropCandidatesFromOcr(ocr.text);
-        if (c2 && c2.length) cands.push(...c2);
-        if (!cands.length) {
-          const f2 = String(ocr.text).split(/?
-/).map(s => s.trim()).filter(Boolean)[0] || "";
-          if (f2) cands.push(f2);
-        }
+// Fallback: sometimes OCR gives just the title line without the verb; try first line.
+if (!cands.length) {
+  const first =
+    String(ocr.text)
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0] || "";
+  if (first) cands.push(first);
+}
+
+// If we still have no candidates, try Tesseract once more (different OCR output can parse differently).
+if (!cands.length) {
+  try {
+    const o2 = await ocrTooltipNearSelectionTesseract(selection);
+    if (o2 && o2.ok && o2.text) {
+      ocr = o2;
+
+      const c2 = extractDropCandidatesFromOcr(ocr.text);
+      if (c2?.length) cands.push(...c2);
+
+      if (!cands.length) {
+        const f2 =
+          String(ocr.text)
+            .split(/\r?\n/)
+            .map((s) => s.trim())
+            .filter(Boolean)[0] || "";
+        if (f2) cands.push(f2);
       }
+    }
+  } catch (e) {}
+}
+
+if (!cands.length) {
+  showEvent(
+    "Manual submit",
+    "Read tooltip text, but couldn't find an item name in it.",
+    "warn",
+    true,
+    true
+  );
+  try {
+    console.log("[MANUAL OCR] Raw OCR text:", ocr.text);
+  } catch (e) {}
+  return;
+}
+
+// Try candidates in order until one validates.
+for (let i = 0; i < Math.min(4, cands.length); i++) {
+  const raw = String(cands[i] || "").trim();
+  if (!raw) continue;
+
+  let v = validateDropName(raw);
+  let chosen = v?.valid ? (v.canonical || raw) : null;
+
+  // If allowlist uses canonical wiki title, try resolving canonical once.
+  if (!chosen) {
+    try {
+      const canon = await resolveCanonicalName(raw);
+      v = validateDropName(canon);
+      chosen = v?.valid ? (v.canonical || canon) : null;
     } catch (e) {}
   }
 
-  if (!cands.length) {
-    showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
-    try { console.log("[MANUAL OCR] Raw OCR text:", ocr.text); } catch (e) {}
-    return;
-  }
-
-  // Try candidates in order until one validates.
-  for (let i = 0; i < Math.min(4, cands.length); i++) {
-    const raw = String(cands[i] || "").trim();
-    if (!raw) continue;
-
-    let v = validateDropName(raw);
-    let chosen = (v && v.valid) ? (v.canonical || raw) : null;
-
-    // If allowlist uses canonical wiki title, try resolving canonical once.
-    if (!chosen) {
-      try {
-        const canon = await resolveCanonicalName(raw);
-        v = validateDropName(canon);
-        chosen = (v && v.valid) ? (v.canonical || canon) : null;
-      } catch (e) {}
-    }
-
-    if (chosen) {
-      showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
-      try {
-        await submitDrop({ drop_name: chosen, amount: String(qty) });
-        showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-        playOk();
-        return;
-      } catch (e) {
-        showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-        return;
-      }
+  if (chosen) {
+    showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+    try {
+      await submitDrop({ drop_name: chosen, amount: String(qty) });
+      showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+      playOk();
+      return;
+    } catch (e) {
+      showEvent(
+        "Manual submit",
+        "Submit failed: " + (e?.message ? e.message : e),
+        "warn",
+        true,
+        true
+      );
+      return;
     }
   }
-
+}
   showEvent("Manual submit", `OCR read "${cands[0]}", but it isn't in the allowlist.`, "warn", true, true);
 }
 
