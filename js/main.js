@@ -490,7 +490,7 @@
         return __iconTemplates;
       }
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
+      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
       let iconMap = [];
       try {
         const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
@@ -511,7 +511,7 @@
       // Load templates
       const templates = [];
       const fails = [];
-      const base = "./assets/wikiicons";
+      const base = "./assets/icons";
       const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
 
       for (const entry of iconMap) {
@@ -930,7 +930,7 @@ async function __selectIconRegionAroundMouse(captureSize) {
 
   // ---- Zoomed selection UI ----
   // Makes it much easier to draw a tight box.
-  const ZOOM = 3; // 2–3 recommended
+  const ZOOM = 1; // 2–3 recommended
 
   const { overlay, canvas } = __createOverlay();
   canvas.width = cap.width * ZOOM;
@@ -1086,7 +1086,7 @@ async function manualSubmitFlow() {
   try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selection = await __selectIconRegionAroundMouse(500);
+  const selection = await __selectIconRegionAroundMouse(700);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
