@@ -288,7 +288,7 @@
 
     const found = [];
     const seen = {};
-    const yStep = 2;
+    const yStep = 5;
     const xStep = 10;
 
     for (let fi = 0; fi < fonts.length; fi++) {
@@ -397,13 +397,13 @@
     } catch (e) {}
 
     const fonts = ["chat", "small"]; // best for tooltip/menu text
-    const xs = [2, 12, 22];
+    const xs = [0, 8, 16, 24, 32];
     const lines = [];
     const seen = {};
 
     // Scan only a handful of baselines (fast). Tooltips are left-aligned so x loop is tiny.
-    const yStep = 7;
-    const yMax = Math.min(h, 170);
+    const yStep = 5;
+    const yMax = Math.min(h, 240);
     for (let fi = 0; fi < fonts.length; fi++) {
       const font = fonts[fi];
       for (let yy = 0; yy < yMax; yy += yStep) {
@@ -426,6 +426,33 @@
       if (lines.length) break;
     }
 
+    
+    // Fallback pass: relax color constraints and try chatmono if we got nothing.
+    if (!lines.length) {
+      const fonts2 = ["chat", "chatmono", "small"];
+      const yStep2 = 6;
+      const yMax2 = Math.min(h, 260);
+      for (let fi = 0; fi < fonts2.length; fi++) {
+        const font = fonts2[fi];
+        for (let yy = 0; yy < yMax2; yy += yStep2) {
+          for (let xi = 0; xi < xs.length; xi++) {
+            const xx = xs[xi];
+            const s = __ocrReadLineBound(id, font, xx, yy, null);
+            if (!s) continue;
+            const k = s.toLowerCase();
+            if (seen[k]) continue;
+            seen[k] = true;
+            lines.push(s);
+            if (__looksLikeActionLine(s)) {
+              return { ok: true, text: lines.join("\n"), x, y, w, h };
+            }
+            if (lines.length >= 14) return { ok: true, text: lines.join("\n"), x, y, w, h };
+          }
+        }
+        if (lines.length) break;
+      }
+    }
+
     if (!lines.length) return { ok: false, reason: "No text." };
     return { ok: true, text: lines.join("\n"), x, y, w, h };
   }
@@ -441,10 +468,10 @@
 
     // Probe rectangles (screen coords). These cover common RS tooltip placements.
     const probes = [
-      { x: ix - 240, y: iy - 170, w: 480, h: 120 }, // above
-      { x: ix + 35,  y: iy - 120, w: 520, h: 150 }, // right
-      { x: ix - 555, y: iy - 120, w: 520, h: 150 }, // left
-      { x: ix - 240, y: iy + 40,  w: 520, h: 170 }  // below
+      { x: ix - 320, y: iy - 220, w: 640, h: 160 }, // above
+      { x: ix + 20,  y: iy - 160, w: 720, h: 200 }, // right
+      { x: ix - 740, y: iy - 160, w: 720, h: 200 }, // left
+      { x: ix - 320, y: iy + 20,  w: 720, h: 240 }  // below
     ];
 
     for (let i = 0; i < probes.length; i++) {
@@ -591,7 +618,7 @@ async function manualSubmitFlow() {
   try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selection = await __selectIconRegionAroundMouse(500);
+  const selection = await __selectIconRegionAroundMouse(700);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
