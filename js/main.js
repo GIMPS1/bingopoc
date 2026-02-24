@@ -1263,15 +1263,7 @@ async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
   }
 
   showEvent("Manual submit", "No valid drop name detected.", "warn", true, true);
-}l submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-        return;
-      }
-    }
-  }
-
-  showEvent("Manual submit", "No valid drop name detected.", "warn", true, true);
 }
-
 
 
 
