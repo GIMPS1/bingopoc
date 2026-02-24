@@ -382,7 +382,7 @@
         return __iconTemplates;
       }
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
+      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
       let iconMap = [];
       try {
         const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
@@ -403,7 +403,7 @@
       // Load templates
       const templates = [];
       const fails = [];
-      const base = "./assets/wikiicons";
+      const base = "./assets/icons";
       const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
 
       for (const entry of iconMap) {
