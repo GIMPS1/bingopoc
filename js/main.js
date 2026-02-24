@@ -1177,8 +1177,35 @@ async function manualSubmitFlow(evObj = null) {
     return;
   }
 
-  const { imgProps } = cap;
-  const imgData = new ImageData(new Uint8ClampedArray(imgProps.data), imgProps.width, imgProps.height);
+  const imgProps = cap && cap.imgProps ? cap.imgProps : null;
+  if (!imgProps || !imgProps.data || !imgProps.width || !imgProps.height) {
+    showEvent("Manual submit", "Capture failed (no image data). Try again with tooltip visible.", "warn", true, true);
+    try { console.log("[MANUAL] cap=", cap); } catch (e) {}
+    return;
+  }
+
+  // Normalize capture buffer to Uint8ClampedArray (RGBA)
+  let rgba;
+  const buf = imgProps.data;
+  if (buf instanceof Uint8ClampedArray) {
+    rgba = buf;
+  } else if (buf instanceof Uint8Array) {
+    rgba = new Uint8ClampedArray(buf.buffer);
+  } else if (buf && buf.buffer) {
+    rgba = new Uint8ClampedArray(buf.buffer);
+  } else {
+    showEvent("Manual submit", "Capture buffer format unsupported.", "warn", true, true);
+    try { console.log("[MANUAL] imgProps=", imgProps); } catch (e) {}
+    return;
+  }
+
+  // Guard against tiny captures before OCR
+  if (imgProps.width < 10 || imgProps.height < 10) {
+    showEvent("Manual submit", `Capture too small (${imgProps.width}x${imgProps.height}). Try again.`, "warn", true, true);
+    return;
+  }
+
+  const imgData = new ImageData(rgba, imgProps.width, imgProps.height);
 
   const ocr = await __tesseractRecognizeImageData(imgData, {
     scale: 4,
