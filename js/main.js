@@ -775,26 +775,41 @@ async function __initTesseractOnce() {
     }
     // Use CDN assets by default (keeps plugin zip small).
     // If you prefer fully-offline, host these files locally and change the paths.
-    const worker = await Tesseract.createWorker({
-      workerPath: "https://unpkg.com/tesseract.js@5/dist/worker.min.js",
-      corePath: "https://unpkg.com/tesseract.js-core@5/tesseract-core.wasm.js",
-      langPath: "https://tessdata.projectnaptha.com/4.0.0",
-    });
+    // Use CDN assets by default (keeps plugin zip small).
+// NOTE: With tesseract.js v5, do NOT pass worker/core/lang paths or a logger function here.
+// Alt1/CEF is most stable with the default resolver.
+let __tessWorker = null;
+let __tessInitPromise = null;
+
+async function __initTesseractOnce() {
+  if (__tessWorker) return __tessWorker;
+  if (__tessInitPromise) return __tessInitPromise;
+
+  __tessInitPromise = (async () => {
+    const worker = await Tesseract.createWorker(); // ✅ v5-correct
 
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
 
-    // Defaults tuned for short UI blocks (tooltips/menu)
-    await worker.setParameters({
-      preserve_interword_spaces: "1",
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
-    });
-
-    __tess.worker = worker;
-    __tess.ready = true;
-    return true;
+    __tessWorker = worker;
+    return worker;
   })();
-  return __tess.initPromise;
+
+  try {
+    return await __tessInitPromise;
+  } finally {
+    // keep the resolved promise around via __tessWorker; clear pending handle
+    __tessInitPromise = null;
+  }
+}
+
+// Optional cleanup helper (call on unload if you want)
+async function __terminateTesseract() {
+  try {
+    if (__tessWorker) await __tessWorker.terminate();
+  } catch (e) {}
+  __tessWorker = null;
+  __tessInitPromise = null;
 }
 
 function __imgRefToImageData(imgRef) {
