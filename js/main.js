@@ -504,6 +504,10 @@
     return await prom;
   }
 
+  // Expose selection helper for handlers defined outside this scope.
+  // (Alt1 right-click handler calls manualSubmitFlow from global scope.)
+  try { window.__selectIconRegionAroundMouse = __selectIconRegionAroundMouse; } catch (e) {}
+
   
 
 
@@ -850,7 +854,8 @@ async function manualSubmitFlow() {
   try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selection = await __selectIconRegionAroundMouse(500);
+  const selectionFn = (window && window.__selectIconRegionAroundMouse) ? window.__selectIconRegionAroundMouse : null;
+  const selection = selectionFn ? await selectionFn(500) : null;
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
