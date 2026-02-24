@@ -347,7 +347,165 @@
     return out;
   }
 
-  async function manualSubmitFlow() {
+  
+  // ---------- Wiki Icon template matching for manual submit ----------
+  const WIKI_ICON_ITEMS_URL = "./wiki_items.json";
+  const WIKI_ICON_BASE = "https://runescape.wiki/wiki/icon";
+  const ICON_TEMPLATE_SIZES = [32, 48]; // try both
+
+  let __iconItems = null; // array of names
+  let __iconTemplates = null; // array of { name, size, img }
+  let __iconTemplatesLoading = null;
+
+  function __encodeWikiItem(item) {
+    // wiki/icon expects + for spaces
+    return encodeURIComponent(item).replace(/%20/g, "+");
+  }
+
+  function __wikiIconUrl(itemName, size) {
+    return `${WIKI_ICON_BASE}?item=${__encodeWikiItem(itemName)}&size=${size}`;
+  }
+
+  async function ensureIconTemplatesLoaded() {
+    if (__iconTemplates) return __iconTemplates;
+    if (__iconTemplatesLoading) return __iconTemplatesLoading;
+
+    __iconTemplatesLoading = (async () => {
+      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
+        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // load item list
+      try {
+        const res = await fetch(WIKI_ICON_ITEMS_URL, { cache: "no-store" });
+        __iconItems = await res.json();
+      } catch (e) {
+        console.warn("[icon] failed to load wiki_items.json", e);
+        __iconItems = [];
+      }
+
+      // Filter to allowlist if present
+      let names = Array.isArray(__iconItems) ? __iconItems.slice() : [];
+      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
+        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
+        names = names.filter(n => allowSet.has((n || "").toLowerCase()));
+      }
+
+      // Dedup
+      const seen = new Set();
+      names = names.filter(n => {
+        const k = (n || "").toLowerCase();
+        if (!k || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+
+      const out = [];
+      for (let i = 0; i < names.length; i++) {
+        const name = names[i];
+        for (let si = 0; si < ICON_TEMPLATE_SIZES.length; si++) {
+          const size = ICON_TEMPLATE_SIZES[si];
+          const url = __wikiIconUrl(name, size);
+          try {
+            const img = await A1lib.ImageDetect.imageDataFromUrl(url);
+            if (img) out.push({ name, size, img });
+          } catch (e) {
+            // ignore individual failures
+          }
+        }
+      }
+
+      console.log(`[icon] templates loaded: ${out.length} (items: ${names.length})`);
+      __iconTemplates = out;
+      return __iconTemplates;
+    })();
+
+    return __iconTemplatesLoading;
+  }
+
+  function normalizeAlt1OcrResult(val) {
+    if (val == null) return "";
+    if (typeof val === "string") {
+      const s = val.trim();
+      if (!s) return "";
+      if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+        try {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        } catch (e) {}
+      }
+      return s;
+    }
+    if (typeof val === "object") {
+      if (typeof val.text === "string") return val.text.trim();
+      try {
+        const s = String(val);
+        if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        }
+      } catch (e) {}
+    }
+    return String(val).trim();
+  }
+
+  function readStackQtyAt(rsX, rsY) {
+    if (!window.alt1 || !alt1.permissionPixel) return 1;
+    // tight region: top-left corner digits
+    const w = 26, h = 18;
+    const bid = alt1.bindRegion(rsX, rsY, w, h);
+    if (!bid) return 1;
+
+    const optsSmall = JSON.stringify({ fontname: "small", allowgap: true });
+    const optsChat = JSON.stringify({ fontname: "chat", allowgap: true });
+
+    const yOffsets = [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < yOffsets.length; i++) {
+      const y = yOffsets[i];
+      let res = "";
+      try { res = alt1.bindReadStringEx(bid, 0, y, optsSmall); } catch (e) {}
+      let txt = normalizeAlt1OcrResult(res);
+      if (!txt) {
+        try { res = alt1.bindReadStringEx(bid, 0, y, optsChat); } catch (e) {}
+        txt = normalizeAlt1OcrResult(res);
+      }
+      const m = (txt || "").match(/\d[\d,]*/);
+      if (m) {
+        const n = parseInt(m[0].replace(/,/g, ""), 10);
+        if (isFinite(n) && n > 0) return n;
+      }
+    }
+    return 1;
+  }
+
+  function findBestIconMatch(captureImg, templates) {
+    if (!templates || !templates.length) return null;
+    let best = null;
+
+    for (let i = 0; i < templates.length; i++) {
+      const t = templates[i];
+      let m = null;
+      try {
+        m = A1lib.ImageDetect.findSubimage(captureImg, t.img);
+      } catch (e) {
+        continue;
+      }
+      if (!m) continue;
+
+      // normalize match coords
+      const mx = (typeof m.x === "number") ? m.x : (Array.isArray(m) ? m[0] : null);
+      const my = (typeof m.y === "number") ? m.y : (Array.isArray(m) ? m[1] : null);
+      if (mx == null || my == null) continue;
+
+      const score = (typeof m.score === "number") ? m.score : 1;
+      if (!best || score > best.score) best = { name: t.name, size: t.size, x: mx, y: my, score };
+    }
+    return best;
+  }
+
+async function manualSubmitFlow() {
     if (!isSetupReady()) {
       showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
       return;
@@ -361,7 +519,44 @@
     }
     try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
-    showEvent("Manual submit", "Scanning tooltip text…", "ok", true, false);
+    showEvent("Manual submit", "Scanning around mouse (icons)…", "ok", true, false);
+    // Try icon matching first
+    const templates = await ensureIconTemplatesLoaded();
+    let iconMatch = null;
+    if (templates && templates.length && window.A1lib && typeof A1lib.capture === "function") {
+      const pos = getMousePos();
+      const mx2 = pos ? pos.x : 0;
+      const my2 = pos ? pos.y : 0;
+      const capW = 450, capH = 450;
+      const rx2 = Math.max(0, mx2 - (capW >> 1));
+      const ry2 = Math.max(0, my2 - (capH >> 1));
+      let capImg = null;
+      try { capImg = A1lib.capture(rx2, ry2, capW, capH); } catch (e) {}
+      if (capImg) {
+        iconMatch = findBestIconMatch(capImg, templates);
+        if (iconMatch && iconMatch.name) {
+          // qty OCR: top-left quadrant of the matched icon
+          const qty = readStackQtyAt(rx2 + iconMatch.x, ry2 + iconMatch.y);
+          const v = validateDropName(iconMatch.name);
+          const chosenIcon = (v && v.valid) ? (v.canonical || iconMatch.name) : null;
+          if (chosenIcon) {
+            showEvent("Manual submit", `Icon match: ${chosenIcon} x${qty}`, "ok", true, false);
+            try {
+              await submitDrop({ drop_name: chosenIcon, amount: String(qty || 1) });
+              showEvent("Manual submit", `Submitted: ${chosenIcon} x${qty}`, "ok", true, true);
+              playOk();
+              return;
+            } catch (e) {
+              showEvent("Manual submit", "Submit failed (icon): " + (e && e.message ? e.message : e), "warn", true, true);
+              // fall through to tooltip OCR
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback to tooltip OCR
+    showEvent("Manual submit", "Icon match failed; scanning tooltip text…", "ok", true, false);
     const ocrRes = await ocrRegionAroundMouse(300);
     if (!ocrRes.ok) {
       showEvent("Manual submit", "OCR failed: " + (ocrRes.reason || "no text"), "warn", true, true);

@@ -105,7 +105,8 @@
         </div>
         <button class="btn secondary small" id="btnOpenSettings2">Settings</button>
       </div>
-
+<div id="manualStatus" class="manualStatus"></div>
+      </div>
 
       <!-- Event Line -->
       <div id="eventLine" class="eventLine ok show" style="margin-bottom:0px;">
@@ -209,22 +210,7 @@
           </div>
         </div>
 
-        
-        <div class="section">
-          <div class="sectionTitle">Hotkeys</div>
-
-          <div class="field">
-            <label for="hotkeyManualSubmit">Manual submit hotkey</label>
-            <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
-              <input id="hotkeyManualSubmit" placeholder="Unassigned" readonly />
-              <button class="btn secondary small" id="btnSetHotkeyManualSubmit">Set</button>
-              <button class="btn danger small" id="btnClearHotkeyManualSubmit">Clear</button>
-            </div>
-            <div class="hint">Press your hotkey while hovering a drop/loot tooltip to OCR a 300×300 area around your mouse and submit if verified.</div>
-          </div>
-        </div>
-
-<!-- Hidden runtime section -->
+        <!-- Hidden runtime section -->
         <div class="section" style="display:none;">
           <div class="sectionTitle">Runtime</div>
           <div class="rowInline" style="gap:10px; flex-wrap:wrap;">
