@@ -766,7 +766,8 @@
 let __tess = { worker: null, ready: false, initPromise: null, lastParamsKey: "" };
 
 async function __initTesseractOnce() {
-  if (__tess.ready && __tess.worker) return true;
+  // v5.x: worker comes pre-initialized and language is bundled; do NOT call loadLanguage/initialize.
+  if (__tess.ready) return true;
   if (__tess.initPromise) return __tess.initPromise;
 
   __tess.initPromise = (async () => {
@@ -775,66 +776,62 @@ async function __initTesseractOnce() {
       return false;
     }
 
-    // ✅ tesseract.js v5: createWorker() WITHOUT passing functions/paths (Alt1/CEF friendly).
-    const worker = await Tesseract.createWorker();
+    let worker;
+    try {
+      // ✅ Most stable in Alt1/CEF: default createWorker() (no paths, no logger funcs)
+      worker = await Tesseract.createWorker();
+    } catch (e) {
+      console.warn("[TESS] createWorker failed:", e);
+      return false;
+    }
 
-    // v5.1+: workers are pre-initialized with language preloaded (loadLanguage/initialize deprecated).
-    // Set global parameters once; per-call we only toggle PSM + whitelist.
-    await worker.setParameters({
-      preserve_interword_spaces: "1",
-      user_defined_dpi: "300",
-
-      // Disable dictionaries for speed & to avoid "correcting" game item names.
-      load_system_dawg: "0",
-      load_freq_dawg: "0",
-      tessedit_enable_dict_correction: "0",
-    });
+    // Set only safe runtime parameters (avoid init-only params)
+    try {
+      await worker.setParameters({
+        user_defined_dpi: "300",
+        preserve_interword_spaces: "1"
+      });
+    } catch (e) {
+      // ignore
+    }
 
     __tess.worker = worker;
     __tess.ready = true;
-    __tess.lastParamsKey = ""; // cache for (psm|whitelist)
     return true;
   })();
 
   return __tess.initPromise;
 }
 
-// Optional cleanup helper (not required)
-async function __terminateTesseract() {
-  try { await __tess.worker?.terminate(); } catch (e) {}
-  __tess.worker = null;
-  __tess.ready = false;
-  __tess.initPromise = null;
-  __tess.lastParamsKey = "";
-}
-
 function __imgRefToImageData(imgRef) {
-  // ImgRef-like objects from A1lib.capture expose {width,height,data}
+  // Accept ImgRef-like objects from A1lib.capture:
+  // - some builds expose {width,height,data}
+  // - others expose {w,h,imgdata} or {pixels}
   try {
-    if (!imgRef || !imgRef.data || !imgRef.width || !imgRef.height) return null;
-    return new ImageData(new Uint8ClampedArray(imgRef.data), imgRef.width, imgRef.height);
+    const props = (typeof __getImgProps === "function") ? __getImgProps(imgRef) : null;
+    const data = props ? props.data : (imgRef && (imgRef.data || imgRef.imgdata || imgRef.pixels));
+    const width = props ? props.width : (imgRef && (imgRef.width || imgRef.w));
+    const height = props ? props.height : (imgRef && (imgRef.height || imgRef.h));
+    if (!data || !width || !height) return null;
+    return new ImageData(new Uint8ClampedArray(data), width | 0, height | 0);
   } catch (e) {
     return null;
   }
 }
 
-function __preprocessToCanvasBW(imgData, scale, threshold) {
+function __preprocessToCanvasBW(imgData, scale, threshold, invert = true) {
   const srcW = imgData.width | 0, srcH = imgData.height | 0;
   const s = Math.max(1, scale | 0);
-
-  // threshold can be a number (0-255) or null/"auto" for adaptive
-  let t = (threshold === "auto" || threshold == null) ? null : (threshold | 0);
-  if (t != null) t = Math.max(0, Math.min(255, t));
+  const t = Math.max(0, Math.min(255, threshold | 0));
 
   const tmp = document.createElement("canvas");
-  tmp.width = srcW;
-  tmp.height = srcH;
+  tmp.width = Math.max(1, srcW);
+  tmp.height = Math.max(1, srcH);
   tmp.getContext("2d", { willReadFrequently: true }).putImageData(imgData, 0, 0);
 
-  // Upscale with nearest-neighbor to thicken thin UI glyphs
   const c = document.createElement("canvas");
-  c.width = srcW * s;
-  c.height = srcH * s;
+  c.width = Math.max(1, srcW * s);
+  c.height = Math.max(1, srcH * s);
 
   const ctx = c.getContext("2d", { willReadFrequently: true });
   ctx.imageSmoothingEnabled = false;
@@ -843,34 +840,21 @@ function __preprocessToCanvasBW(imgData, scale, threshold) {
   const d = ctx.getImageData(0, 0, c.width, c.height);
   const p = d.data;
 
-  // Adaptive threshold tuned for RuneScape tooltips:
-  // tooltip text is usually bright on dark background; we binarize then invert to black text on white.
-  if (t == null) {
-    let sum = 0, cnt = 0;
-    for (let i = 0; i < p.length; i += 4) {
-      const r = p[i], g = p[i + 1], b = p[i + 2];
-      const lum = (0.299 * r + 0.587 * g + 0.114 * b);
-      if (lum > 120) { sum += lum; cnt++; } // likely text pixels
-    }
-    const meanBright = cnt ? (sum / cnt) : 175;
-    // Pull threshold down slightly so anti-aliased edges stay "on"
-    t = Math.max(140, Math.min(215, meanBright * 0.85));
-  }
-
+  // Grayscale + hard threshold (fast). For RS tooltips (bright text on dark bg),
+  // invert to black-on-white which Tesseract prefers.
   for (let i = 0; i < p.length; i += 4) {
     const r = p[i], g = p[i + 1], b = p[i + 2];
-    const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+    const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) | 0;
 
-    // Binarize: bright => text (on)
-    const on = lum >= t ? 255 : 0;
+    // binarize
+    let v = lum >= t ? 255 : 0;
 
-    // Invert to black text on white background (best for Tesseract)
-    const v = 255 - on;
+    // invert to black text on white background
+    if (invert) v = 255 - v;
 
     p[i] = p[i + 1] = p[i + 2] = v;
     p[i + 3] = 255;
   }
-
   ctx.putImageData(d, 0, 0);
   return c;
 }
@@ -886,27 +870,59 @@ function __normalizeTessText(t) {
 async function __tesseractRecognizeImageData(imgData, opts) {
   const ok = await __initTesseractOnce();
   if (!ok || !__tess.worker) return { ok: false, reason: "Tesseract init failed." };
+  if (!imgData || !imgData.width || !imgData.height) return { ok: false, reason: "No image data." };
 
-  const scale = (opts && opts.scale) ? opts.scale : 4;
-  const threshold = (opts && ("threshold" in opts)) ? opts.threshold : "auto";
+  const w0 = imgData.width | 0, h0 = imgData.height | 0;
+  if (w0 < 3 || h0 < 3) return { ok: false, reason: `Image too small (${w0}x${h0}).` };
+
+  const scale = (opts && opts.scale) ? (opts.scale | 0) : 4;
   const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_LINE;
 
   // Default whitelist: RuneScape tooltip/action lines are mostly letters + spaces + punctuation.
   const whitelist = (opts && opts.whitelist)
-    ? opts.whitelist
-    : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-:/()[]+.,&%!?";
+    ? String(opts.whitelist)
+    : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \'-:/()[]+.,&%!?";
+
+  // Auto-threshold tuned for bright tooltip text on dark background.
+  // We take a small sample and pick a threshold slightly above the median luminance.
+  function autoThreshold() {
+    try {
+      const p = imgData.data;
+      if (!p || p.length < 16) return 165;
+      const step = Math.max(4, ((p.length / 4) / 1800) | 0); // sample up to ~1800 pixels
+      const vals = [];
+      for (let i = 0, px = 0; i < p.length && px < 1800; i += 4 * step, px++) {
+        const r = p[i] | 0, g = p[i + 1] | 0, b = p[i + 2] | 0;
+        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b);
+        vals.push(lum);
+      }
+      vals.sort((a, b) => a - b);
+      const med = vals[(vals.length / 2) | 0] || 0;
+      // Tooltip background tends to be dark -> median low; push threshold upward.
+      const th = Math.max(120, Math.min(220, (med + 45) | 0));
+      return th;
+    } catch (e) {
+      return 165;
+    }
+  }
+
+  const thresholdOpt = (opts && ("threshold" in opts)) ? opts.threshold : "auto";
+  const threshold = (thresholdOpt === "auto" || thresholdOpt == null) ? autoThreshold() : (thresholdOpt | 0);
 
   try {
     const key = `${psm}|${whitelist}`;
     if (__tess.lastParamsKey !== key) {
       await __tess.worker.setParameters({
+        // Only set runtime-safe params (avoid init-only params like load_*_dawg)
         tessedit_pageseg_mode: String(psm),
-        tessedit_char_whitelist: whitelist
+        tessedit_char_whitelist: whitelist,
+        user_defined_dpi: "300",
+        preserve_interword_spaces: "1"
       });
       __tess.lastParamsKey = key;
     }
 
-    const canvas = __preprocessToCanvasBW(imgData, scale, threshold);
+    const canvas = __preprocessToCanvasBW(imgData, scale, threshold, true);
     const res = await __tess.worker.recognize(canvas);
     const text = __normalizeTessText(res && res.data ? res.data.text : "");
     return text ? { ok: true, text } : { ok: false, reason: "No text." };
@@ -951,6 +967,11 @@ async function ocrTooltipNearSelectionTesseract(selection) {
     let imgRef = null;
     try { imgRef = A1lib.capture(pr.x, pr.y, pr.w, pr.h); } catch (e) {}
     if (!imgRef) continue;
+
+    // Skip obviously-bad captures (can happen if probe is off-screen / outside game capture).
+    const iw = (imgRef.width || imgRef.w || 0) | 0;
+    const ih = (imgRef.height || imgRef.h || 0) | 0;
+    if (iw < 60 || ih < 25) continue;
 
     const imgData = __imgRefToImageData(imgRef);
     if (!imgData) continue;
