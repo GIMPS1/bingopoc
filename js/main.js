@@ -502,9 +502,6 @@
     step: 3,          // search step (pixels)
     acceptScore: 0.86 // minimum correlation to accept
   };
-  // Debug: set true to log icon matching attempts and scores
-  const DEBUG_ICON_MATCH = true;
-
 
   function __getImgProps(img) {
     if (!img) return null;
@@ -515,29 +512,41 @@
     return { data, width, height };
   }
 
-  function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
-    // Nearest-neighbor downsample for speed.
-    const out = new Uint8Array(outSize * outSize);
-    const invW = sw / outSize;
-    const invH = sh / outSize;
+  
+function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
+  // Nearest-neighbor downsample for speed. Alpha-aware: composite onto a neutral background
+  // so transparent template pixels don't become "black" and ruin similarity.
+  const out = new Uint8Array(outSize * outSize);
+  const invW = sw / outSize;
+  const invH = sh / outSize;
 
-    const w = src.width;
-    const data = src.data;
+  const w = src.width;
+  const data = src.data;
 
-    let k = 0;
-    for (let y = 0; y < outSize; y++) {
-      const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
-      const row = (py * w) | 0;
-      for (let x = 0; x < outSize; x++) {
-        const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
-        const i = ((row + px) << 2) | 0;
-        const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
-        // Integer luminance approximation (BT.601)
-        out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
+  // Neutral mid-gray background (tuned for RS UI; exact value not critical)
+  const bg = 40;
+
+  let k = 0;
+  for (let y = 0; y < outSize; y++) {
+    const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
+    const row = (py * w) | 0;
+    for (let x = 0; x < outSize; x++) {
+      const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
+      const i = ((row + px) << 2) | 0;
+      let r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
+      if (a !== 255) {
+        const invA = 255 - a;
+        r = ((r * a + bg * invA) / 255) | 0;
+        g = ((g * a + bg * invA) / 255) | 0;
+        b = ((b * a + bg * invA) / 255) | 0;
       }
+      // Integer luminance approximation (BT.601)
+      out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
     }
-    return out;
   }
+  return out;
+}
 
   function __centerAndInvStd(gray) {
     // Returns { centered:Int16Array, invStd:number } with std computed over centered values.
@@ -557,35 +566,7 @@
     // Avoid div-by-zero on flat images.
     const std = Math.sqrt(ss) || 1e-9;
     return { centered, invStd: 1 / std };
-  
-
-  function __edgeMapFromGray(gray, size) {
-    // Fast edge magnitude map (Sobel-lite) on a size×size grayscale array.
-    // Returns Float32Array length size*size.
-    const n = size | 0;
-    const out = new Float32Array(n * n);
-    // Skip borders for speed; borders stay 0.
-    for (let y = 1; y < n - 1; y++) {
-      const row = y * n;
-      const rowU = (y - 1) * n;
-      const rowD = (y + 1) * n;
-      for (let x = 1; x < n - 1; x++) {
-        // Sobel kernels (approx). Use integer ops where possible.
-        const gx =
-          -gray[rowU + (x - 1)] + gray[rowU + (x + 1)] +
-          -2 * gray[row + (x - 1)] + 2 * gray[row + (x + 1)] +
-          -gray[rowD + (x - 1)] + gray[rowD + (x + 1)];
-        const gy =
-          -gray[rowU + (x - 1)] - 2 * gray[rowU + x] - gray[rowU + (x + 1)] +
-           gray[rowD + (x - 1)] + 2 * gray[rowD + x] + gray[rowD + (x + 1)];
-        // Magnitude (L1 is faster than sqrt and works well for matching)
-        const mag = Math.abs(gx) + Math.abs(gy);
-        out[row + x] = mag;
-      }
-    }
-    return out;
   }
-}
 
   function __znccScore(templateFeat, candFeat) {
     const a = templateFeat.centered;
@@ -595,42 +576,15 @@
     for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
     return dot * templateFeat.invStd * candFeat.invStd;
   }
-function __edgeMapFromGray(gray, width, height) {
-  const out = new Float32Array(gray.length);
 
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const i = y * width + x;
-
-      // Simple Sobel-like gradient magnitude
-      const gx =
-        -gray[i - width - 1] - 2 * gray[i - 1] - gray[i + width - 1] +
-         gray[i - width + 1] + 2 * gray[i + 1] + gray[i + width + 1];
-
-      const gy =
-        -gray[i - width - 1] - 2 * gray[i - width] - gray[i - width + 1] +
-         gray[i + width - 1] + 2 * gray[i + width] + gray[i + width + 1];
-
-      out[i] = Math.sqrt(gx * gx + gy * gy);
-    }
-  }
-
-  return out;
-}
   function __buildTemplateFeatures(templates) {
     for (let i = 0; i < templates.length; i++) {
       const t = templates[i];
-      if (!t) continue;
-      // Build and cache features once per template for speed.
-      if (!t._featGray || !t._featEdge) {
+      if (t && !t._feat) {
         const props = __getImgProps(t.img);
         if (!props) continue;
         const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
-        const featGray = __centerAndInvStd(gray);
-        const edge = __edgeMapFromGray(gray, ICON_MATCH.sampleSize);
-        const featEdge = __centerAndInvStd(edge);
-        t._featGray = featGray;
-        t._featEdge = featEdge;
+        t._feat = __centerAndInvStd(gray);
       }
     }
     return templates;
@@ -664,21 +618,17 @@ function __edgeMapFromGray(gray, width, height) {
         const x = clamp(cx + dx, 0, cap.width - iconSz);
 
         const gray = __downsampleToGray16(cap, x, y, iconSz, iconSz, outSz);
-        const candGray = __centerAndInvStd(gray);
-        const edge = __edgeMapFromGray(gray, outSz);
-        const candEdge = __centerAndInvStd(edge);
+        const candFeat = __centerAndInvStd(gray);
 
         // Compare against all templates (small N). Track best.
         for (let i = 0; i < templates.length; i++) {
           const t = templates[i];
-          if (!t || !t._featGray || !t._featEdge) continue;
+          if (!t || !t._feat) continue;
 
-          const sGray = __znccScore(t._featGray, candGray);
-          const sEdge = __znccScore(t._featEdge, candEdge);
-          const score = (0.65 * sGray) + (0.35 * sEdge);
+          const score = __znccScore(t._feat, candFeat);
 
           if (!best || score > best.score) {
-            best = { name: t.name, size: t.size, x, y, score, sGray, sEdge };
+            best = { name: t.name, size: t.size, x, y, score };
             // Early accept if extremely strong match.
             if (score >= 0.985) return best;
           }
@@ -691,332 +641,252 @@ function __edgeMapFromGray(gray, width, height) {
   }
 
 
-// -------- Manual icon selection overlay (Alt+1) --------
-// User must draw a box over the icon every time. We then match ONLY that selected region.
-function __selectRectOnCapture(capImg, screenX, screenY) {
-  return new Promise((resolve) => {
-    // Create overlay
-    const overlay = document.createElement("div");
-    overlay.style.position = "fixed";
-    overlay.style.left = "0";
-    overlay.style.top = "0";
-    overlay.style.right = "0";
-    overlay.style.bottom = "0";
-    overlay.style.zIndex = "999999";
-    overlay.style.background = "rgba(0,0,0,0.35)";
-    overlay.style.display = "flex";
-    overlay.style.alignItems = "center";
-    overlay.style.justifyContent = "center";
+// -------- Manual submit selection overlay (required every Alt+1) --------
+// We deliberately require the user to draw a box around the icon every time.
+// This removes ambiguity around capture offsets / UI scaling and makes matching stable.
+function __createOverlay() {
+  const overlay = document.createElement("div");
+  overlay.id = "irbSelectOverlay";
+  overlay.style.position = "fixed";
+  overlay.style.left = "0";
+  overlay.style.top = "0";
+  overlay.style.right = "0";
+  overlay.style.bottom = "0";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.background = "rgba(0,0,0,0.35)";
+  overlay.style.cursor = "crosshair";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
 
-    const panel = document.createElement("div");
-    panel.style.background = "rgba(20,20,20,0.92)";
-    panel.style.border = "1px solid rgba(255,255,255,0.15)";
-    panel.style.borderRadius = "10px";
-    panel.style.padding = "10px";
-    panel.style.boxShadow = "0 10px 30px rgba(0,0,0,0.55)";
-    panel.style.userSelect = "none";
+  const wrap = document.createElement("div");
+  wrap.style.position = "relative";
+  wrap.style.boxShadow = "0 8px 30px rgba(0,0,0,0.6)";
+  wrap.style.border = "1px solid rgba(255,255,255,0.15)";
+  wrap.style.background = "rgba(0,0,0,0.35)";
 
-    const title = document.createElement("div");
-    title.textContent = "Draw a box around the item icon (ESC to cancel)";
-    title.style.color = "white";
-    title.style.fontSize = "13px";
-    title.style.margin = "0 0 8px 0";
-    title.style.opacity = "0.95";
+  const canvas = document.createElement("canvas");
+  canvas.id = "irbSelectCanvas";
+  canvas.style.display = "block";
 
-    const canvas = document.createElement("canvas");
-    const cap = __getImgProps(capImg);
-    const w = cap ? cap.width : (ICON_MATCH.captureSize | 0);
-    const h = cap ? cap.height : (ICON_MATCH.captureSize | 0);
+  const label = document.createElement("div");
+  label.style.position = "absolute";
+  label.style.left = "0";
+  label.style.top = "0";
+  label.style.right = "0";
+  label.style.padding = "8px 10px";
+  label.style.font = "12px/1.2 sans-serif";
+  label.style.color = "rgba(255,255,255,0.92)";
+  label.style.background = "linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0))";
+  label.textContent = "Drag a box tightly around the item icon (Esc to cancel)";
 
-    // Scale up for easier selection (but keep math in capture coordinates)
-    const scale = (w <= 140) ? 3 : (w <= 220 ? 2 : 1);
-    canvas.width = w * scale;
-    canvas.height = h * scale;
-    canvas.style.width = canvas.width + "px";
-    canvas.style.height = canvas.height + "px";
-    canvas.style.cursor = "crosshair";
-    canvas.style.imageRendering = "pixelated";
-    canvas.style.border = "1px solid rgba(255,255,255,0.15)";
-    canvas.style.borderRadius = "8px";
-    canvas.style.display = "block";
+  wrap.appendChild(canvas);
+  wrap.appendChild(label);
+  overlay.appendChild(wrap);
 
-    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
-    // Paint capture into canvas
-    try {
-      const imgd = new ImageData(new Uint8ClampedArray(cap.data.buffer ? cap.data.buffer : cap.data), w, h);
-      // draw at native size to an offscreen then scale
-      const off = document.createElement("canvas");
-      off.width = w; off.height = h;
-      const offCtx = off.getContext("2d", { alpha: false });
-      offCtx.putImageData(imgd, 0, 0);
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
-    } catch (e) {
-      // if ImageData construction fails, just fill dark
-      ctx.fillStyle = "#111";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-
-    const hint = document.createElement("div");
-    hint.style.color = "rgba(255,255,255,0.85)";
-    hint.style.fontSize = "12px";
-    hint.style.marginTop = "8px";
-    hint.style.display = "flex";
-    hint.style.justifyContent = "space-between";
-    hint.style.gap = "10px";
-    hint.innerHTML = `<span>Tip: drag tightly around the 48px icon.</span><span style="opacity:0.8">ESC = cancel</span>`;
-
-    panel.appendChild(title);
-    panel.appendChild(canvas);
-    panel.appendChild(hint);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
-
-    let dragging = false;
-    let sx = 0, sy = 0, ex = 0, ey = 0;
-
-    function redraw() {
-      // repaint base
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      try {
-        const imgd = new ImageData(new Uint8ClampedArray(cap.data.buffer ? cap.data.buffer : cap.data), w, h);
-        const off = document.createElement("canvas");
-        off.width = w; off.height = h;
-        const offCtx = off.getContext("2d", { alpha: false });
-        offCtx.putImageData(imgd, 0, 0);
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
-      } catch (e) {
-        ctx.fillStyle = "#111";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-
-      // selection rect
-      const x0 = Math.min(sx, ex), y0 = Math.min(sy, ey);
-      const x1 = Math.max(sx, ex), y1 = Math.max(sy, ey);
-      const rw = x1 - x0, rh = y1 - y0;
-      if (rw > 0 && rh > 0) {
-        ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.25)";
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.clearRect(x0, y0, rw, rh);
-        ctx.restore();
-
-        ctx.save();
-        ctx.strokeStyle = "rgba(255,255,255,0.95)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x0 + 1, y0 + 1, rw - 2, rh - 2);
-        ctx.restore();
-      }
-    }
-
-    function cleanup(result) {
-      window.removeEventListener("keydown", onKey);
-      overlay.removeEventListener("mousedown", onDown, true);
-      overlay.removeEventListener("mousemove", onMove, true);
-      overlay.removeEventListener("mouseup", onUp, true);
-      try { document.body.removeChild(overlay); } catch (e) {}
-      resolve(result);
-    }
-
-    function toLocal(e) {
-      const r = canvas.getBoundingClientRect();
-      const x = Math.max(0, Math.min(canvas.width, (e.clientX - r.left)));
-      const y = Math.max(0, Math.min(canvas.height, (e.clientY - r.top)));
-      return { x, y };
-    }
-
-    function onKey(e) {
-      if (e.key === "Escape") cleanup(null);
-    }
-
-    function onDown(e) {
-      if (e.target !== canvas) return;
-      e.preventDefault();
-      const p = toLocal(e);
-      dragging = true;
-      sx = ex = p.x;
-      sy = ey = p.y;
-      redraw();
-    }
-    function onMove(e) {
-      if (!dragging) return;
-      e.preventDefault();
-      const p = toLocal(e);
-
-      // Force a square selection for icon matching.
-      const dx = p.x - sx;
-      const dy = p.y - sy;
-      const side = Math.max(Math.abs(dx), Math.abs(dy));
-      ex = sx + (dx < 0 ? -side : side);
-      ey = sy + (dy < 0 ? -side : side);
-
-      // Clamp to canvas bounds
-      ex = Math.max(0, Math.min(canvas.width, ex));
-      ey = Math.max(0, Math.min(canvas.height, ey));
-
-      redraw();
-    }
-    function onUp(e) {
-      if (!dragging) return;
-      e.preventDefault();
-      dragging = false;
-      const x0 = Math.min(sx, ex), y0 = Math.min(sy, ey);
-      const x1 = Math.max(sx, ex), y1 = Math.max(sy, ey);
-      const rw = x1 - x0, rh = y1 - y0;
-
-      // Minimum box size (must roughly cover the icon)
-      const minSide = 32 * scale; // ~32px in capture space
-      if (rw < minSide || rh < minSide) { redraw(); return; }
-
-      // Convert back to capture coordinates
-      const sel = {
-        x: Math.round(x0 / scale),
-        y: Math.round(y0 / scale),
-        w: Math.round(rw / scale),
-        h: Math.round(rh / scale),
-      };
-      cleanup(sel);
-    }
-
-    window.addEventListener("keydown", onKey);
-    overlay.addEventListener("mousedown", onDown, true);
-    overlay.addEventListener("mousemove", onMove, true);
-    overlay.addEventListener("mouseup", onUp, true);
-
-    // Initial redraw
-    redraw();
-  });
+  document.body.appendChild(overlay);
+  return { overlay, canvas, wrap };
 }
 
-function matchIconFromSelection(capImg, sel, templates) {
-  if (!capImg || !sel || !templates || !templates.length) return null;
+function __drawSelection(ctx, x0, y0, x1, y1) {
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  // Darken outside selection
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.clearRect(x, y, w, h);
+  // Border
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+  ctx.restore();
+}
+
+async function __selectIconRegionAroundMouse(captureSize) {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  const pos = getMousePos();
+  const mx = pos ? pos.x : 0;
+  const my = pos ? pos.y : 0;
+  const capW = captureSize | 0, capH = captureSize | 0;
+  const rx = Math.max(0, mx - (capW >> 1));
+  const ry = Math.max(0, my - (capH >> 1));
+
+  let capImg = null;
+  try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+  if (!capImg) return null;
+
   const cap = __getImgProps(capImg);
   if (!cap) return null;
 
+  const { overlay, canvas } = __createOverlay();
+  canvas.width = cap.width;
+  canvas.height = cap.height;
+  const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
+
+  // Render capture to canvas
+  const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
+  ctx.putImageData(idata, 0, 0);
+
+  let start = null;
+  let end = null;
+  let done = false;
+
+  function cleanup() {
+    if (done) return;
+    done = true;
+    try { overlay.remove(); } catch (e) {}
+    window.removeEventListener("keydown", onKey, true);
+  }
+
+  let resolve;
+
+function onKey(ev) {
+  if (ev.key === "Escape") {
+    cleanup();
+    if (resolve) resolve(null);
+  }
+}
+
+window.addEventListener("keydown", onKey, true);
+
+  const prom = new Promise((r) => { resolve = r; });
+
+  const baseImage = ctx.getImageData(0, 0, cap.width, cap.height);
+
+  function redraw() {
+    ctx.putImageData(baseImage, 0, 0);
+    if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y);
+  }
+
+  canvas.addEventListener("mousedown", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    start = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
+              y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    end = { ...start };
+    redraw();
+  });
+
+  canvas.addEventListener("mousemove", (ev) => {
+    if (!start) return;
+    const rect = canvas.getBoundingClientRect();
+    end = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
+            y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    redraw();
+  });
+
+  canvas.addEventListener("mouseup", () => {
+    if (!start || !end) return;
+    const x = Math.min(start.x, end.x);
+    const y = Math.min(start.y, end.y);
+    const w = Math.abs(end.x - start.x);
+    const h = Math.abs(end.y - start.y);
+    cleanup();
+    // Require a reasonable selection size
+    if (w < 20 || h < 20) return resolve(null);
+    resolve({ capImg, capProps: cap, rx, ry, rect: { x, y, w, h } });
+  });
+
+  return await prom;
+}
+
+function matchIconFromSelection(selection, templates) {
+  if (!selection || !selection.capProps || !selection.rect) return null;
+  if (!templates || !templates.length) return null;
+
   __buildTemplateFeatures(templates);
-  const __t0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  const __top = DEBUG_ICON_MATCH ? [] : null;
 
-  // Clamp selection inside capture
-  const x = Math.max(0, Math.min(cap.width - 1, sel.x | 0));
-  const y = Math.max(0, Math.min(cap.height - 1, sel.y | 0));
-  const w = Math.max(1, Math.min(cap.width - x, sel.w | 0));
-  const h = Math.max(1, Math.min(cap.height - y, sel.h | 0));
+  const cap = selection.capProps;
+  const r = selection.rect;
 
-  // Build candidate feature by resizing the selected region to sampleSize (no need to first resize to 48px)
-  const gray = __downsampleToGray16(cap, x, y, w, h, ICON_MATCH.sampleSize);
-  const candGray = __centerAndInvStd(gray);
-  const edge = __edgeMapFromGray(gray, ICON_MATCH.sampleSize);
-  const candEdge = __centerAndInvStd(edge);
+  // Normalize crop to a square (best for icon templates)
+  const side = Math.max(r.w, r.h);
+  const cx = r.x + (r.w >> 1);
+  const cy = r.y + (r.h >> 1);
+  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
+  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
+
+  // Downsample the selected region to the sample size, then ZNCC vs templates.
+  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+  const candFeat = __centerAndInvStd(gray);
 
   let best = null;
   for (let i = 0; i < templates.length; i++) {
     const t = templates[i];
-    if (!t || !t._featGray || !t._featEdge) continue;
+    if (!t || !t._feat) continue;
+    const score = __znccScore(t._feat, candFeat);
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+  }
+  if (!best) return null;
+  return (best.score >= ICON_MATCH.acceptScore) ? best : best;
+}
 
-    const sGray = __znccScore(t._featGray, candGray);
-    const sEdge = __znccScore(t._featEdge, candEdge);
-    // Weighted fusion: edges give robustness to background/brightness, gray keeps distinct color/shape shading.
-    const score = (0.65 * sGray) + (0.35 * sEdge);
-
-    if (__top) __top.push({ name: t.name, score, sGray, sEdge });
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score, sGray, sEdge };
+async function manualSubmitFlow() {
+  if (!isSetupReady()) {
+    showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
+    return;
   }
 
-  const __t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
-  if (DEBUG_ICON_MATCH) {
-    if (__top) {
-      __top.sort((a,b)=>b.score-a.score);
-    }
-    const top5 = __top ? __top.slice(0,5) : [];
-    console.log("[ICON MATCH] selection", {x, y, w, h}, "best=", best, "accept>=", ICON_MATCH.acceptScore, "ms=", (__t1-__t0).toFixed(2), "top5=", top5);
+  // Required: user must draw a box around the icon every time.
+  showEvent("Manual submit", "Draw a box around the item icon…", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: draw a box around the icon"); } catch (e) {}
+
+  const templates = await ensureIconTemplatesLoaded();
+  if (!templates || !templates.length) {
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+    showEvent("Manual submit", "No icon templates loaded.", "warn", true, true);
+    return;
   }
 
-  if (best && best.score >= ICON_MATCH.acceptScore) return best;
-  return null;
+  const selection = await __selectIconRegionAroundMouse(300);
+  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+
+  if (!selection) {
+    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+    return;
+  }
+
+  const best = matchIconFromSelection(selection, templates);
+
+  if (!best || !best.name) {
+    showEvent("Manual submit", "Manual submit – no icon match found.", "warn", true, true);
+    return;
+  }
+
+  // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
+  const v = validateDropName(best.name);
+  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
+  if (!chosen) {
+    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
+    return;
+  }
+
+  const qty = 1;
+  const accepted = (best.score >= ICON_MATCH.acceptScore);
+
+  // Log proof every attempt
+  try {
+    console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
+  } catch (e) {}
+
+  if (!accepted) {
+    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
+    return;
+  }
+
+  showEvent("Manual submit", `Icon match: ${chosen} x${qty} (score ${(best.score || 0).toFixed(3)})`, "ok", true, false);
+  try {
+    await submitDrop({ drop_name: chosen, amount: String(qty) });
+    showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+    playOk();
+  } catch (e) {
+    showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+  }
 }
 
 
-
-async function manualSubmitFlow() {
-    if (!isSetupReady()) {
-      showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
-      return;
-    }
-
-    // Countdown to let the user settle the mouse over the target UI.
-    const steps = ["3", "2", "1"];
-    for (let i = 0; i < steps.length; i++) {
-      const s = steps[i];
-      showEvent("Manual submit", "Get ready to select the icon… " + s, "ok", true, false);
-      try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
-      await new Promise(function (r) { setTimeout(r, 1000); });
-    }
-    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
-
-    // Always require a user-drawn selection (no OCR in this path).
-    showEvent("Manual submit", "Capturing… draw a box over the icon.", "ok", true, false);
-
-    const templates = await ensureIconTemplatesLoaded();
-    if (!templates || !templates.length) {
-      showEvent("Manual submit", "No icon templates loaded.", "warn", true, true);
-      return;
-    }
-    if (!window.A1lib || typeof A1lib.capture !== "function") {
-      showEvent("Manual submit", "A1lib.capture not available.", "warn", true, true);
-      return;
-    }
-
-    const pos = getMousePos();
-    const mx = pos ? (pos.x | 0) : 0;
-    const my = pos ? (pos.y | 0) : 0;
-
-    // Capture a larger region so the user can accurately box the icon.
-    const capW = 220, capH = 220;
-    const rx = Math.max(0, mx - (capW >> 1));
-    const ry = Math.max(0, my - (capH >> 1));
-
-    let capImg = null;
-    try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
-    if (!capImg) {
-      showEvent("Manual submit", "Capture failed (no image).", "warn", true, true);
-      return;
-    }
-
-    const sel = await __selectRectOnCapture(capImg, rx, ry);
-    if (!sel) {
-      showEvent("Manual submit", "Cancelled.", "warn", true, false);
-      return;
-    }
-
-    // Match ONLY the selected region.
-    const iconMatch = matchIconFromSelection(capImg, sel, templates);
-    if (!iconMatch || !iconMatch.name) {
-      showEvent("Manual submit", "No icon match found (try a tighter box).", "warn", true, true);
-      return;
-    }
-
-    // Manual submit qty OCR disabled (icon matching only for now)
-    const qty = 1;
-
-    const v = validateDropName(iconMatch.name);
-    const chosen = (v && v.valid) ? (v.canonical || iconMatch.name) : null;
-    if (!chosen) {
-      showEvent("Manual submit", "Matched icon is not in allowlist: " + iconMatch.name, "warn", true, true);
-      return;
-    }
-
-    showEvent("Manual submit", `Matched: ${chosen} (score ${iconMatch.score.toFixed(3)})`, "ok", true, false);
-    try {
-      await submitDrop({ drop_name: chosen, amount: String(qty || 1) });
-      showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-      playOk();
-    } catch (e) {
-      showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "bad", true, true);
-      playBeep("bad");
-    }
-  }
   function setPill(pill, label, state) {
     if (!pill) return;
     pill.textContent = label;
