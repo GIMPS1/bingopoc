@@ -1131,12 +1131,12 @@ async function ocrTooltipNearMouseTesseract(mouseAbs) {
   
 
 
-async function __captureBoxAroundMouse(boxW = 300, boxH = 300, evObj = null) {
+async async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
   if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
 
   const pos = (evObj && evObj.mouseAbs && typeof evObj.mouseAbs.x === "number")
     ? evObj.mouseAbs
-    : getMousePos();
+    : (typeof getMousePos === "function" ? getMousePos() : null);
 
   if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") return null;
 
@@ -1147,19 +1147,17 @@ async function __captureBoxAroundMouse(boxW = 300, boxH = 300, evObj = null) {
   const y = Math.max(0, (pos.y | 0) - halfH) | 0;
 
   let img = null;
-  try { img = A1lib.capture(x, y, boxW | 0, boxH | 0); } catch (e) {}
+  try {
+    img = A1lib.capture(x, y, boxW | 0, boxH | 0);
+    // Some Alt1 builds may return a Promise here.
+    if (img && typeof img.then === "function") img = await img;
+  } catch (e) {
+    return null;
+  }
   if (!img) return null;
 
   const p = __getImgProps(img);
-  if (!p || !p.data || !p.width || !p.height) return null;
-
-  // Hard guard: stop tiny/invalid images before OCR
-  if (p.width < 10 || p.height < 10) return null;
-
-  return { x, y, imgProps: p };
-}
-
-async function manualSubmitFlow(evObj = null) {
+  if (!async function manualSubmitFlow(evObj = null) {
   if (!isSetupReady()) {
     showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
     return;
@@ -1171,7 +1169,7 @@ async function manualSubmitFlow(evObj = null) {
 
   // Capture a fixed box around the mouse (tooltip is usually near cursor).
   // Slightly wider than 100px to fit common tooltip lines.
-  const cap = __captureBoxAroundMouse(240, 120, evObj);
+  const cap = await __captureBoxAroundMouse(240, 120, evObj);
   if (!cap) {
     showEvent("Manual submit", "Could not capture around mouse. Keep tooltip visible and try again.", "warn", true, true);
     return;
@@ -1259,6 +1257,13 @@ async function manualSubmitFlow(evObj = null) {
         return;
       } catch (e) {
         showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+        return;
+      }
+    }
+  }
+
+  showEvent("Manual submit", "No valid drop name detected.", "warn", true, true);
+}l submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
         return;
       }
     }
@@ -2818,19 +2823,19 @@ function stitchChatMessages(lines) {
 
   const rc = window.alt1?.events?.rightclick;
 
-  // New API: in some builds this is not an Array, but still provides .push(listener)
+  // New API (preferred): some builds expose an object with .push(), not necessarily an Array.
   if (rc && typeof rc.push === "function") {
-    rc.push((obj) => {
+    rc.push(async (obj) => {
       try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
-      manualSubmitFlow(obj);
+      try { await manualSubmitFlow(obj); } catch (err) { console.error("[MANUAL] rightclick handler error:", err); }
     });
     return;
   }
 
-  // Legacy fallback ONLY if new API is missing
-  window.alt1onrightclick = (obj) => {
+  // Legacy fallback ONLY when the new API is unavailable in this Alt1 build.
+  window.alt1onrightclick = async (obj) => {
     try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
-    manualSubmitFlow(obj);
+    try { await manualSubmitFlow(obj); } catch (err) { console.error("[MANUAL] legacy handler error:", err); }
   };
 }
 
