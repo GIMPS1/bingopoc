@@ -349,21 +349,26 @@
 
   
   // ---------- Wiki Icon template matching for manual submit ----------
-  const WIKI_ICON_ITEMS_URL = "./wiki_items.json";
-  const WIKI_ICON_BASE = "https://runescape.wiki/wiki/icon";
-  const ICON_TEMPLATE_SIZES = [32, 48]; // try both
+  const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
+  const ICON_TEMPLATE_SIZES = [32, 48]; // sizes in the bundled icon set
 
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
   let __iconTemplatesLoading = null;
 
-  function __encodeWikiItem(item) {
-    // wiki/icon expects + for spaces
-    return encodeURIComponent(item).replace(/%20/g, "+");
+  function __sanitizeIconFileName(itemName) {
+    // Match the download script naming: letters/numbers/underscore only
+    return String(itemName || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\d]+/g, "_")
+      .replace(/^_+|_+$/g, "");
   }
 
-  function __wikiIconUrl(itemName, size) {
-    return `${WIKI_ICON_BASE}?item=${__encodeWikiItem(itemName)}&size=${size}`;
+  function __localIconUrl(itemName, size) {
+    const base = "./assets/wikiicons";
+    const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
+    return `${base}/${file}`;
   }
 
   async function ensureIconTemplatesLoaded() {
@@ -377,9 +382,60 @@
         return __iconTemplates;
       }
 
+      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
+      let iconMap = [];
+      try {
+        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
+        iconMap = await res.json();
+        if (!Array.isArray(iconMap)) throw new Error("wiki_icon_map.json must be an array");
+      } catch (e) {
+        console.warn("[icon] failed to load assets/wiki_icon_map.json", e);
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // Optional allowlist filter: only keep drops that exist in allowlist.drops
+      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
+        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
+        iconMap = iconMap.filter(e => allowSet.has(String(e?.name || "").toLowerCase()));
+      }
+
+      // Load templates
+      const templates = [];
+      const fails = [];
+      const base = "./assets/wikiicons";
+      const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
+
+      for (const entry of iconMap) {
+        const name = entry?.name;
+        const size = Number(entry?.size);
+        const file = entry?.file;
+
+        if (!name || !file || !wantedSizes.has(size)) continue;
+
+        const url = `${base}/${file}`;
+        try {
+          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
+          if (img) templates.push({ name, size, file, url, img });
+          else fails.push({ name, size, file, reason: "imageDataFromUrl returned null" });
+        } catch (err) {
+          fails.push({ name, size, file, reason: String(err?.message || err) });
+        }
+      }
+
+      console.log(`[icon] templates loaded: ${templates.length} (fails: ${fails.length})`);
+      if (fails.length) console.warn("[icon] template load failures (first 10):", fails.slice(0, 10));
+
+      __iconTemplates = templates;
+      return __iconTemplates;
+    })();
+
+    return __iconTemplatesLoading;
+  }
+
       // load item list
       try {
-        const res = await fetch(WIKI_ICON_ITEMS_URL, { cache: "no-store" });
+        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
         __iconItems = await res.json();
       } catch (e) {
         console.warn("[icon] failed to load wiki_items.json", e);
@@ -407,7 +463,7 @@
         const name = names[i];
         for (let si = 0; si < ICON_TEMPLATE_SIZES.length; si++) {
           const size = ICON_TEMPLATE_SIZES[si];
-          const url = __wikiIconUrl(name, size);
+          const url = __localIconUrl(name, size);
           try {
             const img = await A1lib.ImageDetect.imageDataFromUrl(url);
             if (img) out.push({ name, size, img });
