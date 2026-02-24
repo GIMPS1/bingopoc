@@ -607,17 +607,23 @@ function __debugGrayToDataURL(gray, size) {
   }
 
   function __buildTemplateFeatures(templates) {
-    for (let i = 0; i < templates.length; i++) {
-      const t = templates[i];
-      if (t && !t._feat) {
-        const props = __getImgProps(t.img);
-        if (!props) continue;
-        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
-        t._feat = __centerAndInvStd(gray);
-      }
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (t && !t._feat) {
+      const props = __getImgProps(t.img);
+      if (!props) continue;
+
+      // Center-crop to square (removes inconsistent padding/aspect)
+      const side = Math.min(props.width, props.height);
+      const sx = ((props.width - side) >> 1);
+      const sy = ((props.height - side) >> 1);
+
+      const gray = __downsampleToGray16(props, sx, sy, side, side, ICON_MATCH.sampleSize);
+      t._feat = __centerAndInvStd(gray);
     }
-    return templates;
   }
+  return templates;
+}
 
   function findBestIconMatch(captureImg, templates) {
     if (!templates || !templates.length || !captureImg) return null;
