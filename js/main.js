@@ -366,7 +366,7 @@
   }
 
   function __localIconUrl(itemName, size) {
-    const base = "./assets/icons";
+    const base = "./assets/wikiicons";
     const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
     return `${base}/${file}`;
   }
@@ -382,7 +382,7 @@
         return __iconTemplates;
       }
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
+      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
       let iconMap = [];
       try {
         const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
@@ -403,7 +403,7 @@
       // Load templates
       const templates = [];
       const fails = [];
-      const base = "./assets/icons";
+      const base = "./assets/wikiicons";
       const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
 
       for (const entry of iconMap) {
@@ -607,23 +607,17 @@ function __debugGrayToDataURL(gray, size) {
   }
 
   function __buildTemplateFeatures(templates) {
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (t && !t._feat) {
-      const props = __getImgProps(t.img);
-      if (!props) continue;
-
-      // Center-crop to square (removes inconsistent padding/aspect)
-      const side = Math.min(props.width, props.height);
-      const sx = ((props.width - side) >> 1);
-      const sy = ((props.height - side) >> 1);
-
-      const gray = __downsampleToGray16(props, sx, sy, side, side, ICON_MATCH.sampleSize);
-      t._feat = __centerAndInvStd(gray);
+    for (let i = 0; i < templates.length; i++) {
+      const t = templates[i];
+      if (t && !t._feat) {
+        const props = __getImgProps(t.img);
+        if (!props) continue;
+        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        t._feat = __centerAndInvStd(gray);
+      }
     }
+    return templates;
   }
-  return templates;
-}
 
   function findBestIconMatch(captureImg, templates) {
     if (!templates || !templates.length || !captureImg) return null;
@@ -723,16 +717,22 @@ function __createOverlay() {
   return { overlay, canvas, wrap };
 }
 
-function __drawSelection(ctx, x0, y0, x1, y1) {
-  const x = Math.min(x0, x1);
-  const y = Math.min(y0, y1);
-  const w = Math.abs(x1 - x0);
-  const h = Math.abs(y1 - y0);
+function __drawSelection(ctx, x0, y0, x1, y1, zoom) {
+  const z = (zoom && zoom > 0) ? zoom : 1;
+
+  // draw in zoomed canvas space
+  const zx0 = x0 * z, zy0 = y0 * z, zx1 = x1 * z, zy1 = y1 * z;
+  const x = Math.min(zx0, zx1);
+  const y = Math.min(zy0, zy1);
+  const w = Math.abs(zx1 - zx0);
+  const h = Math.abs(zy1 - zy0);
+
   // Darken outside selection
   ctx.save();
   ctx.fillStyle = "rgba(0,0,0,0.25)";
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
   ctx.clearRect(x, y, w, h);
+
   // Border
   ctx.strokeStyle = "rgba(255,255,255,0.9)";
   ctx.lineWidth = 2;
@@ -740,11 +740,75 @@ function __drawSelection(ctx, x0, y0, x1, y1) {
   ctx.restore();
 }
 
+function __snapRectToIcon(cap, rect) {
+  // Best-effort snap: find non-background pixels inside the rough rect and tighten bounds.
+  // If detection fails, returns the original rect.
+  try {
+    const data = cap.data;
+    const W = cap.width, H = cap.height;
+
+    let x0 = rect.x | 0, y0 = rect.y | 0, x1 = (rect.x + rect.w) | 0, y1 = (rect.y + rect.h) | 0;
+    x0 = Math.max(0, Math.min(W - 1, x0));
+    y0 = Math.max(0, Math.min(H - 1, y0));
+    x1 = Math.max(0, Math.min(W, x1));
+    y1 = Math.max(0, Math.min(H, y1));
+    if (x1 <= x0 + 1 || y1 <= y0 + 1) return rect;
+
+    function pix(x, y) {
+      const i = ((y * W + x) << 2) | 0;
+      return [data[i] | 0, data[i + 1] | 0, data[i + 2] | 0];
+    }
+
+    // Sample BG from the 4 corners (inside the rect)
+    const c1 = pix(x0, y0), c2 = pix(x1 - 1, y0), c3 = pix(x0, y1 - 1), c4 = pix(x1 - 1, y1 - 1);
+    const bg = [
+      ((c1[0] + c2[0] + c3[0] + c4[0]) >> 2) | 0,
+      ((c1[1] + c2[1] + c3[1] + c4[1]) >> 2) | 0,
+      ((c1[2] + c2[2] + c3[2] + c4[2]) >> 2) | 0
+    ];
+
+    const TH = 28; // sensitivity: higher => less snapping (safer)
+    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+
+    for (let y = y0; y < y1; y++) {
+      let row = ((y * W) << 2) | 0;
+      for (let x = x0; x < x1; x++) {
+        const i = row + ((x << 2) | 0);
+        const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+        const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
+        if (d > TH) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+
+    if (maxX < 0) return rect;
+
+    const M = 2; // margin
+    minX = Math.max(0, (minX - M) | 0);
+    minY = Math.max(0, (minY - M) | 0);
+    maxX = Math.min(W - 1, (maxX + M) | 0);
+    maxY = Math.min(H - 1, (maxY + M) | 0);
+
+    const w = (maxX - minX + 1) | 0;
+    const h = (maxY - minY + 1) | 0;
+    if (w < 20 || h < 20) return rect; // don't snap to tiny noise
+
+    return { x: minX, y: minY, w, h };
+  } catch (e) {
+    return rect;
+  }
+}
+
 async function __selectIconRegionAroundMouse(captureSize) {
   if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
   const pos = getMousePos();
   const mx = pos ? pos.x : 0;
   const my = pos ? pos.y : 0;
+
   const capW = captureSize | 0, capH = captureSize | 0;
   const rx = Math.max(0, mx - (capW >> 1));
   const ry = Math.max(0, my - (capH >> 1));
@@ -756,14 +820,29 @@ async function __selectIconRegionAroundMouse(captureSize) {
   const cap = __getImgProps(capImg);
   if (!cap) return null;
 
+  // ---- Zoomed selection UI ----
+  // Makes it much easier to draw a tight box.
+  const ZOOM = 3; // 2–3 recommended
+
   const { overlay, canvas } = __createOverlay();
-  canvas.width = cap.width;
-  canvas.height = cap.height;
+  canvas.width = cap.width * ZOOM;
+  canvas.height = cap.height * ZOOM;
+
   const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
 
-  // Render capture to canvas
+  // Render capture scaled up (nearest-neighbor)
+  ctx.imageSmoothingEnabled = false;
+
+  const off = document.createElement("canvas");
+  off.width = cap.width;
+  off.height = cap.height;
+  const offCtx = off.getContext("2d", { alpha: true, willReadFrequently: true });
+
   const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
-  ctx.putImageData(idata, 0, 0);
+  offCtx.putImageData(idata, 0, 0);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(off, 0, 0, cap.width * ZOOM, cap.height * ZOOM);
 
   let start = null;
   let end = null;
@@ -778,54 +857,66 @@ async function __selectIconRegionAroundMouse(captureSize) {
 
   let resolve;
 
-function onKey(ev) {
-  if (ev.key === "Escape") {
-    cleanup();
-    if (resolve) resolve(null);
+  function onKey(ev) {
+    if (ev.key === "Escape") {
+      cleanup();
+      if (resolve) resolve(null);
+    }
   }
-}
-
-window.addEventListener("keydown", onKey, true);
+  window.addEventListener("keydown", onKey, true);
 
   const prom = new Promise((r) => { resolve = r; });
 
-  const baseImage = ctx.getImageData(0, 0, cap.width, cap.height);
+  const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
   function redraw() {
     ctx.putImageData(baseImage, 0, 0);
-    if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y);
+    if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y, ZOOM);
+  }
+
+  function eventToCapXY(ev) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (ev.clientX - rect.left);
+    const my = (ev.clientY - rect.top);
+    const x = Math.max(0, Math.min(cap.width - 1, Math.round(mx / ZOOM)));
+    const y = Math.max(0, Math.min(cap.height - 1, Math.round(my / ZOOM)));
+    return { x, y };
   }
 
   canvas.addEventListener("mousedown", (ev) => {
-    const rect = canvas.getBoundingClientRect();
-    start = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
-              y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    start = eventToCapXY(ev);
     end = { ...start };
     redraw();
   });
 
   canvas.addEventListener("mousemove", (ev) => {
     if (!start) return;
-    const rect = canvas.getBoundingClientRect();
-    end = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
-            y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    end = eventToCapXY(ev);
     redraw();
   });
 
   canvas.addEventListener("mouseup", () => {
     if (!start || !end) return;
+
     const x = Math.min(start.x, end.x);
     const y = Math.min(start.y, end.y);
     const w = Math.abs(end.x - start.x);
     const h = Math.abs(end.y - start.y);
+
     cleanup();
+
     // Require a reasonable selection size
     if (w < 20 || h < 20) return resolve(null);
-    resolve({ capImg, capProps: cap, rx, ry, rect: { x, y, w, h } });
+
+    const rough = { x, y, w, h };
+    const snapped = __snapRectToIcon(cap, rough);
+
+    resolve({ capImg, capProps: cap, rx, ry, rect: snapped });
   });
 
   return await prom;
 }
+
 
 function matchIconFromSelection(selection, templates) {
   if (!selection || !selection.capProps || !selection.rect) return null;
@@ -836,56 +927,39 @@ function matchIconFromSelection(selection, templates) {
   const cap = selection.capProps;
   const r = selection.rect;
 
-  // Base square around the selection center
-  const baseSide = Math.max(r.w, r.h);
+  // Normalize crop to a square (best for icon templates)
+  const side = Math.max(r.w, r.h);
   const cx = r.x + (r.w >> 1);
   const cy = r.y + (r.h >> 1);
+  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
+  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
-  // Small robustness search
-  const scales = [0.92, 1.00, 1.08];
-  const offRadius = 6;
-  const offStep = 2;
+  // Downsample the selected region to the sample size, then ZNCC vs templates.
+  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+  const candFeat = __centerAndInvStd(gray);
 
   let best = null;
 
-  // Helper clamp
-  const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+  // Debug: collect top scores (small template count, so OK)
+  const scored = (DEBUG_ICON_MATCH ? [] : null);
 
-  for (let si = 0; si < scales.length; si++) {
-    const side = Math.max(22, Math.round(baseSide * scales[si])); // keep sane minimum
-
-    for (let dy = -offRadius; dy <= offRadius; dy += offStep) {
-      for (let dx = -offRadius; dx <= offRadius; dx += offStep) {
-        const ccx = cx + dx;
-        const ccy = cy + dy;
-
-        let sx = (ccx - (side >> 1)) | 0;
-        let sy = (ccy - (side >> 1)) | 0;
-
-        sx = clamp(sx, 0, cap.width - side);
-        sy = clamp(sy, 0, cap.height - side);
-
-        const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-        const candFeat = __centerAndInvStd(gray);
-
-        for (let i = 0; i < templates.length; i++) {
-          const t = templates[i];
-          if (!t || !t._feat) continue;
-
-          const score = __znccScore(t._feat, candFeat);
-          if (!best || score > best.score) {
-            best = { name: t.name, size: t.size, score };
-            // very strong early accept
-            if (score >= 0.985) return best;
-          }
-        }
-      }
-    }
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (!t || !t._feat) continue;
+    const score = __znccScore(t._feat, candFeat);
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+    if (scored) scored.push({ name: t.name, score });
   }
 
-  if (DEBUG_ICON_MATCH && best) {
+  if (!best) return null;
+
+  if (DEBUG_ICON_MATCH) {
     try {
-      console.log("[ICON MATCH] best=", { name: best.name, score: best.score });
+      scored.sort((a, b) => b.score - a.score);
+      const top = scored.slice(0, 10);
+      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
+      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
+      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
     } catch (e) {}
   }
 
