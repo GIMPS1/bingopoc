@@ -553,6 +553,47 @@ function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
 }
 
 
+// --- Color helpers (to distinguish recolors like draconic vs tectonic energy) ---
+function __avgColor(src, sx, sy, sw, sh) {
+  // Returns [r,g,b] average (alpha-aware, composited on neutral bg)
+  const data = src.data;
+  const W = src.width;
+  const bg = 40;
+  let r = 0, g = 0, b = 0, c = 0;
+
+  // stride 2 for speed; enough for color separation
+  const yEnd = sy + sh;
+  const xEnd = sx + sw;
+  for (let y = sy; y < yEnd; y += 2) {
+    const row = (y * W) << 2;
+    for (let x = sx; x < xEnd; x += 2) {
+      const i = row + (x << 2);
+      let rr = data[i] | 0, gg = data[i + 1] | 0, bb = data[i + 2] | 0;
+      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
+      if (a !== 255) {
+        const invA = 255 - a;
+        rr = ((rr * a + bg * invA) / 255) | 0;
+        gg = ((gg * a + bg * invA) / 255) | 0;
+        bb = ((bb * a + bg * invA) / 255) | 0;
+      }
+      r += rr; g += gg; b += bb; c++;
+    }
+  }
+  if (!c) return [0, 0, 0];
+  return [r / c, g / c, b / c];
+}
+
+function __colorScore(avgA, avgB) {
+  // Convert RGB distance into a [0..1] similarity score.
+  // Scale tuned so typical RS icon recolors separate well.
+  const dr = (avgA[0] - avgB[0]);
+  const dg = (avgA[1] - avgB[1]);
+  const db = (avgA[2] - avgB[2]);
+  const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+  return 1 - Math.min(dist / 220, 1);
+}
+
+
 function __debugGrayToDataURL(gray, size) {
   // gray: Uint8Array length size*size
   try {
@@ -607,17 +648,27 @@ function __debugGrayToDataURL(gray, size) {
   }
 
   function __buildTemplateFeatures(templates) {
-    for (let i = 0; i < templates.length; i++) {
-      const t = templates[i];
-      if (t && !t._feat) {
-        const props = __getImgProps(t.img);
-        if (!props) continue;
-        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
-        t._feat = __centerAndInvStd(gray);
-      }
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (t && !t._feat) {
+      const props = __getImgProps(t.img);
+      if (!props) continue;
+
+      // Center-crop templates to square to reduce padding/aspect differences.
+      const side = Math.min(props.width, props.height);
+      const sx = ((props.width - side) >> 1);
+      const sy = ((props.height - side) >> 1);
+
+      const gray = __downsampleToGray16(props, sx, sy, side, side, ICON_MATCH.sampleSize);
+      t._feat = __centerAndInvStd(gray);
+
+      // Average color for tie-breaking recolors (computed on same crop).
+      t._color = __avgColor(props, sx, sy, side, side);
     }
-    return templates;
   }
+  return templates;
+}
+
 
   function findBestIconMatch(captureImg, templates) {
     if (!templates || !templates.length || !captureImg) return null;
@@ -935,21 +986,33 @@ function matchIconFromSelection(selection, templates) {
   const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
   // Downsample the selected region to the sample size, then ZNCC vs templates.
-  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-  const candFeat = __centerAndInvStd(gray);
+// Additionally use average color similarity to separate recolors (e.g., draconic vs tectonic energy).
+const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+const candFeat = __centerAndInvStd(gray);
+const candColor = __avgColor(cap, sx, sy, side, side);
 
-  let best = null;
+let best = null;
 
-  // Debug: collect top scores (small template count, so OK)
-  const scored = (DEBUG_ICON_MATCH ? [] : null);
+// Debug: collect top scores (small template count, so OK)
+const scored = (DEBUG_ICON_MATCH ? [] : null);
 
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (!t || !t._feat) continue;
-    const score = __znccScore(t._feat, candFeat);
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
-    if (scored) scored.push({ name: t.name, score });
-  }
+// Blend weights: shape dominates, color breaks ties.
+const W_SHAPE = 0.85;
+const W_COLOR = 0.15;
+
+for (let i = 0; i < templates.length; i++) {
+  const t = templates[i];
+  if (!t || !t._feat) continue;
+
+  const shapeScore = __znccScore(t._feat, candFeat);
+
+  // If template color missing for any reason, fall back to grayscale score.
+  const colScore = (t._color ? __colorScore(candColor, t._color) : 0.5);
+  const score = (shapeScore * W_SHAPE) + (colScore * W_COLOR);
+
+  if (!best || score > best.score) best = { name: t.name, size: t.size, score, shapeScore, colScore };
+  if (scored) scored.push({ name: t.name, score, shapeScore, colScore });
+}
 
   if (!best) return null;
 
