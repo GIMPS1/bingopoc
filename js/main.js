@@ -778,23 +778,21 @@ async function __initTesseractOnce() {
     // ✅ tesseract.js v5: createWorker() WITHOUT passing functions/paths (Alt1/CEF friendly).
     const worker = await Tesseract.createWorker();
 
-    await worker.loadLanguage("eng");
-    await worker.initialize("eng");
-
-    // Parameters tuned for RuneScape tooltip/menu text:
-    // - Tooltips are typically light text on dark background (we invert in preprocessing)
-    // - Mostly short lines / small blocks
+    // v5.1+: workers are pre-initialized with language preloaded (loadLanguage/initialize deprecated).
+    // Set global parameters once; per-call we only toggle PSM + whitelist.
     await worker.setParameters({
       preserve_interword_spaces: "1",
       user_defined_dpi: "300",
-      tessedit_pageseg_mode: String(Tesseract.PSM.SINGLE_BLOCK),
-      // Slightly restrict to common tooltip characters for speed/accuracy.
-      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-.,'!&%?* \""
+
+      // Disable dictionaries for speed & to avoid "correcting" game item names.
+      load_system_dawg: "0",
+      load_freq_dawg: "0",
+      tessedit_enable_dict_correction: "0",
     });
 
     __tess.worker = worker;
     __tess.ready = true;
-    __tess.lastParamsKey = ""; // reset cache
+    __tess.lastParamsKey = ""; // cache for (psm|whitelist)
     return true;
   })();
 
@@ -823,13 +821,17 @@ function __imgRefToImageData(imgRef) {
 function __preprocessToCanvasBW(imgData, scale, threshold) {
   const srcW = imgData.width | 0, srcH = imgData.height | 0;
   const s = Math.max(1, scale | 0);
-  const t = Math.max(0, Math.min(255, threshold | 0));
+
+  // threshold can be a number (0-255) or null/"auto" for adaptive
+  let t = (threshold === "auto" || threshold == null) ? null : (threshold | 0);
+  if (t != null) t = Math.max(0, Math.min(255, t));
 
   const tmp = document.createElement("canvas");
   tmp.width = srcW;
   tmp.height = srcH;
   tmp.getContext("2d", { willReadFrequently: true }).putImageData(imgData, 0, 0);
 
+  // Upscale with nearest-neighbor to thicken thin UI glyphs
   const c = document.createElement("canvas");
   c.width = srcW * s;
   c.height = srcH * s;
@@ -841,14 +843,34 @@ function __preprocessToCanvasBW(imgData, scale, threshold) {
   const d = ctx.getImageData(0, 0, c.width, c.height);
   const p = d.data;
 
-  // Grayscale + hard threshold (fast + works well on RS tooltips)
+  // Adaptive threshold tuned for RuneScape tooltips:
+  // tooltip text is usually bright on dark background; we binarize then invert to black text on white.
+  if (t == null) {
+    let sum = 0, cnt = 0;
+    for (let i = 0; i < p.length; i += 4) {
+      const r = p[i], g = p[i + 1], b = p[i + 2];
+      const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+      if (lum > 120) { sum += lum; cnt++; } // likely text pixels
+    }
+    const meanBright = cnt ? (sum / cnt) : 175;
+    // Pull threshold down slightly so anti-aliased edges stay "on"
+    t = Math.max(140, Math.min(215, meanBright * 0.85));
+  }
+
   for (let i = 0; i < p.length; i += 4) {
     const r = p[i], g = p[i + 1], b = p[i + 2];
-    const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) | 0;
-    const v = lum >= t ? 0 : 255;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b);
+
+    // Binarize: bright => text (on)
+    const on = lum >= t ? 255 : 0;
+
+    // Invert to black text on white background (best for Tesseract)
+    const v = 255 - on;
+
     p[i] = p[i + 1] = p[i + 2] = v;
     p[i + 3] = 255;
   }
+
   ctx.putImageData(d, 0, 0);
   return c;
 }
@@ -865,12 +887,14 @@ async function __tesseractRecognizeImageData(imgData, opts) {
   const ok = await __initTesseractOnce();
   if (!ok || !__tess.worker) return { ok: false, reason: "Tesseract init failed." };
 
-  const scale = (opts && opts.scale) ? opts.scale : 3;
-  const threshold = (opts && opts.threshold) ? opts.threshold : 170;
-  const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_BLOCK;
+  const scale = (opts && opts.scale) ? opts.scale : 4;
+  const threshold = (opts && ("threshold" in opts)) ? opts.threshold : "auto";
+  const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_LINE;
+
+  // Default whitelist: RuneScape tooltip/action lines are mostly letters + spaces + punctuation.
   const whitelist = (opts && opts.whitelist)
     ? opts.whitelist
-    : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-.,'!&%?* \"";
+    : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 '-:/()[]+.,&%!?";
 
   try {
     const key = `${psm}|${whitelist}`;
@@ -918,7 +942,7 @@ async function ocrTooltipNearSelectionTesseract(selection) {
   ];
 
   // "Zoom out" a bit for manual debug/robustness by padding the captured region.
-  const PAD = 36;
+  const PAD = 20;
 
   const reads = [];
   for (let pi = 0; pi < probes.length; pi++) {
@@ -932,8 +956,8 @@ async function ocrTooltipNearSelectionTesseract(selection) {
     if (!imgData) continue;
 
     // Try two quick parameter sets; pick best text.
-    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 2, threshold: 165, psm: Tesseract.PSM.SINGLE_BLOCK });
-    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 3, threshold: 155, psm: Tesseract.PSM.SINGLE_BLOCK });
+    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 4, threshold: "auto", psm: Tesseract.PSM.SINGLE_LINE });
+    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 5, threshold: "auto", psm: Tesseract.PSM.SINGLE_BLOCK });
 
     if (r2 && r2.ok && r2.text) {
       reads.push(r2.text);
