@@ -766,41 +766,41 @@
 let __tess = { worker: null, ready: false, initPromise: null };
 
 async function __initTesseractOnce() {
-  if (__tess.ready) return true;
+  if (__tess.ready && __tess.worker) return true;
   if (__tess.initPromise) return __tess.initPromise;
+
   __tess.initPromise = (async () => {
     if (typeof Tesseract === "undefined") {
       console.warn("[TESS] Tesseract.js not loaded. Add tesseract.min.js in index.html.");
       return false;
     }
-    // Use CDN assets by default (keeps plugin zip small).
-    // If you prefer fully-offline, host these files locally and change the paths.
-    // Use CDN assets by default (keeps plugin zip small).
-// NOTE: With tesseract.js v5, do NOT pass worker/core/lang paths or a logger function here.
-// Alt1/CEF is most stable with the default resolver.
-let __tessWorker = null;
-let __tessInitPromise = null;
 
-async function __initTesseractOnce() {
-  if (__tessWorker) return __tessWorker;
-  if (__tessInitPromise) return __tessInitPromise;
-
-  __tessInitPromise = (async () => {
-    const worker = await Tesseract.createWorker(); // ✅ v5-correct
+    // ✅ v5: do NOT pass logger/functions or path config in Alt1/CEF (prevents postMessage clone errors)
+    const worker = await Tesseract.createWorker();
 
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
 
-    __tessWorker = worker;
-    return worker;
+    // Defaults tuned for short UI blocks (tooltips/menu)
+    await worker.setParameters({
+      preserve_interword_spaces: "1",
+      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
+    });
+
+    __tess.worker = worker;
+    __tess.ready = true;
+    return true;
   })();
 
-  try {
-    return await __tessInitPromise;
-  } finally {
-    // keep the resolved promise around via __tessWorker; clear pending handle
-    __tessInitPromise = null;
-  }
+  return __tess.initPromise;
+}
+
+// Optional cleanup helper (call on unload if you want)
+async function __terminateTesseract() {
+  try { await __tess.worker?.terminate(); } catch (e) {}
+  __tess.worker = null;
+  __tess.ready = false;
+  __tess.initPromise = null;
 }
 
 // Optional cleanup helper (call on unload if you want)
