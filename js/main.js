@@ -72,11 +72,6 @@
     optUseWikiCanonical: $("optUseWikiCanonical"),
     btnUnlockChat: $("btnUnlockChat"),
 
-    // Settings - hotkeys
-    hotkeyManualSubmit: $("hotkeyManualSubmit"),
-    btnSetHotkeyManualSubmit: $("btnSetHotkeyManualSubmit"),
-    btnClearHotkeyManualSubmit: $("btnClearHotkeyManualSubmit"),
-
     // Runtime// Feed
     feed: $("feed"),
     feedMeta: $("feedMeta"),
@@ -131,7 +126,6 @@
       highlight: s.highlight === true,
       strictDrops: s.strictDrops !== false,
       useWikiCanonical: s.useWikiCanonical !== false,
-      manualHotkey: typeof s.manualHotkey === "string" ? s.manualHotkey : "",
     };
   }
   function saveSettings(patch) {
@@ -334,74 +328,7 @@
     if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
 
     return { ok: true, text: text, x: x, y: y, w: w, h: h };
-  
-
-  async function ocrQuantityNearMouse() {
-    // Heuristic: if hovering an item icon with a stack size overlay, try to OCR digits near the mouse.
-    if (!window.alt1) return null;
-    if (!alt1.permissionPixel) return null;
-
-    const pos = getMousePos();
-    if (!pos) return null;
-
-    const w = 140, h = 140;
-    const x = Math.max(0, (pos.x | 0) - ((w / 2) | 0)) | 0;
-    const y = Math.max(0, (pos.y | 0) - ((h / 2) | 0)) | 0;
-
-    let id;
-    try { id = alt1.bindRegion(x, y, w, h); } catch (e) { return null; }
-
-    const fonts = ["chat", "chatmono", "xpcounter"];
-    const argsBase = { allowgap: true };
-    try {
-      if (window.A1lib && typeof A1lib.mixcolor === "function") {
-        argsBase.colors = [
-          A1lib.mixcolor(255,255,255), // white
-          A1lib.mixcolor(255,255,0),   // yellow
-          A1lib.mixcolor(255,200,80)   // gold-ish
-        ];
-      }
-    } catch (e) {}
-
-    const seen = {};
-    const nums = [];
-    const yStep = 2;
-    const xStep = 6;
-
-    for (let fi = 0; fi < fonts.length; fi++) {
-      const font = fonts[fi];
-      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
-      for (let yy = 0; yy < h; yy += yStep) {
-        for (let xx = 0; xx < w; xx += xStep) {
-          let s = "";
-          try { s = alt1.bindReadStringEx(id, xx, yy, args) || ""; }
-          catch (e) { try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; } }
-          s = String(s).trim();
-          if (!s) continue;
-
-          const k = s.toLowerCase();
-          if (seen[k]) continue;
-          seen[k] = true;
-
-          const m = s.match(/\b(\d{1,9})\b/);
-          if (m) {
-            const n = parseInt(m[1], 10);
-            if (isFinite(n) && n > 0) nums.push(n);
-          }
-          if (nums.length >= 10) break;
-        }
-        if (nums.length >= 10) break;
-      }
-      if (nums.length) break;
-    }
-
-    if (!nums.length) return null;
-    const max = nums.reduce((a,b)=>Math.max(a,b), 0);
-    if (!max || max < 2) return null;
-    return String(max);
   }
-
-}
 
   function extractDropCandidatesFromOcr(text) {
     const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
@@ -423,22 +350,22 @@
   async function manualSubmitFlow() {
     if (!isSetupReady()) {
       showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
-return;
+      return;
     }
-const steps = ["3", "2", "1"];
+    const steps = ["3", "2", "1"];
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i];
       showEvent("Manual submit", "Hover tooltip text… scanning in " + s, "ok", true, false);
-try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
+      try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
       await new Promise(function (r) { setTimeout(r, 1000); });
     }
     try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
     showEvent("Manual submit", "Scanning tooltip text…", "ok", true, false);
-const ocrRes = await ocrRegionAroundMouse(300);
+    const ocrRes = await ocrRegionAroundMouse(300);
     if (!ocrRes.ok) {
       showEvent("Manual submit", "OCR failed: " + (ocrRes.reason || "no text"), "warn", true, true);
-return;
+      return;
     }
 
     // Try to parse + validate candidates against allowlist/canonical map
@@ -461,24 +388,18 @@ return;
 
     if (!chosen) {
       showEvent("Manual submit", "OCR found text but no valid drop matched.", "warn", true, true);
-return;
-    }
-
-    let amount = "1";
-    if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(ocrRes.text)) {
-      const q = await ocrQuantityNearMouse();
-      if (q) amount = q;
+      return;
     }
 
     showEvent("Manual submit", "Submitting: " + chosen, "ok", true, false);
-try {
-      const res = await submitDrop({ drop_name: chosen, amount: amount });
+    try {
+      const res = await submitDrop({ drop_name: chosen, amount: "1" });
       showEvent("Manual submit", "Submitted: " + chosen, "ok", true, true);
-playBeep("ok");
+      playBeep("ok");
     } catch (e) {
       const msg = (e && e.message) ? e.message : String(e);
       showEvent("Manual submit", "Submit failed: " + msg, "bad", true, true);
-playBeep("bad");
+      playBeep("bad");
     }
   }
 
@@ -644,78 +565,6 @@ playBeep("bad");
   if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
   if (ui.optStrictDrops) ui.optStrictDrops.checked = settings.strictDrops;
   if (ui.optUseWikiCanonical) ui.optUseWikiCanonical.checked = settings.useWikiCanonical;
-
-  // ---------- Hotkeys ----------
-  let _manualHotkey = settings.manualHotkey || "";
-  let _capturingManualHotkey = false;
-  let _lastManualHotkeyAt = 0;
-
-  function hotkeyToString(e) {
-    const parts = [];
-    if (e.ctrlKey) parts.push("Ctrl");
-    if (e.altKey) parts.push("Alt");
-    if (e.shiftKey) parts.push("Shift");
-    if (e.metaKey) parts.push("Meta");
-
-    let k = e.key || "";
-    if (k === " ") k = "Space";
-    if (k === "Esc") k = "Escape";
-    if (k.length === 1) k = k.toUpperCase();
-    // Ignore pure modifier presses
-    if (k === "Control" || k === "Shift" || k === "Alt" || k === "Meta") return "";
-    return parts.concat([k]).join("+");
-  }
-
-  function matchHotkey(e, hotkeyStr) {
-    if (!hotkeyStr) return false;
-    const s = hotkeyToString(e);
-    return s && s.toLowerCase() === String(hotkeyStr).toLowerCase();
-  }
-
-  function setManualHotkey(str) {
-    _manualHotkey = (str || "").trim();
-    saveSettings({ manualHotkey: _manualHotkey });
-    settings = loadSettings();
-    if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = _manualHotkey || "";
-  }
-
-  if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = _manualHotkey || "";
-
-  if (ui.btnSetHotkeyManualSubmit) ui.btnSetHotkeyManualSubmit.addEventListener("click", function () {
-    _capturingManualHotkey = true;
-    if (ui.hotkeyManualSubmit) ui.hotkeyManualSubmit.value = "Press keys…";
-    showEvent("Hotkey", "Press the desired key combination now…", "ok", true, true);
-  });
-
-  if (ui.btnClearHotkeyManualSubmit) ui.btnClearHotkeyManualSubmit.addEventListener("click", function () {
-    _capturingManualHotkey = false;
-    setManualHotkey("");
-    showEvent("Hotkey", "Manual submit hotkey cleared.", "ok", true, true);
-  });
-
-  document.addEventListener("keydown", function (e) {
-    try {
-      if (_capturingManualHotkey) {
-        const s = hotkeyToString(e);
-        if (!s) return;
-        e.preventDefault();
-        e.stopPropagation();
-        _capturingManualHotkey = false;
-        setManualHotkey(s);
-        showEvent("Hotkey", "Manual submit hotkey set: " + s, "ok", true, true);
-        return;
-      }
-
-      if (!e.repeat && matchHotkey(e, _manualHotkey)) {
-        const now = Date.now();
-        if (now - _lastManualHotkeyAt < 800) return; // debounce
-        _lastManualHotkeyAt = now;
-        e.preventDefault();
-        manualSubmitFlow();
-      }
-    } catch (err) {}
-  }, true);
-
 
   // ---------- Premium Selects (Bingo + Team) ----------
   let _bingosCache = [];
@@ -1868,7 +1717,9 @@ function stitchChatMessages(lines) {
     }
     closeDrawer();
   });
-// FIX: null-guard backdrop
+
+
+  // FIX: null-guard backdrop
   ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
   ui.optAutoDetect && ui.optAutoDetect.addEventListener("change", (e) => {
@@ -2093,6 +1944,30 @@ function stitchChatMessages(lines) {
     refreshSetupState();
   }
 
+
+  // Alt1 Hotkey: use Alt1's configured "Alt+1" (rightclick) to trigger a manual scan/submit
+  function bindAlt1ManualHotkey() {
+    if (!window.alt1) return;
+    // Preferred newer API (not available in some builds)
+    const rc = window.alt1?.events?.rightclick;
+    if (Array.isArray(rc) && typeof rc.push === "function") {
+      rc.push((obj) => {
+        try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
+        manualSubmitFlow();
+      });
+      return;
+    }
+
+    // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
+    window.alt1onrightclick = (obj) => {
+      try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
+      manualSubmitFlow();
+    };
+  }
+
+  // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
 })();
 
 
@@ -2154,4 +2029,3 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-
