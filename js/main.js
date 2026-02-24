@@ -347,6 +347,114 @@
     return out;
   }
 
+  // ---------- Fast targeted tooltip OCR (manual submit) ----------
+  // Instead of brute-force scanning a huge region (which can freeze),
+  // we probe a few likely tooltip header areas near the selected icon and read only a handful of lines.
+  function __clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+
+  function __looksLikeActionLine(s) {
+    return /\b(?:take|withdraw|withdraw-all|withdraw-\d+|withdraw-x|open|search|claim|collect|pick up|loot)\b/i.test(s || "");
+  }
+
+  function __ocrReadLineBound(boundId, font, x, y, colors) {
+    let s = "";
+    try {
+      const args = JSON.stringify((function () {
+        var o = { fontname: font, allowgap: true };
+        try { if (colors && colors.length) o.colors = colors; } catch (e) {}
+        return o;
+      })());
+      s = alt1.bindReadStringEx(boundId, x, y, args) || "";
+    } catch (e) {
+      try { s = alt1.bindReadString(boundId, font, x, y) || ""; } catch (e2) { s = ""; }
+    }
+    return String(s || "").replace(/\u00A0/g, " ").trim();
+  }
+
+  function __ocrProbeRegion(x, y, w, h) {
+    if (!window.alt1 || !alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    x = Math.max(0, x | 0);
+    y = Math.max(0, y | 0);
+    w = Math.max(20, w | 0);
+    h = Math.max(20, h | 0);
+
+    let id;
+    try { id = alt1.bindRegion(x, y, w, h); }
+    catch (e) { return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) }; }
+
+    // Tooltip headers are usually bright (white/yellow). Constraining colors improves reads.
+    let colors = null;
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        colors = [
+          A1lib.mixcolor(255, 255, 255),
+          A1lib.mixcolor(255, 255, 0),
+          A1lib.mixcolor(255, 200, 80),
+          A1lib.mixcolor(200, 255, 200)
+        ];
+      }
+    } catch (e) {}
+
+    const fonts = ["chat", "small"]; // best for tooltip/menu text
+    const xs = [2, 12, 22];
+    const lines = [];
+    const seen = {};
+
+    // Scan only a handful of baselines (fast). Tooltips are left-aligned so x loop is tiny.
+    const yStep = 7;
+    const yMax = Math.min(h, 170);
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      for (let yy = 0; yy < yMax; yy += yStep) {
+        for (let xi = 0; xi < xs.length; xi++) {
+          const xx = xs[xi];
+          const s = __ocrReadLineBound(id, font, xx, yy, colors);
+          if (!s) continue;
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          lines.push(s);
+
+          // If we saw an action line, it's almost always the one we want, so stop early.
+          if (__looksLikeActionLine(s)) {
+            return { ok: true, text: lines.join("\n"), x, y, w, h };
+          }
+          if (lines.length >= 12) return { ok: true, text: lines.join("\n"), x, y, w, h };
+        }
+      }
+      if (lines.length) break;
+    }
+
+    if (!lines.length) return { ok: false, reason: "No text." };
+    return { ok: true, text: lines.join("\n"), x, y, w, h };
+  }
+
+  // Uses the manual selection to infer likely tooltip locations and OCR only those spots.
+  function ocrTooltipNearSelection(selection) {
+    if (!selection || !selection.rect) return { ok: false, reason: "No selection." };
+    const r = selection.rect;
+
+    // Screen coords of the selected icon center
+    const ix = (selection.rx + r.x + (r.w / 2)) | 0;
+    const iy = (selection.ry + r.y + (r.h / 2)) | 0;
+
+    // Probe rectangles (screen coords). These cover common RS tooltip placements.
+    const probes = [
+      { x: ix - 240, y: iy - 170, w: 480, h: 120 }, // above
+      { x: ix + 35,  y: iy - 120, w: 520, h: 150 }, // right
+      { x: ix - 555, y: iy - 120, w: 520, h: 150 }, // left
+      { x: ix - 240, y: iy + 40,  w: 520, h: 170 }  // below
+    ];
+
+    for (let i = 0; i < probes.length; i++) {
+      const p = probes[i];
+      const res = __ocrProbeRegion(p.x, p.y, p.w, p.h);
+      if (res && res.ok && res.text) return res;
+    }
+    return { ok: false, reason: "No tooltip text found near selection." };
+  }
+
   
   // ---------- Wiki Icon template matching for manual submit ----------
   const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
@@ -382,7 +490,7 @@
         return __iconTemplates;
       }
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
+      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
       let iconMap = [];
       try {
         const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
@@ -403,7 +511,7 @@
       // Load templates
       const templates = [];
       const fails = [];
-      const base = "./assets/icons";
+      const base = "./assets/wikiicons";
       const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
 
       for (const entry of iconMap) {
@@ -553,47 +661,6 @@ function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
 }
 
 
-// --- Color helpers (to distinguish recolors like draconic vs tectonic energy) ---
-function __avgColor(src, sx, sy, sw, sh) {
-  // Returns [r,g,b] average (alpha-aware, composited on neutral bg)
-  const data = src.data;
-  const W = src.width;
-  const bg = 40;
-  let r = 0, g = 0, b = 0, c = 0;
-
-  // stride 2 for speed; enough for color separation
-  const yEnd = sy + sh;
-  const xEnd = sx + sw;
-  for (let y = sy; y < yEnd; y += 2) {
-    const row = (y * W) << 2;
-    for (let x = sx; x < xEnd; x += 2) {
-      const i = row + (x << 2);
-      let rr = data[i] | 0, gg = data[i + 1] | 0, bb = data[i + 2] | 0;
-      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
-      if (a !== 255) {
-        const invA = 255 - a;
-        rr = ((rr * a + bg * invA) / 255) | 0;
-        gg = ((gg * a + bg * invA) / 255) | 0;
-        bb = ((bb * a + bg * invA) / 255) | 0;
-      }
-      r += rr; g += gg; b += bb; c++;
-    }
-  }
-  if (!c) return [0, 0, 0];
-  return [r / c, g / c, b / c];
-}
-
-function __colorScore(avgA, avgB) {
-  // Convert RGB distance into a [0..1] similarity score.
-  // Scale tuned so typical RS icon recolors separate well.
-  const dr = (avgA[0] - avgB[0]);
-  const dg = (avgA[1] - avgB[1]);
-  const db = (avgA[2] - avgB[2]);
-  const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-  return 1 - Math.min(dist / 220, 1);
-}
-
-
 function __debugGrayToDataURL(gray, size) {
   // gray: Uint8Array length size*size
   try {
@@ -648,27 +715,17 @@ function __debugGrayToDataURL(gray, size) {
   }
 
   function __buildTemplateFeatures(templates) {
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (t && !t._feat) {
-      const props = __getImgProps(t.img);
-      if (!props) continue;
-
-      // Center-crop templates to square to reduce padding/aspect differences.
-      const side = Math.min(props.width, props.height);
-      const sx = ((props.width - side) >> 1);
-      const sy = ((props.height - side) >> 1);
-
-      const gray = __downsampleToGray16(props, sx, sy, side, side, ICON_MATCH.sampleSize);
-      t._feat = __centerAndInvStd(gray);
-
-      // Average color for tie-breaking recolors (computed on same crop).
-      t._color = __avgColor(props, sx, sy, side, side);
+    for (let i = 0; i < templates.length; i++) {
+      const t = templates[i];
+      if (t && !t._feat) {
+        const props = __getImgProps(t.img);
+        if (!props) continue;
+        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        t._feat = __centerAndInvStd(gray);
+      }
     }
+    return templates;
   }
-  return templates;
-}
-
 
   function findBestIconMatch(captureImg, templates) {
     if (!templates || !templates.length || !captureImg) return null;
@@ -986,33 +1043,21 @@ function matchIconFromSelection(selection, templates) {
   const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
   // Downsample the selected region to the sample size, then ZNCC vs templates.
-// Additionally use average color similarity to separate recolors (e.g., draconic vs tectonic energy).
-const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-const candFeat = __centerAndInvStd(gray);
-const candColor = __avgColor(cap, sx, sy, side, side);
+  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+  const candFeat = __centerAndInvStd(gray);
 
-let best = null;
+  let best = null;
 
-// Debug: collect top scores (small template count, so OK)
-const scored = (DEBUG_ICON_MATCH ? [] : null);
+  // Debug: collect top scores (small template count, so OK)
+  const scored = (DEBUG_ICON_MATCH ? [] : null);
 
-// Blend weights: shape dominates, color breaks ties.
-const W_SHAPE = 0.85;
-const W_COLOR = 0.15;
-
-for (let i = 0; i < templates.length; i++) {
-  const t = templates[i];
-  if (!t || !t._feat) continue;
-
-  const shapeScore = __znccScore(t._feat, candFeat);
-
-  // If template color missing for any reason, fall back to grayscale score.
-  const colScore = (t._color ? __colorScore(candColor, t._color) : 0.5);
-  const score = (shapeScore * W_SHAPE) + (colScore * W_COLOR);
-
-  if (!best || score > best.score) best = { name: t.name, size: t.size, score, shapeScore, colScore };
-  if (scored) scored.push({ name: t.name, score, shapeScore, colScore });
-}
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (!t || !t._feat) continue;
+    const score = __znccScore(t._feat, candFeat);
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+    if (scored) scored.push({ name: t.name, score });
+  }
 
   if (!best) return null;
 
@@ -1029,78 +1074,115 @@ for (let i = 0; i < templates.length; i++) {
   return best;
 }
 
+
 async function manualSubmitFlow() {
   if (!isSetupReady()) {
     showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
     return;
   }
 
-  // Manual submit (OCR-first): hover the item / menu near the mouse and we try to read the item name.
-  showEvent("Manual submit", "OCR scanning (500x500) near mouse…", "ok", true, false);
-  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover the item (tooltip/menu) then press Alt+1"); } catch (e) {}
+  // User hovers the item to show tooltip, then draws a box around the icon (selection helps us find the tooltip fast).
+  showEvent("Manual submit", "Hover the item (tooltip visible), then draw a box around its icon…", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
-  // 1) OCR in a larger region for reliability
-  const ocr = await ocrRegionAroundMouse(500);
+  // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
+  const selection = await __selectIconRegionAroundMouse(500);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
-  if (ocr && ocr.ok && ocr.text) {
-    // Prefer verb-based candidates (Take/Withdraw/etc.)
-    let candidates = [];
-    try { candidates = extractDropCandidatesFromOcr(ocr.text) || []; } catch (e) { candidates = []; }
+  if (!selection) {
+    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+    return;
+  }
 
-    // Fallback: pick the first reasonable line (tooltip title often appears as a standalone line)
-    if (!candidates.length) {
-      const lines = String(ocr.text).split(/\r?\n+/).map(s => String(s).trim()).filter(Boolean);
-      if (lines.length) {
-        let s = lines[0];
-        // Strip common leading verbs if OCR included them
-        s = s.replace(/^\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\b\s+/i, "").trim();
-        // Strip trailing count markers
-        s = s.replace(/\s*(?:\(?x\s*\d+\)?|x\s*\d+)\s*$/i, "").trim();
-        if (s.length >= 2) candidates = [s];
-      }
+  // ---- OCR-first path (fast targeted tooltip read) ----
+  const ocr = ocrTooltipNearSelection(selection);
+  if (ocr && ocr.ok && ocr.text) {
+    const cands = extractDropCandidatesFromOcr(ocr.text);
+
+    // Fallback: sometimes OCR gives just the title line without the verb; try first line.
+    if (!cands.length) {
+      const first = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
+      if (first) cands.push(first);
     }
 
-    if (candidates.length) {
-      const raw = String(candidates[0] || "").trim();
-      // Optionally resolve to wiki canonical (helps allowlist match)
-      let resolved = raw;
-      try {
-        const s = loadSettings();
-        if (s && s.useWikiCanonical) resolved = await resolveCanonicalName(raw);
-      } catch (e) {}
+    if (cands.length) {
+      // Try candidates in order until one validates.
+      for (let i = 0; i < Math.min(3, cands.length); i++) {
+        const raw = String(cands[i] || "").trim();
+        if (!raw) continue;
 
-      // Validate against allowlist
-      const v1 = validateDropName(resolved);
-      const v2 = v1 && v1.valid ? v1 : validateDropName(raw);
-      const chosen = (v2 && v2.valid) ? (v2.canonical || resolved) : null;
+        let v = validateDropName(raw);
+        let chosen = (v && v.valid) ? (v.canonical || raw) : null;
 
-      if (chosen) {
-        const qty = 1;
-        showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
-        try {
-          await submitDrop({ drop_name: chosen, amount: String(qty) });
-          showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-          playOk();
-          return;
-        } catch (e) {
-          showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-          return;
+        // If allowlist uses canonical wiki title, try resolving canonical once.
+        if (!chosen) {
+          try {
+            const canon = await resolveCanonicalName(raw);
+            v = validateDropName(canon);
+            chosen = (v && v.valid) ? (v.canonical || canon) : null;
+          } catch (e) {}
         }
-      } else {
-        showEvent("Manual submit", `OCR read "${resolved}" (not in allowlist)`, "warn", true, true);
-        return;
+
+        if (chosen) {
+          const qty = 1;
+          showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+          try {
+            await submitDrop({ drop_name: chosen, amount: String(qty) });
+            showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+            playOk();
+            return;
+          } catch (e) {
+            showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+            return;
+          }
+        }
       }
-    } else {
-      showEvent("Manual submit", "OCR found no item name. Try hovering the item tooltip or right-click menu.", "warn", true, true);
+
+      showEvent("Manual submit", `OCR read "${cands[0]}", but it's not in allowlist.`, "warn", true, true);
       return;
     }
   }
 
-  // If OCR failed entirely
-  showEvent("Manual submit", ocr && ocr.reason ? `OCR failed: ${ocr.reason}` : "OCR failed.", "warn", true, true);
-}
+  // ---- Fallback: icon match (keeps manual submit usable if tooltip OCR fails) ----
+  const templates = await ensureIconTemplatesLoaded();
+  if (!templates || !templates.length) {
+    showEvent("Manual submit", "OCR failed and no icon templates loaded.", "warn", true, true);
+    return;
+  }
 
+  const best = matchIconFromSelection(selection, templates);
+  if (!best || !best.name) {
+    showEvent("Manual submit", "OCR failed and no icon match found.", "warn", true, true);
+    return;
+  }
+
+  const v = validateDropName(best.name);
+  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
+  if (!chosen) {
+    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
+    return;
+  }
+
+  const qty = 1;
+  const accepted = (best.score >= ICON_MATCH.acceptScore);
+  try {
+    console.log("[MANUAL FALLBACK ICON]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
+  } catch (e) {}
+
+  if (!accepted) {
+    showEvent("Manual submit", `Closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
+    return;
+  }
+
+  showEvent("Manual submit", `Icon match: ${chosen} x${qty} (score ${(best.score || 0).toFixed(3)})`, "ok", true, false);
+  try {
+    await submitDrop({ drop_name: chosen, amount: String(qty) });
+    showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+    playOk();
+  } catch (e) {
+    showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+  }
+}
 
 
   function setPill(pill, label, state) {
