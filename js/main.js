@@ -1131,7 +1131,7 @@ async function ocrTooltipNearMouseTesseract(mouseAbs) {
   
 
 
-async async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
+async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
   if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
 
   const pos = (evObj && evObj.mouseAbs && typeof evObj.mouseAbs.x === "number")
