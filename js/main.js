@@ -836,39 +836,56 @@ function matchIconFromSelection(selection, templates) {
   const cap = selection.capProps;
   const r = selection.rect;
 
-  // Normalize crop to a square (best for icon templates)
-  const side = Math.max(r.w, r.h);
+  // Base square around the selection center
+  const baseSide = Math.max(r.w, r.h);
   const cx = r.x + (r.w >> 1);
   const cy = r.y + (r.h >> 1);
-  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
-  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
-  // Downsample the selected region to the sample size, then ZNCC vs templates.
-  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-  const candFeat = __centerAndInvStd(gray);
+  // Small robustness search
+  const scales = [0.92, 1.00, 1.08];
+  const offRadius = 6;
+  const offStep = 2;
 
   let best = null;
 
-  // Debug: collect top scores (small template count, so OK)
-  const scored = (DEBUG_ICON_MATCH ? [] : null);
+  // Helper clamp
+  const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
 
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (!t || !t._feat) continue;
-    const score = __znccScore(t._feat, candFeat);
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
-    if (scored) scored.push({ name: t.name, score });
+  for (let si = 0; si < scales.length; si++) {
+    const side = Math.max(22, Math.round(baseSide * scales[si])); // keep sane minimum
+
+    for (let dy = -offRadius; dy <= offRadius; dy += offStep) {
+      for (let dx = -offRadius; dx <= offRadius; dx += offStep) {
+        const ccx = cx + dx;
+        const ccy = cy + dy;
+
+        let sx = (ccx - (side >> 1)) | 0;
+        let sy = (ccy - (side >> 1)) | 0;
+
+        sx = clamp(sx, 0, cap.width - side);
+        sy = clamp(sy, 0, cap.height - side);
+
+        const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+        const candFeat = __centerAndInvStd(gray);
+
+        for (let i = 0; i < templates.length; i++) {
+          const t = templates[i];
+          if (!t || !t._feat) continue;
+
+          const score = __znccScore(t._feat, candFeat);
+          if (!best || score > best.score) {
+            best = { name: t.name, size: t.size, score };
+            // very strong early accept
+            if (score >= 0.985) return best;
+          }
+        }
+      }
+    }
   }
 
-  if (!best) return null;
-
-  if (DEBUG_ICON_MATCH) {
+  if (DEBUG_ICON_MATCH && best) {
     try {
-      scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, 10);
-      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
-      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
-      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
+      console.log("[ICON MATCH] best=", { name: best.name, score: best.score });
     } catch (e) {}
   }
 
