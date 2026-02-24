@@ -455,93 +455,72 @@
     return { ok: false, reason: "No tooltip text found near selection." };
   }
 
+  // ---------- Manual submit OCR helpers (no icon matching) ----------
+  function __normalizeOcrText(text) {
+    return String(text || "")
+      .replace(/\u00A0/g, " ")
+      .split(/\r?\n/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function __majorityVote(list) {
+    const m = new Map();
+    for (const v of list) {
+      const k = String(v || "");
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+    let best = "", bestN = -1;
+    for (const [k, n] of m.entries()) {
+      if (n > bestN) { bestN = n; best = k; }
+    }
+    return best;
+  }
+
+  async function ocrTooltipNearSelectionStable(selection, tries = 3, delayMs = 55) {
+    const reads = [];
+    for (let i = 0; i < tries; i++) {
+      const r = ocrTooltipNearSelection(selection);
+      if (r && r.ok && r.text) reads.push(__normalizeOcrText(r.text));
+      await new Promise(res => setTimeout(res, delayMs));
+    }
+    if (!reads.length) return { ok: false, reason: "No tooltip text found near selection." };
+
+    const voted = __majorityVote(reads);
+    if (voted) return { ok: true, text: voted };
+
+    reads.sort((a, b) => b.length - a.length);
+    return { ok: true, text: reads[0] };
+  }
+
+  function getQtyFromSelectionOrOcr(selection, ocrText) {
+    // Prefer reading the stack quantity directly from the selected icon.
+    try {
+      if (selection && selection.rect) {
+        const rsX = (selection.rx + selection.rect.x) | 0;
+        const rsY = (selection.ry + selection.rect.y) | 0;
+        const q = readStackQtyAt(rsX, rsY);
+        if (isFinite(q) && q > 0) return q;
+      }
+    } catch (e) {}
+
+    // Fallback: parse quantity markers in text (e.g. x12, (x 12), * 12).
+    try {
+      const t = String(ocrText || "");
+      const m = t.match(/(?:\bx\s*|\(\s*x\s*|\*\s*)(\d[\d,]*)\b/i);
+      if (m) {
+        const n = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+        if (isFinite(n) && n > 0) return n;
+      }
+    } catch (e) {}
+
+    return 1;
+  }
+
+
+
   
-  // ---------- Wiki Icon template matching for manual submit ----------
-  const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
-  const ICON_TEMPLATE_SIZES = [48]; // use ONLY the large icons for speed/accuracy // sizes in the bundled icon set
-
-  let __iconItems = null; // array of names
-  let __iconTemplates = null; // array of { name, size, img }
-  let __iconTemplatesLoading = null;
-
-  function __sanitizeIconFileName(itemName) {
-    // Match the download script naming: letters/numbers/underscore only
-    return String(itemName || "")
-      .trim()
-      .replace(/\s+/g, " ")
-      .replace(/[^\w\d]+/g, "_")
-      .replace(/^_+|_+$/g, "");
-  }
-
-  function __localIconUrl(itemName, size) {
-    const base = "./assets/icons";
-    const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
-    return `${base}/${file}`;
-  }
-
-  async function ensureIconTemplatesLoaded() {
-    if (__iconTemplates) return __iconTemplates;
-    if (__iconTemplatesLoading) return __iconTemplatesLoading;
-
-    __iconTemplatesLoading = (async () => {
-      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
-        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
-        __iconTemplates = [];
-        return __iconTemplates;
-      }
-
-      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
-      let iconMap = [];
-      try {
-        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
-        iconMap = await res.json();
-        if (!Array.isArray(iconMap)) throw new Error("wiki_icon_map.json must be an array");
-      } catch (e) {
-        console.warn("[icon] failed to load assets/wiki_icon_map.json", e);
-        __iconTemplates = [];
-        return __iconTemplates;
-      }
-
-      // Optional allowlist filter: only keep drops that exist in allowlist.drops
-      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
-        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
-        iconMap = iconMap.filter(e => allowSet.has(String(e?.name || "").toLowerCase()));
-      }
-
-      // Load templates
-      const templates = [];
-      const fails = [];
-      const base = "./assets/icons";
-      const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
-
-      for (const entry of iconMap) {
-        const name = entry?.name;
-        const size = Number(entry?.size);
-        const file = entry?.file;
-
-        if (!name || !file || !wantedSizes.has(size)) continue;
-
-        const url = `${base}/${file}`;
-        try {
-          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
-          if (img) templates.push({ name, size, file, url, img });
-          else fails.push({ name, size, file, reason: "imageDataFromUrl returned null" });
-        } catch (err) {
-          fails.push({ name, size, file, reason: String(err?.message || err) });
-        }
-      }
-
-      console.log(`[icon] templates loaded: ${templates.length} (fails: ${fails.length})`);
-      if (fails.length) console.warn("[icon] template load failures (first 10):", fails.slice(0, 10));
-
-      __iconTemplates = templates;
-      return __iconTemplates;
-    })();
-
-    return __iconTemplatesLoading;
-  }
-
-
   function normalizeAlt1OcrResult(val) {
     if (val == null) return "";
     if (typeof val === "string") {
@@ -598,481 +577,7 @@
   }
 
   
-  // -------- Icon matching (fast) --------
-  // We use ONLY the large (48px) icons and perform a small local search around the mouse.
-  // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
-  // This is very fast (few templates) and robust to minor brightness/contrast changes.
-  const ICON_MATCH = {
-    iconSize: 48,     // template icon size (pixels)
-    sampleSize: 16,   // downsample size for matching (pixels)
-    captureSize: 96,  // capture square around mouse (pixels)
-    searchRadius: 18, // +/- pixels around center to search
-    step: 3,          // search step (pixels)
-    acceptScore: 0.86 // minimum correlation to accept
-  };
-
-  // Debug: set true to log icon matching details on every Alt+1
-  const DEBUG_ICON_MATCH = true;
-
-
-  function __getImgProps(img) {
-    if (!img) return null;
-    const data = img.data || img.imgdata || img.pixels;
-    const width = img.width || img.w;
-    const height = img.height || img.h;
-    if (!data || !width || !height) return null;
-    return { data, width, height };
-  }
-
   
-function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
-  // Nearest-neighbor downsample for speed. Alpha-aware: composite onto a neutral background
-  // so transparent template pixels don't become "black" and ruin similarity.
-  const out = new Uint8Array(outSize * outSize);
-  const invW = sw / outSize;
-  const invH = sh / outSize;
-
-  const w = src.width;
-  const data = src.data;
-
-  // Neutral mid-gray background (tuned for RS UI; exact value not critical)
-  const bg = 40;
-
-  let k = 0;
-  for (let y = 0; y < outSize; y++) {
-    const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
-    const row = (py * w) | 0;
-    for (let x = 0; x < outSize; x++) {
-      const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
-      const i = ((row + px) << 2) | 0;
-      let r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
-      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
-      if (a !== 255) {
-        const invA = 255 - a;
-        r = ((r * a + bg * invA) / 255) | 0;
-        g = ((g * a + bg * invA) / 255) | 0;
-        b = ((b * a + bg * invA) / 255) | 0;
-      }
-      // Integer luminance approximation (BT.601)
-      out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
-    }
-  }
-  return out;
-}
-
-
-function __debugGrayToDataURL(gray, size) {
-  // gray: Uint8Array length size*size
-  try {
-    const c = document.createElement("canvas");
-    c.width = size;
-    c.height = size;
-    const ctx = c.getContext("2d");
-    const img = ctx.createImageData(size, size);
-    const d = img.data;
-    let k = 0;
-    for (let i = 0; i < gray.length; i++) {
-      const v = gray[i] | 0;
-      d[k++] = v;
-      d[k++] = v;
-      d[k++] = v;
-      d[k++] = 255;
-    }
-    ctx.putImageData(img, 0, 0);
-    return c.toDataURL("image/png");
-  } catch (e) {
-    return null;
-  }
-}
-
-  function __centerAndInvStd(gray) {
-    // Returns { centered:Int16Array, invStd:number } with std computed over centered values.
-    const n = gray.length | 0;
-    let sum = 0;
-    for (let i = 0; i < n; i++) sum += gray[i];
-    const mean = sum / n;
-
-    const centered = new Int16Array(n);
-    let ss = 0;
-    for (let i = 0; i < n; i++) {
-      const v = (gray[i] - mean);
-      const iv = v | 0;
-      centered[i] = iv;
-      ss += v * v;
-    }
-    // Avoid div-by-zero on flat images.
-    const std = Math.sqrt(ss) || 1e-9;
-    return { centered, invStd: 1 / std };
-  }
-
-  function __znccScore(templateFeat, candFeat) {
-    const a = templateFeat.centered;
-    const b = candFeat.centered;
-    let dot = 0;
-    // 256-length; keep as number (safe)
-    for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
-    return dot * templateFeat.invStd * candFeat.invStd;
-  }
-
-  function __buildTemplateFeatures(templates) {
-    for (let i = 0; i < templates.length; i++) {
-      const t = templates[i];
-      if (t && !t._feat) {
-        const props = __getImgProps(t.img);
-        if (!props) continue;
-        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
-        t._feat = __centerAndInvStd(gray);
-      }
-    }
-    return templates;
-  }
-
-  function findBestIconMatch(captureImg, templates) {
-    if (!templates || !templates.length || !captureImg) return null;
-
-    const cap = __getImgProps(captureImg);
-    if (!cap) return null;
-
-    __buildTemplateFeatures(templates);
-
-    const iconSz = ICON_MATCH.iconSize;
-    const outSz = ICON_MATCH.sampleSize;
-
-    // Search a small window around capture center.
-    const cx = (cap.width >> 1) - (iconSz >> 1);
-    const cy = (cap.height >> 1) - (iconSz >> 1);
-
-    const r = ICON_MATCH.searchRadius | 0;
-    const step = ICON_MATCH.step | 0;
-
-    let best = null;
-
-    const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
-
-    for (let dy = -r; dy <= r; dy += step) {
-      const y = clamp(cy + dy, 0, cap.height - iconSz);
-      for (let dx = -r; dx <= r; dx += step) {
-        const x = clamp(cx + dx, 0, cap.width - iconSz);
-
-        const gray = __downsampleToGray16(cap, x, y, iconSz, iconSz, outSz);
-        const candFeat = __centerAndInvStd(gray);
-
-        // Compare against all templates (small N). Track best.
-        for (let i = 0; i < templates.length; i++) {
-          const t = templates[i];
-          if (!t || !t._feat) continue;
-
-          const score = __znccScore(t._feat, candFeat);
-
-          if (!best || score > best.score) {
-            best = { name: t.name, size: t.size, x, y, score };
-            // Early accept if extremely strong match.
-            if (score >= 0.985) return best;
-          }
-        }
-      }
-    }
-
-    if (best && best.score >= ICON_MATCH.acceptScore) return best;
-    return null;
-  }
-
-
-// -------- Manual submit selection overlay (required every Alt+1) --------
-// We deliberately require the user to draw a box around the icon every time.
-// This removes ambiguity around capture offsets / UI scaling and makes matching stable.
-function __createOverlay() {
-  const overlay = document.createElement("div");
-  overlay.id = "irbSelectOverlay";
-  overlay.style.position = "fixed";
-  overlay.style.left = "0";
-  overlay.style.top = "0";
-  overlay.style.right = "0";
-  overlay.style.bottom = "0";
-  overlay.style.zIndex = "2147483647";
-  overlay.style.background = "rgba(0,0,0,0.35)";
-  overlay.style.cursor = "crosshair";
-  overlay.style.display = "flex";
-  overlay.style.alignItems = "center";
-  overlay.style.justifyContent = "center";
-
-  const wrap = document.createElement("div");
-  wrap.style.position = "relative";
-  wrap.style.boxShadow = "0 8px 30px rgba(0,0,0,0.6)";
-  wrap.style.border = "1px solid rgba(255,255,255,0.15)";
-  wrap.style.background = "rgba(0,0,0,0.35)";
-
-  const canvas = document.createElement("canvas");
-  canvas.id = "irbSelectCanvas";
-  canvas.style.display = "block";
-
-  const label = document.createElement("div");
-  label.style.position = "absolute";
-  label.style.left = "0";
-  label.style.top = "0";
-  label.style.right = "0";
-  label.style.padding = "8px 10px";
-  label.style.font = "12px/1.2 sans-serif";
-  label.style.color = "rgba(255,255,255,0.92)";
-  label.style.background = "linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0))";
-  label.textContent = "Drag a box tightly around the item icon (Esc to cancel)";
-
-  wrap.appendChild(canvas);
-  wrap.appendChild(label);
-  overlay.appendChild(wrap);
-
-  document.body.appendChild(overlay);
-  return { overlay, canvas, wrap };
-}
-
-function __drawSelection(ctx, x0, y0, x1, y1, zoom) {
-  const z = (zoom && zoom > 0) ? zoom : 1;
-
-  // draw in zoomed canvas space
-  const zx0 = x0 * z, zy0 = y0 * z, zx1 = x1 * z, zy1 = y1 * z;
-  const x = Math.min(zx0, zx1);
-  const y = Math.min(zy0, zy1);
-  const w = Math.abs(zx1 - zx0);
-  const h = Math.abs(zy1 - zy0);
-
-  // Darken outside selection
-  ctx.save();
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
-  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  ctx.clearRect(x, y, w, h);
-
-  // Border
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
-  ctx.restore();
-}
-
-function __snapRectToIcon(cap, rect) {
-  // Best-effort snap: find non-background pixels inside the rough rect and tighten bounds.
-  // If detection fails, returns the original rect.
-  try {
-    const data = cap.data;
-    const W = cap.width, H = cap.height;
-
-    let x0 = rect.x | 0, y0 = rect.y | 0, x1 = (rect.x + rect.w) | 0, y1 = (rect.y + rect.h) | 0;
-    x0 = Math.max(0, Math.min(W - 1, x0));
-    y0 = Math.max(0, Math.min(H - 1, y0));
-    x1 = Math.max(0, Math.min(W, x1));
-    y1 = Math.max(0, Math.min(H, y1));
-    if (x1 <= x0 + 1 || y1 <= y0 + 1) return rect;
-
-    function pix(x, y) {
-      const i = ((y * W + x) << 2) | 0;
-      return [data[i] | 0, data[i + 1] | 0, data[i + 2] | 0];
-    }
-
-    // Sample BG from the 4 corners (inside the rect)
-    const c1 = pix(x0, y0), c2 = pix(x1 - 1, y0), c3 = pix(x0, y1 - 1), c4 = pix(x1 - 1, y1 - 1);
-    const bg = [
-      ((c1[0] + c2[0] + c3[0] + c4[0]) >> 2) | 0,
-      ((c1[1] + c2[1] + c3[1] + c4[1]) >> 2) | 0,
-      ((c1[2] + c2[2] + c3[2] + c4[2]) >> 2) | 0
-    ];
-
-    const TH = 28; // sensitivity: higher => less snapping (safer)
-    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
-
-    for (let y = y0; y < y1; y++) {
-      let row = ((y * W) << 2) | 0;
-      for (let x = x0; x < x1; x++) {
-        const i = row + ((x << 2) | 0);
-        const r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
-        const d = Math.abs(r - bg[0]) + Math.abs(g - bg[1]) + Math.abs(b - bg[2]);
-        if (d > TH) {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        }
-      }
-    }
-
-    if (maxX < 0) return rect;
-
-    const M = 2; // margin
-    minX = Math.max(0, (minX - M) | 0);
-    minY = Math.max(0, (minY - M) | 0);
-    maxX = Math.min(W - 1, (maxX + M) | 0);
-    maxY = Math.min(H - 1, (maxY + M) | 0);
-
-    const w = (maxX - minX + 1) | 0;
-    const h = (maxY - minY + 1) | 0;
-    if (w < 20 || h < 20) return rect; // don't snap to tiny noise
-
-    return { x: minX, y: minY, w, h };
-  } catch (e) {
-    return rect;
-  }
-}
-
-async function __selectIconRegionAroundMouse(captureSize) {
-  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
-  const pos = getMousePos();
-  const mx = pos ? pos.x : 0;
-  const my = pos ? pos.y : 0;
-
-  const capW = captureSize | 0, capH = captureSize | 0;
-  const rx = Math.max(0, mx - (capW >> 1));
-  const ry = Math.max(0, my - (capH >> 1));
-
-  let capImg = null;
-  try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
-  if (!capImg) return null;
-
-  const cap = __getImgProps(capImg);
-  if (!cap) return null;
-
-  // ---- Zoomed selection UI ----
-  // Makes it much easier to draw a tight box.
-  const ZOOM = 1; // 2–3 recommended
-
-  const { overlay, canvas } = __createOverlay();
-  canvas.width = cap.width * ZOOM;
-  canvas.height = cap.height * ZOOM;
-
-  const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
-
-  // Render capture scaled up (nearest-neighbor)
-  ctx.imageSmoothingEnabled = false;
-
-  const off = document.createElement("canvas");
-  off.width = cap.width;
-  off.height = cap.height;
-  const offCtx = off.getContext("2d", { alpha: true, willReadFrequently: true });
-
-  const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
-  offCtx.putImageData(idata, 0, 0);
-
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(off, 0, 0, cap.width * ZOOM, cap.height * ZOOM);
-
-  let start = null;
-  let end = null;
-  let done = false;
-
-  function cleanup() {
-    if (done) return;
-    done = true;
-    try { overlay.remove(); } catch (e) {}
-    window.removeEventListener("keydown", onKey, true);
-  }
-
-  let resolve;
-
-  function onKey(ev) {
-    if (ev.key === "Escape") {
-      cleanup();
-      if (resolve) resolve(null);
-    }
-  }
-  window.addEventListener("keydown", onKey, true);
-
-  const prom = new Promise((r) => { resolve = r; });
-
-  const baseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-  function redraw() {
-    ctx.putImageData(baseImage, 0, 0);
-    if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y, ZOOM);
-  }
-
-  function eventToCapXY(ev) {
-    const rect = canvas.getBoundingClientRect();
-    const mx = (ev.clientX - rect.left);
-    const my = (ev.clientY - rect.top);
-    const x = Math.max(0, Math.min(cap.width - 1, Math.round(mx / ZOOM)));
-    const y = Math.max(0, Math.min(cap.height - 1, Math.round(my / ZOOM)));
-    return { x, y };
-  }
-
-  canvas.addEventListener("mousedown", (ev) => {
-    start = eventToCapXY(ev);
-    end = { ...start };
-    redraw();
-  });
-
-  canvas.addEventListener("mousemove", (ev) => {
-    if (!start) return;
-    end = eventToCapXY(ev);
-    redraw();
-  });
-
-  canvas.addEventListener("mouseup", () => {
-    if (!start || !end) return;
-
-    const x = Math.min(start.x, end.x);
-    const y = Math.min(start.y, end.y);
-    const w = Math.abs(end.x - start.x);
-    const h = Math.abs(end.y - start.y);
-
-    cleanup();
-
-    // Require a reasonable selection size
-    if (w < 20 || h < 20) return resolve(null);
-
-    const rough = { x, y, w, h };
-    const snapped = __snapRectToIcon(cap, rough);
-
-    resolve({ capImg, capProps: cap, rx, ry, rect: snapped });
-  });
-
-  return await prom;
-}
-
-
-function matchIconFromSelection(selection, templates) {
-  if (!selection || !selection.capProps || !selection.rect) return null;
-  if (!templates || !templates.length) return null;
-
-  __buildTemplateFeatures(templates);
-
-  const cap = selection.capProps;
-  const r = selection.rect;
-
-  // Normalize crop to a square (best for icon templates)
-  const side = Math.max(r.w, r.h);
-  const cx = r.x + (r.w >> 1);
-  const cy = r.y + (r.h >> 1);
-  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
-  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
-
-  // Downsample the selected region to the sample size, then ZNCC vs templates.
-  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-  const candFeat = __centerAndInvStd(gray);
-
-  let best = null;
-
-  // Debug: collect top scores (small template count, so OK)
-  const scored = (DEBUG_ICON_MATCH ? [] : null);
-
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (!t || !t._feat) continue;
-    const score = __znccScore(t._feat, candFeat);
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
-    if (scored) scored.push({ name: t.name, score });
-  }
-
-  if (!best) return null;
-
-  if (DEBUG_ICON_MATCH) {
-    try {
-      scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, 10);
-      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
-      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
-      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
-    } catch (e) {}
-  }
-
-  return best;
-}
 
 
 async function manualSubmitFlow() {
@@ -1081,12 +586,12 @@ async function manualSubmitFlow() {
     return;
   }
 
-  // User hovers the item to show tooltip, then draws a box around the icon (selection helps us find the tooltip fast).
+  // User hovers the item so the tooltip/menu appears, then draws a box around the icon.
   showEvent("Manual submit", "Hover the item (tooltip visible), then draw a box around its icon…", "ok", true, false);
   try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selection = await __selectIconRegionAroundMouse(700);
+  const selection = await __selectIconRegionAroundMouse(500);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
@@ -1094,95 +599,70 @@ async function manualSubmitFlow() {
     return;
   }
 
-  // ---- OCR-first path (fast targeted tooltip read) ----
-  const ocr = ocrTooltipNearSelection(selection);
-  if (ocr && ocr.ok && ocr.text) {
-    const cands = extractDropCandidatesFromOcr(ocr.text);
+  // ---- OCR-only path (no icon matching fallback) ----
+  // Stabilize reads by sampling multiple frames and voting.
+  const ocr = await ocrTooltipNearSelectionStable(selection, 3, 55);
 
-    // Fallback: sometimes OCR gives just the title line without the verb; try first line.
-    if (!cands.length) {
-      const first = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
-      if (first) cands.push(first);
+  if (!ocr || !ocr.ok || !ocr.text) {
+    showEvent(
+      "Manual submit",
+      "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
+      "warn",
+      true,
+      true
+    );
+    return;
+  }
+
+  const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
+  const cands = extractDropCandidatesFromOcr(ocr.text);
+
+  // Fallback: sometimes OCR gives just the title line without the verb; try first line.
+  if (!cands.length) {
+    const first = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
+    if (first) cands.push(first);
+  }
+
+  if (!cands.length) {
+    showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
+    try { console.log("[MANUAL OCR] Raw OCR text:", ocr.text); } catch (e) {}
+    return;
+  }
+
+  // Try candidates in order until one validates.
+  for (let i = 0; i < Math.min(4, cands.length); i++) {
+    const raw = String(cands[i] || "").trim();
+    if (!raw) continue;
+
+    let v = validateDropName(raw);
+    let chosen = (v && v.valid) ? (v.canonical || raw) : null;
+
+    // If allowlist uses canonical wiki title, try resolving canonical once.
+    if (!chosen) {
+      try {
+        const canon = await resolveCanonicalName(raw);
+        v = validateDropName(canon);
+        chosen = (v && v.valid) ? (v.canonical || canon) : null;
+      } catch (e) {}
     }
 
-    if (cands.length) {
-      // Try candidates in order until one validates.
-      for (let i = 0; i < Math.min(3, cands.length); i++) {
-        const raw = String(cands[i] || "").trim();
-        if (!raw) continue;
-
-        let v = validateDropName(raw);
-        let chosen = (v && v.valid) ? (v.canonical || raw) : null;
-
-        // If allowlist uses canonical wiki title, try resolving canonical once.
-        if (!chosen) {
-          try {
-            const canon = await resolveCanonicalName(raw);
-            v = validateDropName(canon);
-            chosen = (v && v.valid) ? (v.canonical || canon) : null;
-          } catch (e) {}
-        }
-
-        if (chosen) {
-          const qty = 1;
-          showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
-          try {
-            await submitDrop({ drop_name: chosen, amount: String(qty) });
-            showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-            playOk();
-            return;
-          } catch (e) {
-            showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-            return;
-          }
-        }
+    if (chosen) {
+      showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+      try {
+        await submitDrop({ drop_name: chosen, amount: String(qty) });
+        showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+        playOk();
+        return;
+      } catch (e) {
+        showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+        return;
       }
-
-      showEvent("Manual submit", `OCR read "${cands[0]}", but it's not in allowlist.`, "warn", true, true);
-      return;
     }
   }
 
-  // ---- Fallback: icon match (keeps manual submit usable if tooltip OCR fails) ----
-  const templates = await ensureIconTemplatesLoaded();
-  if (!templates || !templates.length) {
-    showEvent("Manual submit", "OCR failed and no icon templates loaded.", "warn", true, true);
-    return;
-  }
-
-  const best = matchIconFromSelection(selection, templates);
-  if (!best || !best.name) {
-    showEvent("Manual submit", "OCR failed and no icon match found.", "warn", true, true);
-    return;
-  }
-
-  const v = validateDropName(best.name);
-  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
-  if (!chosen) {
-    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
-    return;
-  }
-
-  const qty = 1;
-  const accepted = (best.score >= ICON_MATCH.acceptScore);
-  try {
-    console.log("[MANUAL FALLBACK ICON]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
-  } catch (e) {}
-
-  if (!accepted) {
-    showEvent("Manual submit", `Closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
-    return;
-  }
-
-  showEvent("Manual submit", `Icon match: ${chosen} x${qty} (score ${(best.score || 0).toFixed(3)})`, "ok", true, false);
-  try {
-    await submitDrop({ drop_name: chosen, amount: String(qty) });
-    showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-    playOk();
-  } catch (e) {
-    showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-  }
+  showEvent("Manual submit", `OCR read "${cands[0]}", but it isn't in the allowlist.`, "warn", true, true);
 }
+
 
 
   function setPill(pill, label, state) {
