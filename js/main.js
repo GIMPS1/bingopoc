@@ -557,7 +557,35 @@
     // Avoid div-by-zero on flat images.
     const std = Math.sqrt(ss) || 1e-9;
     return { centered, invStd: 1 / std };
+  
+
+  function __edgeMapFromGray(gray, size) {
+    // Fast edge magnitude map (Sobel-lite) on a size×size grayscale array.
+    // Returns Float32Array length size*size.
+    const n = size | 0;
+    const out = new Float32Array(n * n);
+    // Skip borders for speed; borders stay 0.
+    for (let y = 1; y < n - 1; y++) {
+      const row = y * n;
+      const rowU = (y - 1) * n;
+      const rowD = (y + 1) * n;
+      for (let x = 1; x < n - 1; x++) {
+        // Sobel kernels (approx). Use integer ops where possible.
+        const gx =
+          -gray[rowU + (x - 1)] + gray[rowU + (x + 1)] +
+          -2 * gray[row + (x - 1)] + 2 * gray[row + (x + 1)] +
+          -gray[rowD + (x - 1)] + gray[rowD + (x + 1)];
+        const gy =
+          -gray[rowU + (x - 1)] - 2 * gray[rowU + x] - gray[rowU + (x + 1)] +
+           gray[rowD + (x - 1)] + 2 * gray[rowD + x] + gray[rowD + (x + 1)];
+        // Magnitude (L1 is faster than sqrt and works well for matching)
+        const mag = Math.abs(gx) + Math.abs(gy);
+        out[row + x] = mag;
+      }
+    }
+    return out;
   }
+}
 
   function __znccScore(templateFeat, candFeat) {
     const a = templateFeat.centered;
@@ -571,11 +599,17 @@
   function __buildTemplateFeatures(templates) {
     for (let i = 0; i < templates.length; i++) {
       const t = templates[i];
-      if (t && !t._feat) {
+      if (!t) continue;
+      // Build and cache features once per template for speed.
+      if (!t._featGray || !t._featEdge) {
         const props = __getImgProps(t.img);
         if (!props) continue;
         const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
-        t._feat = __centerAndInvStd(gray);
+        const featGray = __centerAndInvStd(gray);
+        const edge = __edgeMapFromGray(gray, ICON_MATCH.sampleSize);
+        const featEdge = __centerAndInvStd(edge);
+        t._featGray = featGray;
+        t._featEdge = featEdge;
       }
     }
     return templates;
@@ -609,17 +643,21 @@
         const x = clamp(cx + dx, 0, cap.width - iconSz);
 
         const gray = __downsampleToGray16(cap, x, y, iconSz, iconSz, outSz);
-        const candFeat = __centerAndInvStd(gray);
+        const candGray = __centerAndInvStd(gray);
+        const edge = __edgeMapFromGray(gray, outSz);
+        const candEdge = __centerAndInvStd(edge);
 
         // Compare against all templates (small N). Track best.
         for (let i = 0; i < templates.length; i++) {
           const t = templates[i];
-          if (!t || !t._feat) continue;
+          if (!t || !t._featGray || !t._featEdge) continue;
 
-          const score = __znccScore(t._feat, candFeat);
+          const sGray = __znccScore(t._featGray, candGray);
+          const sEdge = __znccScore(t._featEdge, candEdge);
+          const score = (0.65 * sGray) + (0.35 * sEdge);
 
           if (!best || score > best.score) {
-            best = { name: t.name, size: t.size, x, y, score };
+            best = { name: t.name, size: t.size, x, y, score, sGray, sEdge };
             // Early accept if extremely strong match.
             if (score >= 0.985) return best;
           }
@@ -784,7 +822,18 @@ function __selectRectOnCapture(capImg, screenX, screenY) {
       if (!dragging) return;
       e.preventDefault();
       const p = toLocal(e);
-      ex = p.x; ey = p.y;
+
+      // Force a square selection for icon matching.
+      const dx = p.x - sx;
+      const dy = p.y - sy;
+      const side = Math.max(Math.abs(dx), Math.abs(dy));
+      ex = sx + (dx < 0 ? -side : side);
+      ey = sy + (dy < 0 ? -side : side);
+
+      // Clamp to canvas bounds
+      ex = Math.max(0, Math.min(canvas.width, ex));
+      ey = Math.max(0, Math.min(canvas.height, ey));
+
       redraw();
     }
     function onUp(e) {
@@ -795,8 +844,9 @@ function __selectRectOnCapture(capImg, screenX, screenY) {
       const x1 = Math.max(sx, ex), y1 = Math.max(sy, ey);
       const rw = x1 - x0, rh = y1 - y0;
 
-      // Minimum box size to avoid accidental clicks
-      if (rw < 8 || rh < 8) { redraw(); return; }
+      // Minimum box size (must roughly cover the icon)
+      const minSide = 32 * scale; // ~32px in capture space
+      if (rw < minSide || rh < minSide) { redraw(); return; }
 
       // Convert back to capture coordinates
       const sel = {
@@ -835,15 +885,22 @@ function matchIconFromSelection(capImg, sel, templates) {
 
   // Build candidate feature by resizing the selected region to sampleSize (no need to first resize to 48px)
   const gray = __downsampleToGray16(cap, x, y, w, h, ICON_MATCH.sampleSize);
-  const candFeat = __centerAndInvStd(gray);
+  const candGray = __centerAndInvStd(gray);
+  const edge = __edgeMapFromGray(gray, ICON_MATCH.sampleSize);
+  const candEdge = __centerAndInvStd(edge);
 
   let best = null;
   for (let i = 0; i < templates.length; i++) {
     const t = templates[i];
-    if (!t || !t._feat) continue;
-    const score = __znccScore(t._feat, candFeat);
-    if (__top) __top.push({ name: t.name, score });
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+    if (!t || !t._featGray || !t._featEdge) continue;
+
+    const sGray = __znccScore(t._featGray, candGray);
+    const sEdge = __znccScore(t._featEdge, candEdge);
+    // Weighted fusion: edges give robustness to background/brightness, gray keeps distinct color/shape shading.
+    const score = (0.65 * sGray) + (0.35 * sEdge);
+
+    if (__top) __top.push({ name: t.name, score, sGray, sEdge });
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score, sGray, sEdge };
   }
 
   const __t1 = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
