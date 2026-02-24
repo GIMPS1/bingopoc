@@ -759,11 +759,11 @@
 
 /* -----------------------------
  * Manual-submit OCR fallback: Tesseract.js (WASM)
- * - Only used for manual submits (chat OCR unchanged)
- * - Loaded via <script> in index.html
+ * - Used ONLY for manual submits (chat OCR unchanged)
+ * - Loaded via <script> in index.html (see index.html)
  * ----------------------------- */
 
-let __tess = { worker: null, ready: false, initPromise: null };
+let __tess = { worker: null, ready: false, initPromise: null, lastParamsKey: "" };
 
 async function __initTesseractOnce() {
   if (__tess.ready && __tess.worker) return true;
@@ -775,41 +775,39 @@ async function __initTesseractOnce() {
       return false;
     }
 
-    // ✅ v5: do NOT pass logger/functions or path config in Alt1/CEF (prevents postMessage clone errors)
+    // ✅ tesseract.js v5: createWorker() WITHOUT passing functions/paths (Alt1/CEF friendly).
     const worker = await Tesseract.createWorker();
 
     await worker.loadLanguage("eng");
     await worker.initialize("eng");
 
-    // Defaults tuned for short UI blocks (tooltips/menu)
+    // Parameters tuned for RuneScape tooltip/menu text:
+    // - Tooltips are typically light text on dark background (we invert in preprocessing)
+    // - Mostly short lines / small blocks
     await worker.setParameters({
       preserve_interword_spaces: "1",
-      tessedit_pageseg_mode: Tesseract.PSM.SINGLE_BLOCK
+      user_defined_dpi: "300",
+      tessedit_pageseg_mode: String(Tesseract.PSM.SINGLE_BLOCK),
+      // Slightly restrict to common tooltip characters for speed/accuracy.
+      tessedit_char_whitelist: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-.,'!&%?* \""
     });
 
     __tess.worker = worker;
     __tess.ready = true;
+    __tess.lastParamsKey = ""; // reset cache
     return true;
   })();
 
   return __tess.initPromise;
 }
 
-// Optional cleanup helper (call on unload if you want)
+// Optional cleanup helper (not required)
 async function __terminateTesseract() {
   try { await __tess.worker?.terminate(); } catch (e) {}
   __tess.worker = null;
   __tess.ready = false;
   __tess.initPromise = null;
-}
-
-// Optional cleanup helper (call on unload if you want)
-async function __terminateTesseract() {
-  try {
-    if (__tessWorker) await __tessWorker.terminate();
-  } catch (e) {}
-  __tessWorker = null;
-  __tessInitPromise = null;
+  __tess.lastParamsKey = "";
 }
 
 function __imgRefToImageData(imgRef) {
@@ -847,7 +845,7 @@ function __preprocessToCanvasBW(imgData, scale, threshold) {
   for (let i = 0; i < p.length; i += 4) {
     const r = p[i], g = p[i + 1], b = p[i + 2];
     const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) | 0;
-    const v = lum >= t ? 255 : 0;
+    const v = lum >= t ? 0 : 255;
     p[i] = p[i + 1] = p[i + 2] = v;
     p[i + 3] = 255;
   }
@@ -855,7 +853,7 @@ function __preprocessToCanvasBW(imgData, scale, threshold) {
   return c;
 }
 
-function __normalizeOcrText(t) {
+function __normalizeTessText(t) {
   return String(t || "")
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+\n/g, "\n")
@@ -867,25 +865,32 @@ async function __tesseractRecognizeImageData(imgData, opts) {
   const ok = await __initTesseractOnce();
   if (!ok || !__tess.worker) return { ok: false, reason: "Tesseract init failed." };
 
-  const scale = (opts && opts.scale) ? opts.scale : 2;
-  const threshold = (opts && opts.threshold) ? opts.threshold : 165;
+  const scale = (opts && opts.scale) ? opts.scale : 3;
+  const threshold = (opts && opts.threshold) ? opts.threshold : 170;
   const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_BLOCK;
-  const whitelist = (opts && opts.whitelist) ? opts.whitelist : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-., '";
+  const whitelist = (opts && opts.whitelist)
+    ? opts.whitelist
+    : "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ:/()[]+-.,'!&%?* \"";
 
   try {
-    await __tess.worker.setParameters({
-      tessedit_pageseg_mode: psm,
-      tessedit_char_whitelist: whitelist
-    });
+    const key = `${psm}|${whitelist}`;
+    if (__tess.lastParamsKey !== key) {
+      await __tess.worker.setParameters({
+        tessedit_pageseg_mode: String(psm),
+        tessedit_char_whitelist: whitelist
+      });
+      __tess.lastParamsKey = key;
+    }
 
     const canvas = __preprocessToCanvasBW(imgData, scale, threshold);
     const res = await __tess.worker.recognize(canvas);
-    const text = __normalizeOcrText(res && res.data ? res.data.text : "");
+    const text = __normalizeTessText(res && res.data ? res.data.text : "");
     return text ? { ok: true, text } : { ok: false, reason: "No text." };
   } catch (e) {
     return { ok: false, reason: "Tesseract error: " + (e && e.message ? e.message : String(e)) };
   }
 }
+
 
 function __padRect(r, pad) {
   const p = Math.max(0, pad | 0);
@@ -1038,129 +1043,104 @@ async function manualSubmitFlow() {
 
   // User hovers the item so the tooltip/menu appears, then draws a box around the icon.
   showEvent("Manual submit", "Hover the item (tooltip visible), then draw a box around its icon…", "ok", true, false);
-  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon"); } catch (e) {}
+  try {
+    if (alt1 && typeof alt1.setTooltip === "function") {
+      alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon");
+    }
+  } catch (e) {}
 
   // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
   const selectionFn = (window && window.__selectIconRegionAroundMouse) ? window.__selectIconRegionAroundMouse : null;
   const selection = selectionFn ? await selectionFn(700) : null;
+
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!selection) {
-  showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
-  return;
-}
+    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+    return;
+  }
 
-// ---- Manual submit OCR (fast OCR first, Tesseract fallback) ----
-// 1) Fast: Alt1 tooltip OCR sampled multiple frames and voted.
-let ocr = await ocrTooltipNearSelectionStable(selection, 3, 55);
+  // ---- Manual submit OCR (Tesseract only) ----
+  let ocr = null;
+  try { ocr = await ocrTooltipNearSelectionTesseract(selection); } catch (e) {}
 
-// 2) Fallback: Tesseract.js (WASM) for tougher tooltips/menus.
-const ocrTextLen = (o) => String(o?.text ?? "").trim().length;
+  if (!ocr || !ocr.ok || !ocr.text || String(ocr.text).trim().length < 3) {
+    showEvent(
+      "Manual submit",
+      "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
+      "warn",
+      true,
+      true
+    );
+    return;
+  }
 
-if (!ocr || !ocr.ok || ocrTextLen(ocr) < 3) {
-  try {
-    ocr = await ocrTooltipNearSelectionTesseract(selection);
-  } catch (e) {}
-}
+  const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
+  const cands = extractDropCandidatesFromOcr(ocr.text);
 
-if (!ocr || !ocr.ok || !ocr.text) {
-  showEvent(
-    "Manual submit",
-    "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
-    "warn",
-    true,
-    true
-  );
-  return;
-}
+  // Fallback: sometimes OCR gives just the title line; try first line.
+  if (!cands.length) {
+    const first = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
+    if (first) cands.push(first);
+  }
 
-const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
-const cands = extractDropCandidatesFromOcr(ocr.text);
-
-// Fallback: sometimes OCR gives just the title line without the verb; try first line.
-if (!cands.length) {
-  const first =
-    String(ocr.text)
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)[0] || "";
-  if (first) cands.push(first);
-}
-
-// If we still have no candidates, try Tesseract once more (different OCR output can parse differently).
-if (!cands.length) {
-  try {
-    const o2 = await ocrTooltipNearSelectionTesseract(selection);
-    if (o2 && o2.ok && o2.text) {
-      ocr = o2;
-
-      const c2 = extractDropCandidatesFromOcr(ocr.text);
-      if (c2?.length) cands.push(...c2);
-
-      if (!cands.length) {
-        const f2 =
-          String(ocr.text)
-            .split(/\r?\n/)
-            .map((s) => s.trim())
-            .filter(Boolean)[0] || "";
-        if (f2) cands.push(f2);
-      }
-    }
-  } catch (e) {}
-}
-
-if (!cands.length) {
-  showEvent(
-    "Manual submit",
-    "Read tooltip text, but couldn't find an item name in it.",
-    "warn",
-    true,
-    true
-  );
-  try {
-    console.log("[MANUAL OCR] Raw OCR text:", ocr.text);
-  } catch (e) {}
-  return;
-}
-
-// Try candidates in order until one validates.
-for (let i = 0; i < Math.min(4, cands.length); i++) {
-  const raw = String(cands[i] || "").trim();
-  if (!raw) continue;
-
-  let v = validateDropName(raw);
-  let chosen = v?.valid ? (v.canonical || raw) : null;
-
-  // If allowlist uses canonical wiki title, try resolving canonical once.
-  if (!chosen) {
+  // If we still have no candidates, try Tesseract once more (different output can parse differently).
+  if (!cands.length) {
     try {
-      const canon = await resolveCanonicalName(raw);
-      v = validateDropName(canon);
-      chosen = v?.valid ? (v.canonical || canon) : null;
+      const o2 = await ocrTooltipNearSelectionTesseract(selection);
+      if (o2 && o2.ok && o2.text) {
+        ocr = o2;
+        const c2 = extractDropCandidatesFromOcr(ocr.text);
+        if (c2 && c2.length) cands.push(...c2);
+
+        if (!cands.length) {
+          const first2 = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
+          if (first2) cands.push(first2);
+        }
+      }
     } catch (e) {}
   }
 
-  if (chosen) {
-    showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
-    try {
-      await submitDrop({ drop_name: chosen, amount: String(qty) });
-      showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-      playOk();
-      return;
-    } catch (e) {
-      showEvent(
-        "Manual submit",
-        "Submit failed: " + (e?.message ? e.message : e),
-        "warn",
-        true,
-        true
-      );
-      return;
+  if (!cands.length) {
+    showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
+    try { console.log("[MANUAL TESS] Raw OCR text:", ocr.text); } catch (e) {}
+    return;
+  }
+
+  // Try candidates in order until one validates.
+  for (let i = 0; i < Math.min(4, cands.length); i++) {
+    const raw = String(cands[i] || "").trim();
+    if (!raw) continue;
+
+    let v = validateDropName(raw);
+    let chosen = (v && v.valid) ? (v.canonical || raw) : null;
+
+    // If allowlist uses canonical wiki title, try resolving canonical once.
+    if (!chosen) {
+      try {
+        const canon = await resolveCanonicalName(raw);
+        v = validateDropName(canon);
+        chosen = (v && v.valid) ? (v.canonical || canon) : null;
+      } catch (e) {}
+    }
+
+    if (chosen) {
+      showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+      try {
+        await submitDrop({ drop_name: chosen, amount: String(qty) });
+        showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+        try { if (typeof playBeep === "function") playBeep("ok"); } catch (e) {}
+        return;
+      } catch (e) {
+        showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+        return;
+      }
     }
   }
+
+  showEvent("Manual submit", "No valid drop name detected in tooltip text.", "warn", true, true);
 }
-  showEvent("Manual submit", `OCR read "${cands[0]}", but it isn't in the allowlist.`, "warn", true, true);
-}
+
 
 
 
