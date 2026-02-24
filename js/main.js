@@ -994,6 +994,57 @@ async function ocrTooltipNearSelectionTesseract(selection) {
   return { ok: true, text: reads[0] };
 }
 
+// Manual submit: capture a fixed box around the mouse and OCR it with Tesseract.
+// Avoids selector/ImgRef edge-cases that can produce tiny (e.g. 2px wide) captures.
+async function ocrTooltipNearMouseTesseract(mouseAbs) {
+  if (!mouseAbs || mouseAbs.x == null || mouseAbs.y == null) return { ok: false, reason: "No mouse." };
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return { ok: false, reason: "A1lib.capture unavailable." };
+
+  // Tooltip text usually appears slightly below/right of the cursor.
+  const x = (mouseAbs.x | 0);
+  const y = (mouseAbs.y | 0);
+
+  const probes = [
+    // Requested: 100x100 around mouse
+    { x: x - 50, y: y - 50, w: 100, h: 100 },
+    // Bias downward (common for RS tooltips)
+    { x: x - 60, y: y - 10, w: 140, h: 120 },
+    // Wider fallback to fit full "Take <item>" lines at various UI scales
+    { x: x - 120, y: y - 30, w: 260, h: 140 },
+  ];
+
+  const reads = [];
+  for (let pi = 0; pi < probes.length; pi++) {
+    const pr = __padRect(probes[pi], 8);
+
+    let imgRef = null;
+    try { imgRef = A1lib.capture(pr.x, pr.y, pr.w, pr.h); } catch (e) {}
+    if (!imgRef) continue;
+
+    const iw = (imgRef.width || imgRef.w || 0) | 0;
+    const ih = (imgRef.height || imgRef.h || 0) | 0;
+
+    // Guard against the "2x36" type bad capture.
+    if (iw < 20 || ih < 20) continue;
+
+    const imgData = __imgRefToImageData(imgRef);
+    if (!imgData || imgData.width < 20 || imgData.height < 20) continue;
+
+    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 4, threshold: "auto", psm: Tesseract.PSM.SINGLE_LINE });
+    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 5, threshold: "auto", psm: Tesseract.PSM.SINGLE_BLOCK });
+
+    if (r2 && r2.ok && r2.text) {
+      reads.push(r2.text);
+      if (/\b(Take|Open|Search|Claim|Collect|Withdraw|Pick up|Loot)\b/i.test(r2.text)) break;
+    }
+  }
+
+  if (!reads.length) return { ok: false, reason: "No text found (tesseract)." };
+  reads.sort((a, b) => (b ? b.length : 0) - (a ? a.length : 0));
+  return { ok: true, text: reads[0] };
+}
+
+
   function getQtyFromSelectionOrOcr(selection, ocrText) {
     // Prefer reading the stack quantity directly from the selected icon.
     try {
@@ -1080,39 +1131,37 @@ async function ocrTooltipNearSelectionTesseract(selection) {
   
 
 
-async function manualSubmitFlow() {
+async function manualSubmitFlow(obj) {
   if (!isSetupReady()) {
     showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
     return;
   }
 
-  // User hovers the item so the tooltip/menu appears, then draws a box around the icon.
-  showEvent("Manual submit", "Hover the item (tooltip visible), then draw a box around its icon…", "ok", true, false);
+  // Manual submit: hover the item so the tooltip/menu is visible, then right-click.
+  showEvent("Manual submit", "Hover the item (tooltip visible), then right-click…", "ok", true, false);
   try {
     if (alt1 && typeof alt1.setTooltip === "function") {
-      alt1.setTooltip("Manual submit: hover item so tooltip shows, then draw a box around the icon");
+      alt1.setTooltip("Manual submit: hover item so tooltip shows, then right-click");
     }
   } catch (e) {}
 
-  // Bigger capture improves selection ergonomics; OCR itself stays targeted and fast.
-  const selectionFn = (window && window.__selectIconRegionAroundMouse) ? window.__selectIconRegionAroundMouse : null;
-  const selection = selectionFn ? await selectionFn(700) : null;
-
-  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
-
-  if (!selection) {
-    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+  const mouseAbs = (obj && obj.mouseAbs) ? obj.mouseAbs : (obj && obj.x != null && obj.y != null ? { x: obj.x, y: obj.y } : null);
+  if (!mouseAbs || mouseAbs.x == null || mouseAbs.y == null) {
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+    showEvent("Manual submit", "No mouse position available for capture.", "warn", true, true);
     return;
   }
 
   // ---- Manual submit OCR (Tesseract only) ----
   let ocr = null;
-  try { ocr = await ocrTooltipNearSelectionTesseract(selection); } catch (e) {}
+  try { ocr = await ocrTooltipNearMouseTesseract(mouseAbs); } catch (e) {}
+
+  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
   if (!ocr || !ocr.ok || !ocr.text || String(ocr.text).trim().length < 3) {
     showEvent(
       "Manual submit",
-      "Could not read tooltip text. Make sure the item tooltip/menu is visible and unobstructed, then try again.",
+      "Could not read tooltip text. Make sure the tooltip/menu is visible and unobstructed, then try again.",
       "warn",
       true,
       true
@@ -1120,7 +1169,7 @@ async function manualSubmitFlow() {
     return;
   }
 
-  const qty = getQtyFromSelectionOrOcr(selection, ocr.text);
+  const qty = getQtyFromSelectionOrOcr(null, ocr.text);
   const cands = extractDropCandidatesFromOcr(ocr.text);
 
   // Fallback: sometimes OCR gives just the title line; try first line.
@@ -1129,26 +1178,9 @@ async function manualSubmitFlow() {
     if (first) cands.push(first);
   }
 
-  // If we still have no candidates, try Tesseract once more (different output can parse differently).
-  if (!cands.length) {
-    try {
-      const o2 = await ocrTooltipNearSelectionTesseract(selection);
-      if (o2 && o2.ok && o2.text) {
-        ocr = o2;
-        const c2 = extractDropCandidatesFromOcr(ocr.text);
-        if (c2 && c2.length) cands.push(...c2);
-
-        if (!cands.length) {
-          const first2 = String(ocr.text).split(/\r?\n/).map(s => s.trim()).filter(Boolean)[0] || "";
-          if (first2) cands.push(first2);
-        }
-      }
-    } catch (e) {}
-  }
-
   if (!cands.length) {
     showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
-    try { console.log("[MANUAL TESS] Raw OCR text:", ocr.text); } catch (e) {}
+    try { console.log("[MANUAL OCR] Raw OCR text:", ocr.text); } catch (e) {}
     return;
   }
 
@@ -1174,7 +1206,7 @@ async function manualSubmitFlow() {
       try {
         await submitDrop({ drop_name: chosen, amount: String(qty) });
         showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-        try { if (typeof playBeep === "function") playBeep("ok"); } catch (e) {}
+        playOk();
         return;
       } catch (e) {
         showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
@@ -1182,8 +1214,6 @@ async function manualSubmitFlow() {
       }
     }
   }
-
-  showEvent("Manual submit", "No valid drop name detected in tooltip text.", "warn", true, true);
 }
 
 
@@ -2734,20 +2764,21 @@ function stitchChatMessages(lines) {
   // Alt1 Hotkey: use Alt1's configured "Alt+1" (rightclick) to trigger a manual scan/submit
   function bindAlt1ManualHotkey() {
     if (!window.alt1) return;
-    // Preferred newer API (not available in some builds)
+
+    // Preferred newer API
     const rc = window.alt1?.events?.rightclick;
-    if (Array.isArray(rc) && typeof rc.push === "function") {
+    if (rc && typeof rc.push === "function") {
       rc.push((obj) => {
         try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
-        manualSubmitFlow();
+        manualSubmitFlow(obj);
       });
       return;
     }
 
-    // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
+    // Legacy callback (older builds)
     window.alt1onrightclick = (obj) => {
       try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
-      manualSubmitFlow();
+      manualSubmitFlow(obj);
     };
   }
 
