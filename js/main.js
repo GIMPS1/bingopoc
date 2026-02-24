@@ -5,7 +5,7 @@
    - Avoids resolving canonical name twice (resolve ONLY in poll; submitDrop trusts input)
    - Fixes duplicate team_number mapping
 */
-(function () {
+(async function () {
 
   console.log("IRB v2026-02-20-premium-select FIXED ✅");
   const $ = (id) => document.getElementById(id);
@@ -41,6 +41,14 @@
     summaryMeta: $("summaryMeta"),
     btnOpenSettings2: $("btnOpenSettings2"),
 
+    // Drop history
+    toggleHistory: $("toggleHistory"),
+    historyBody: $("historyBody"),
+    historyList: $("historyList"),
+    historyMeta: $("historyMeta"),
+    historyHint: $("historyHint"),
+    btnRefreshHistory: $("btnRefreshHistory"),
+
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
@@ -60,6 +68,8 @@
     btnRecalibrate: $("btnRecalibrate"),
     optAutoDetect: $("optAutoDetect"),
     optHighlight: $("optHighlight"),
+    optStrictDrops: $("optStrictDrops"),
+    optUseWikiCanonical: $("optUseWikiCanonical"),
     btnUnlockChat: $("btnUnlockChat"),
 
     // Runtime// Feed
@@ -70,7 +80,7 @@
     eventLine: $("eventLine"),
     eventTitle: $("eventTitle"),
     eventSub: $("eventSub"),
-  };
+};
 
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
@@ -101,6 +111,7 @@
     ignLocked: "irb.ignLocked",
     chatPos: "irb.chatPos",
     settings: "irb.settings",
+    historyOpen: "irb.historyOpen",
   };
 
   // API base is locked (hidden in UI)
@@ -113,6 +124,8 @@
     return {
       autoDetect: s.autoDetect !== false,
       highlight: s.highlight === true,
+      strictDrops: s.strictDrops !== false,
+      useWikiCanonical: s.useWikiCanonical !== false,
     };
   }
   function saveSettings(patch) {
@@ -220,6 +233,706 @@
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
+  function getMousePos() {
+    try {
+      if (window.A1lib && typeof A1lib.mousePosition === "function") {
+        return A1lib.mousePosition();
+      }
+    } catch (e) {}
+
+    try {
+      const packed = alt1 && alt1.mousePosition;
+      if (typeof packed === "number") {
+        return { x: (packed >> 16), y: (packed & 0xFFFF) };
+      }
+    } catch (e) {}
+    return null;
+  }
+
+  async function ocrRegionAroundMouse(size) {
+    if (!window.alt1) return { ok: false, reason: "Alt1 not available." };
+    if (!alt1.permissionPixel) return { ok: false, reason: "No Pixel permission." };
+
+    const pos = getMousePos();
+    if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") {
+      return { ok: false, reason: "Mouse position unavailable." };
+    }
+
+    const w = (size | 0), h = (size | 0);
+    const half = (w / 2) | 0;
+    const x = Math.max(0, (pos.x | 0) - half) | 0;
+    const y = Math.max(0, (pos.y | 0) - half) | 0;
+
+    let id;
+    try {
+      id = alt1.bindRegion(x, y, w, h);
+    } catch (e) {
+      return { ok: false, reason: "bindRegion failed: " + (e && e.message ? e.message : String(e)) };
+    }
+
+    // Brute-force scan for tooltip text baseline; this is manual so a few thousand calls is acceptable.
+    const fonts = ["chat", "chatmono", "xpcounter"];
+    const argsBase = { allowgap: true };
+
+    // Optional: prefer bright tooltip-ish colors if mixcolor exists
+    try {
+      if (window.A1lib && typeof A1lib.mixcolor === "function") {
+        argsBase.colors = [
+          A1lib.mixcolor(255,255,255), // white
+          A1lib.mixcolor(255,255,0),   // yellow
+          A1lib.mixcolor(255,200,80),  // gold-ish
+          A1lib.mixcolor(200,255,200)  // pale green
+        ];
+      }
+    } catch (e) {}
+
+    const found = [];
+    const seen = {};
+    const yStep = 2;
+    const xStep = 10;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const args = JSON.stringify((function(){var o={fontname:font,allowgap:true}; try{ if(argsBase && argsBase.colors){o.colors=argsBase.colors;} }catch(e){} return o;})());
+
+      for (let yy = 0; yy < h; yy += yStep) {
+        for (let xx = 0; xx < w; xx += xStep) {
+          let s = "";
+          try {
+            s = alt1.bindReadStringEx(id, xx, yy, args) || "";
+          } catch (e) {
+            // If Ex fails, fallback to basic reader (much less flexible)
+            try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; }
+          }
+          s = String(s).trim();
+          if (!s) continue;
+
+          // De-dup
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          found.push(s);
+
+          // Early exit if we already see a likely tooltip/menu verb
+          if (/(^|\b)(take|withdraw|withdraw-all|open|search|claim|collect|pick up|loot)\b/i.test(s)) {
+            // grab a few more lines around for context by continuing small amount, then stop
+          }
+          if (found.length >= 30) break;
+        }
+        if (found.length >= 30) break;
+      }
+      if (found.length) break;
+    }
+
+    const text = found.join("\n").trim();
+    if (!text) return { ok: false, reason: "No text detected in 300x300 region." };
+
+    return { ok: true, text: text, x: x, y: y, w: w, h: h };
+  }
+
+  function extractDropCandidatesFromOcr(text) {
+    const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+    if (!t) return [];
+
+    const out = [];
+    // Handle patterns like: "Take Uncut onyx", "Withdraw-All X", "Withdraw-1 X", etc.
+    const re1 = /\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\s+([A-Za-z0-9'’:\-(),. ]{2,80})/gi;
+    let m;
+    while ((m = re1.exec(t))) {
+      let name = (m[1] || "").trim();
+      name = name.replace(/\s+(?:x|\*)\s*\d+$/i, "").trim();
+      name = name.replace(/[\.,;:]+$/g, "").trim();
+      if (name && out.indexOf(name) === -1) out.push(name);
+    }
+    return out;
+  }
+
+  
+  // ---------- Wiki Icon template matching for manual submit ----------
+  const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
+  const ICON_TEMPLATE_SIZES = [48]; // use ONLY the large icons for speed/accuracy // sizes in the bundled icon set
+
+  let __iconItems = null; // array of names
+  let __iconTemplates = null; // array of { name, size, img }
+  let __iconTemplatesLoading = null;
+
+  function __sanitizeIconFileName(itemName) {
+    // Match the download script naming: letters/numbers/underscore only
+    return String(itemName || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\d]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  }
+
+  function __localIconUrl(itemName, size) {
+    const base = "./assets/icons";
+    const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
+    return `${base}/${file}`;
+  }
+
+  async function ensureIconTemplatesLoaded() {
+    if (__iconTemplates) return __iconTemplates;
+    if (__iconTemplatesLoading) return __iconTemplatesLoading;
+
+    __iconTemplatesLoading = (async () => {
+      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
+        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // Load bundled icon map (name/size/file). Icons live in ./assets/icons/
+      let iconMap = [];
+      try {
+        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
+        iconMap = await res.json();
+        if (!Array.isArray(iconMap)) throw new Error("wiki_icon_map.json must be an array");
+      } catch (e) {
+        console.warn("[icon] failed to load assets/wiki_icon_map.json", e);
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // Optional allowlist filter: only keep drops that exist in allowlist.drops
+      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
+        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
+        iconMap = iconMap.filter(e => allowSet.has(String(e?.name || "").toLowerCase()));
+      }
+
+      // Load templates
+      const templates = [];
+      const fails = [];
+      const base = "./assets/icons";
+      const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
+
+      for (const entry of iconMap) {
+        const name = entry?.name;
+        const size = Number(entry?.size);
+        const file = entry?.file;
+
+        if (!name || !file || !wantedSizes.has(size)) continue;
+
+        const url = `${base}/${file}`;
+        try {
+          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
+          if (img) templates.push({ name, size, file, url, img });
+          else fails.push({ name, size, file, reason: "imageDataFromUrl returned null" });
+        } catch (err) {
+          fails.push({ name, size, file, reason: String(err?.message || err) });
+        }
+      }
+
+      console.log(`[icon] templates loaded: ${templates.length} (fails: ${fails.length})`);
+      if (fails.length) console.warn("[icon] template load failures (first 10):", fails.slice(0, 10));
+
+      __iconTemplates = templates;
+      return __iconTemplates;
+    })();
+
+    return __iconTemplatesLoading;
+  }
+
+
+  function normalizeAlt1OcrResult(val) {
+    if (val == null) return "";
+    if (typeof val === "string") {
+      const s = val.trim();
+      if (!s) return "";
+      if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+        try {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        } catch (e) {}
+      }
+      return s;
+    }
+    if (typeof val === "object") {
+      if (typeof val.text === "string") return val.text.trim();
+      try {
+        const s = String(val);
+        if (s[0] === "{" && s.indexOf('"text"') !== -1) {
+          const obj = JSON.parse(s);
+          if (obj && typeof obj.text === "string") return obj.text.trim();
+        }
+      } catch (e) {}
+    }
+    return String(val).trim();
+  }
+
+  function readStackQtyAt(rsX, rsY) {
+    if (!window.alt1 || !alt1.permissionPixel) return 1;
+    // tight region: top-left corner digits
+    const w = 26, h = 18;
+    const bid = alt1.bindRegion(rsX, rsY, w, h);
+    if (!bid) return 1;
+
+    const optsSmall = JSON.stringify({ fontname: "small", allowgap: true });
+    const optsChat = JSON.stringify({ fontname: "chat", allowgap: true });
+
+    const yOffsets = [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < yOffsets.length; i++) {
+      const y = yOffsets[i];
+      let res = "";
+      try { res = alt1.bindReadStringEx(bid, 0, y, optsSmall); } catch (e) {}
+      let txt = normalizeAlt1OcrResult(res);
+      if (!txt) {
+        try { res = alt1.bindReadStringEx(bid, 0, y, optsChat); } catch (e) {}
+        txt = normalizeAlt1OcrResult(res);
+      }
+      const m = (txt || "").match(/\d[\d,]*/);
+      if (m) {
+        const n = parseInt(m[0].replace(/,/g, ""), 10);
+        if (isFinite(n) && n > 0) return n;
+      }
+    }
+    return 1;
+  }
+
+  
+  // -------- Icon matching (fast) --------
+  // We use ONLY the large (48px) icons and perform a small local search around the mouse.
+  // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
+  // This is very fast (few templates) and robust to minor brightness/contrast changes.
+  const ICON_MATCH = {
+    iconSize: 48,     // template icon size (pixels)
+    sampleSize: 16,   // downsample size for matching (pixels)
+    captureSize: 96,  // capture square around mouse (pixels)
+    searchRadius: 18, // +/- pixels around center to search
+    step: 3,          // search step (pixels)
+    acceptScore: 0.86 // minimum correlation to accept
+  };
+
+  // Debug: set true to log icon matching details on every Alt+1
+  const DEBUG_ICON_MATCH = true;
+
+
+  function __getImgProps(img) {
+    if (!img) return null;
+    const data = img.data || img.imgdata || img.pixels;
+    const width = img.width || img.w;
+    const height = img.height || img.h;
+    if (!data || !width || !height) return null;
+    return { data, width, height };
+  }
+
+  
+function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
+  // Nearest-neighbor downsample for speed. Alpha-aware: composite onto a neutral background
+  // so transparent template pixels don't become "black" and ruin similarity.
+  const out = new Uint8Array(outSize * outSize);
+  const invW = sw / outSize;
+  const invH = sh / outSize;
+
+  const w = src.width;
+  const data = src.data;
+
+  // Neutral mid-gray background (tuned for RS UI; exact value not critical)
+  const bg = 40;
+
+  let k = 0;
+  for (let y = 0; y < outSize; y++) {
+    const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
+    const row = (py * w) | 0;
+    for (let x = 0; x < outSize; x++) {
+      const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
+      const i = ((row + px) << 2) | 0;
+      let r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
+      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
+      if (a !== 255) {
+        const invA = 255 - a;
+        r = ((r * a + bg * invA) / 255) | 0;
+        g = ((g * a + bg * invA) / 255) | 0;
+        b = ((b * a + bg * invA) / 255) | 0;
+      }
+      // Integer luminance approximation (BT.601)
+      out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
+    }
+  }
+  return out;
+}
+
+
+function __debugGrayToDataURL(gray, size) {
+  // gray: Uint8Array length size*size
+  try {
+    const c = document.createElement("canvas");
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext("2d");
+    const img = ctx.createImageData(size, size);
+    const d = img.data;
+    let k = 0;
+    for (let i = 0; i < gray.length; i++) {
+      const v = gray[i] | 0;
+      d[k++] = v;
+      d[k++] = v;
+      d[k++] = v;
+      d[k++] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c.toDataURL("image/png");
+  } catch (e) {
+    return null;
+  }
+}
+
+  function __centerAndInvStd(gray) {
+    // Returns { centered:Int16Array, invStd:number } with std computed over centered values.
+    const n = gray.length | 0;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += gray[i];
+    const mean = sum / n;
+
+    const centered = new Int16Array(n);
+    let ss = 0;
+    for (let i = 0; i < n; i++) {
+      const v = (gray[i] - mean);
+      const iv = v | 0;
+      centered[i] = iv;
+      ss += v * v;
+    }
+    // Avoid div-by-zero on flat images.
+    const std = Math.sqrt(ss) || 1e-9;
+    return { centered, invStd: 1 / std };
+  }
+
+  function __znccScore(templateFeat, candFeat) {
+    const a = templateFeat.centered;
+    const b = candFeat.centered;
+    let dot = 0;
+    // 256-length; keep as number (safe)
+    for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+    return dot * templateFeat.invStd * candFeat.invStd;
+  }
+
+  function __buildTemplateFeatures(templates) {
+    for (let i = 0; i < templates.length; i++) {
+      const t = templates[i];
+      if (t && !t._feat) {
+        const props = __getImgProps(t.img);
+        if (!props) continue;
+        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        t._feat = __centerAndInvStd(gray);
+      }
+    }
+    return templates;
+  }
+
+  function findBestIconMatch(captureImg, templates) {
+    if (!templates || !templates.length || !captureImg) return null;
+
+    const cap = __getImgProps(captureImg);
+    if (!cap) return null;
+
+    __buildTemplateFeatures(templates);
+
+    const iconSz = ICON_MATCH.iconSize;
+    const outSz = ICON_MATCH.sampleSize;
+
+    // Search a small window around capture center.
+    const cx = (cap.width >> 1) - (iconSz >> 1);
+    const cy = (cap.height >> 1) - (iconSz >> 1);
+
+    const r = ICON_MATCH.searchRadius | 0;
+    const step = ICON_MATCH.step | 0;
+
+    let best = null;
+
+    const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+
+    for (let dy = -r; dy <= r; dy += step) {
+      const y = clamp(cy + dy, 0, cap.height - iconSz);
+      for (let dx = -r; dx <= r; dx += step) {
+        const x = clamp(cx + dx, 0, cap.width - iconSz);
+
+        const gray = __downsampleToGray16(cap, x, y, iconSz, iconSz, outSz);
+        const candFeat = __centerAndInvStd(gray);
+
+        // Compare against all templates (small N). Track best.
+        for (let i = 0; i < templates.length; i++) {
+          const t = templates[i];
+          if (!t || !t._feat) continue;
+
+          const score = __znccScore(t._feat, candFeat);
+
+          if (!best || score > best.score) {
+            best = { name: t.name, size: t.size, x, y, score };
+            // Early accept if extremely strong match.
+            if (score >= 0.985) return best;
+          }
+        }
+      }
+    }
+
+    if (best && best.score >= ICON_MATCH.acceptScore) return best;
+    return null;
+  }
+
+
+// -------- Manual submit selection overlay (required every Alt+1) --------
+// We deliberately require the user to draw a box around the icon every time.
+// This removes ambiguity around capture offsets / UI scaling and makes matching stable.
+function __createOverlay() {
+  const overlay = document.createElement("div");
+  overlay.id = "irbSelectOverlay";
+  overlay.style.position = "fixed";
+  overlay.style.left = "0";
+  overlay.style.top = "0";
+  overlay.style.right = "0";
+  overlay.style.bottom = "0";
+  overlay.style.zIndex = "2147483647";
+  overlay.style.background = "rgba(0,0,0,0.35)";
+  overlay.style.cursor = "crosshair";
+  overlay.style.display = "flex";
+  overlay.style.alignItems = "center";
+  overlay.style.justifyContent = "center";
+
+  const wrap = document.createElement("div");
+  wrap.style.position = "relative";
+  wrap.style.boxShadow = "0 8px 30px rgba(0,0,0,0.6)";
+  wrap.style.border = "1px solid rgba(255,255,255,0.15)";
+  wrap.style.background = "rgba(0,0,0,0.35)";
+
+  const canvas = document.createElement("canvas");
+  canvas.id = "irbSelectCanvas";
+  canvas.style.display = "block";
+
+  const label = document.createElement("div");
+  label.style.position = "absolute";
+  label.style.left = "0";
+  label.style.top = "0";
+  label.style.right = "0";
+  label.style.padding = "8px 10px";
+  label.style.font = "12px/1.2 sans-serif";
+  label.style.color = "rgba(255,255,255,0.92)";
+  label.style.background = "linear-gradient(to bottom, rgba(0,0,0,0.75), rgba(0,0,0,0))";
+  label.textContent = "Drag a box tightly around the item icon (Esc to cancel)";
+
+  wrap.appendChild(canvas);
+  wrap.appendChild(label);
+  overlay.appendChild(wrap);
+
+  document.body.appendChild(overlay);
+  return { overlay, canvas, wrap };
+}
+
+function __drawSelection(ctx, x0, y0, x1, y1) {
+  const x = Math.min(x0, x1);
+  const y = Math.min(y0, y1);
+  const w = Math.abs(x1 - x0);
+  const h = Math.abs(y1 - y0);
+  // Darken outside selection
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.clearRect(x, y, w, h);
+  // Border
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x + 1, y + 1, Math.max(0, w - 2), Math.max(0, h - 2));
+  ctx.restore();
+}
+
+async function __selectIconRegionAroundMouse(captureSize) {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  const pos = getMousePos();
+  const mx = pos ? pos.x : 0;
+  const my = pos ? pos.y : 0;
+  const capW = captureSize | 0, capH = captureSize | 0;
+  const rx = Math.max(0, mx - (capW >> 1));
+  const ry = Math.max(0, my - (capH >> 1));
+
+  let capImg = null;
+  try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+  if (!capImg) return null;
+
+  const cap = __getImgProps(capImg);
+  if (!cap) return null;
+
+  const { overlay, canvas } = __createOverlay();
+  canvas.width = cap.width;
+  canvas.height = cap.height;
+  const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
+
+  // Render capture to canvas
+  const idata = new ImageData(new Uint8ClampedArray(cap.data), cap.width, cap.height);
+  ctx.putImageData(idata, 0, 0);
+
+  let start = null;
+  let end = null;
+  let done = false;
+
+  function cleanup() {
+    if (done) return;
+    done = true;
+    try { overlay.remove(); } catch (e) {}
+    window.removeEventListener("keydown", onKey, true);
+  }
+
+  let resolve;
+
+function onKey(ev) {
+  if (ev.key === "Escape") {
+    cleanup();
+    if (resolve) resolve(null);
+  }
+}
+
+window.addEventListener("keydown", onKey, true);
+
+  const prom = new Promise((r) => { resolve = r; });
+
+  const baseImage = ctx.getImageData(0, 0, cap.width, cap.height);
+
+  function redraw() {
+    ctx.putImageData(baseImage, 0, 0);
+    if (start && end) __drawSelection(ctx, start.x, start.y, end.x, end.y);
+  }
+
+  canvas.addEventListener("mousedown", (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    start = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
+              y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    end = { ...start };
+    redraw();
+  });
+
+  canvas.addEventListener("mousemove", (ev) => {
+    if (!start) return;
+    const rect = canvas.getBoundingClientRect();
+    end = { x: Math.max(0, Math.min(cap.width - 1, Math.round(ev.clientX - rect.left))),
+            y: Math.max(0, Math.min(cap.height - 1, Math.round(ev.clientY - rect.top))) };
+    redraw();
+  });
+
+  canvas.addEventListener("mouseup", () => {
+    if (!start || !end) return;
+    const x = Math.min(start.x, end.x);
+    const y = Math.min(start.y, end.y);
+    const w = Math.abs(end.x - start.x);
+    const h = Math.abs(end.y - start.y);
+    cleanup();
+    // Require a reasonable selection size
+    if (w < 20 || h < 20) return resolve(null);
+    resolve({ capImg, capProps: cap, rx, ry, rect: { x, y, w, h } });
+  });
+
+  return await prom;
+}
+
+function matchIconFromSelection(selection, templates) {
+  if (!selection || !selection.capProps || !selection.rect) return null;
+  if (!templates || !templates.length) return null;
+
+  __buildTemplateFeatures(templates);
+
+  const cap = selection.capProps;
+  const r = selection.rect;
+
+  // Normalize crop to a square (best for icon templates)
+  const side = Math.max(r.w, r.h);
+  const cx = r.x + (r.w >> 1);
+  const cy = r.y + (r.h >> 1);
+  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
+  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
+
+  // Downsample the selected region to the sample size, then ZNCC vs templates.
+  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
+  const candFeat = __centerAndInvStd(gray);
+
+  let best = null;
+
+  // Debug: collect top scores (small template count, so OK)
+  const scored = (DEBUG_ICON_MATCH ? [] : null);
+
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (!t || !t._feat) continue;
+    const score = __znccScore(t._feat, candFeat);
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+    if (scored) scored.push({ name: t.name, score });
+  }
+
+  if (!best) return null;
+
+  if (DEBUG_ICON_MATCH) {
+    try {
+      scored.sort((a, b) => b.score - a.score);
+      const top = scored.slice(0, 10);
+      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
+      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
+      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
+    } catch (e) {}
+  }
+
+  return best;
+}
+
+async function manualSubmitFlow() {
+  if (!isSetupReady()) {
+    showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
+    return;
+  }
+
+  // Required: user must draw a box around the icon every time.
+  showEvent("Manual submit", "Draw a box around the item icon…", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: draw a box around the icon"); } catch (e) {}
+
+  const templates = await ensureIconTemplatesLoaded();
+  if (!templates || !templates.length) {
+    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+    showEvent("Manual submit", "No icon templates loaded.", "warn", true, true);
+    return;
+  }
+
+  const selection = await __selectIconRegionAroundMouse(300);
+  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+
+  if (!selection) {
+    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+    return;
+  }
+
+  const best = matchIconFromSelection(selection, templates);
+
+  if (!best || !best.name) {
+    showEvent("Manual submit", "Manual submit – no icon match found.", "warn", true, true);
+    return;
+  }
+
+  // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
+  const v = validateDropName(best.name);
+  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
+  if (!chosen) {
+    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
+    return;
+  }
+
+  const qty = 1;
+  const accepted = (best.score >= ICON_MATCH.acceptScore);
+
+  // Log proof every attempt
+  try {
+    console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
+  } catch (e) {}
+
+  if (!accepted) {
+    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
+    return;
+  }
+
+  showEvent("Manual submit", `Icon match: ${chosen} x${qty} (score ${(best.score || 0).toFixed(3)})`, "ok", true, false);
+  try {
+    await submitDrop({ drop_name: chosen, amount: String(qty) });
+    showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+    playOk();
+  } catch (e) {
+    showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+  }
+}
+
+
   function setPill(pill, label, state) {
     if (!pill) return;
     pill.textContent = label;
@@ -250,6 +963,7 @@
   function renderSetupLockedUI(locked) {
     setVisible(ui.setupBlock, !locked);
     setVisible(ui.setupSummary, locked);
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
@@ -379,11 +1093,188 @@
   let settings = loadSettings();
   if (ui.optAutoDetect) ui.optAutoDetect.checked = settings.autoDetect;
   if (ui.optHighlight) ui.optHighlight.checked = settings.highlight;
+  if (ui.optStrictDrops) ui.optStrictDrops.checked = settings.strictDrops;
+  if (ui.optUseWikiCanonical) ui.optUseWikiCanonical.checked = settings.useWikiCanonical;
 
   // ---------- Premium Selects (Bingo + Team) ----------
   let _bingosCache = [];
   let _selectedBingo = null;
-  let _selectedTeam = null;
+  let _selectedTeam = null
+
+// ---------- Drop history panel ----------
+let historyLoadedOnce = false;
+let historyLoading = false;
+
+function setHistoryOpen(isOpen) {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+  ui.toggleHistory.checked = !!isOpen;
+  ui.historyBody.classList.toggle("open", !!isOpen);
+  ui.historyBody.setAttribute("aria-hidden", isOpen ? "false" : "true");
+  const lbl = document.querySelector("#historyPanel .switchLabel");
+  if (lbl) lbl.textContent = isOpen ? "Hide" : "Show";
+  try { localStorage.setItem(LS.historyOpen, isOpen ? "1" : "0"); } catch(e) {}
+}
+
+function getHistoryContext() {
+  const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+  const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+  const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  return { bingoId, team_number, ign };
+}
+
+function normalizeHistoryPayload(payload) {
+  if (!payload) return [];
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.rows)) return payload.rows;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (payload.history && Array.isArray(payload.history)) return payload.history;
+  return [];
+}
+
+function fmtWhen(ts) {
+  try {
+    if (!ts) return "—";
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return String(ts);
+    return d.toLocaleString();
+  } catch(e) { return String(ts || "—"); }
+}
+
+function renderHistory(items) {
+  if (!ui.historyList) return;
+  ui.historyList.innerHTML = "";
+  const arr = Array.isArray(items) ? items : [];
+  if (!arr.length) {
+    const div = document.createElement("div");
+    div.className = "historyEmpty";
+    div.textContent = "No drops found.";
+    ui.historyList.appendChild(div);
+    return;
+  }
+
+  const base = getApiBase();
+
+  for (const it of arr) {
+    const name = (it.drop_name || it.drop || it.name || it.item || "").toString();
+    const amt = (it.amount ?? it.qty ?? it.count ?? "").toString();
+    const when = fmtWhen(it.ts_iso || it.ts || it.created_at || it.time);
+
+    const row = document.createElement("div");
+    row.className = "historyItem";
+
+    // icon (RuneScape Wiki proxy)
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "historyIcon";
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = `${base}/wiki/icon?item=${encodeURIComponent(name || "")}&size=52`;
+    img.onerror = () => { iconWrap.style.display = "none"; };
+    iconWrap.appendChild(img);
+
+    const left = document.createElement("div");
+    left.className = "historyLeft";
+
+    const nm = document.createElement("div");
+    nm.className = "historyName";
+    nm.textContent = name || "(unknown drop)";
+
+    const sub = document.createElement("div");
+    sub.className = "historySub";
+    sub.textContent = when;
+
+    left.appendChild(nm);
+    left.appendChild(sub);
+
+    const right = document.createElement("div");
+    right.className = "historyAmt";
+    right.textContent = amt ? `x${amt}` : "";
+
+    row.appendChild(iconWrap);
+    row.appendChild(left);
+    row.appendChild(right);
+
+    ui.historyList.appendChild(row);
+  }
+}
+
+async function fetchDropHistoryFromApi() {
+  const base = getApiBase();
+  const { bingoId, team_number, ign } = getHistoryContext();
+
+  if (!bingoId || !team_number || !ign) {
+    throw new Error("Complete setup (IGN + Bingo + Team) to view history.");
+  }
+
+  // Confirmed admin endpoint used by the web admin UI.
+  const url = `${base}/b/${bingoId}/api/admin/recent-drops`;
+
+  const r = await fetch(url, { method: "GET", cache: "no-store", credentials: "omit" });
+  if (!r.ok) throw new Error(`HTTP ${r.status} loading drop history`);
+
+  const payload = await r.json();
+  const all = normalizeHistoryPayload(payload);
+
+  const ignKey = String(ign).trim().toLowerCase();
+  const teamKey = String(team_number).trim();
+
+  // Filter to the user's selected team + IGN from setup.
+  const filtered = (Array.isArray(all) ? all : []).filter(x => {
+    const t = String(x?.team_id ?? x?.team_number ?? "").trim();
+    const i = String(x?.ign ?? "").trim().toLowerCase();
+    return t === teamKey && i === ignKey;
+  });
+
+  // Sort newest first if timestamps exist
+  filtered.sort((a, b) => {
+    const ta = new Date(a?.ts_iso || a?.ts || a?.timestamp || 0).getTime();
+    const tb = new Date(b?.ts_iso || b?.ts || b?.timestamp || 0).getTime();
+    return (tb || 0) - (ta || 0);
+  });
+
+  return filtered;
+}
+
+async function loadHistory() {
+  if (!ui.historyMeta || !ui.historyList) return;
+  if (historyLoading) return;
+  historyLoading = true;
+
+  ui.historyMeta.textContent = "Loading…";
+  renderHistory([]);
+
+  try {
+    const items = await fetchDropHistoryFromApi();
+    renderHistory(items);
+    ui.historyMeta.textContent = `${items.length} drop(s)`;
+    historyLoadedOnce = true;
+  } catch (e) {
+    ui.historyMeta.textContent = "Failed";
+    ui.historyList.innerHTML = `<div class="historyEmpty">${escapeHtml(e.message || "Unable to load history.")}</div>`;
+  } finally {
+    historyLoading = false;
+  }
+}
+
+function initHistoryPanel() {
+  if (!ui.toggleHistory || !ui.historyBody) return;
+
+  const open = (localStorage.getItem(LS.historyOpen) || "0") === "1";
+  setHistoryOpen(open);
+
+  ui.toggleHistory.addEventListener("change", () => {
+    const isOpen = !!ui.toggleHistory.checked;
+    setHistoryOpen(isOpen);
+    if (isOpen && !historyLoadedOnce) loadHistory();
+  });
+
+  if (ui.btnRefreshHistory) {
+    ui.btnRefreshHistory.addEventListener("click", () => loadHistory());
+  }
+}
+
+;
 
   function pselectOpen(wrap, open) {
     if (!wrap) return;
@@ -631,7 +1522,64 @@
     }
   }
 
-  // ---------- canonical name resolver ----------
+  
+  // ---------- allowlist (strict validation) ----------
+  let allowlist = { strict: true, drops: [] };
+  const canonicalMap = new Map();
+
+  function normalizeDropName(name) {
+    if (!name) return "";
+    return String(name)
+      .replace(/[’]/g, "'")
+      .trim()
+      .replace(/^[Aa]n?\s+/, "") // leading 'a' / 'an'
+      .replace(/\s+/g, " ")
+      .replace(/[.,;:]+$/g, "")
+      .toLowerCase();
+  }
+
+  function buildCanonicalMap(dropList) {
+    canonicalMap.clear();
+    for (const item of (dropList || [])) {
+      const canon = String(item || "").trim();
+      if (!canon) continue;
+      const n = normalizeDropName(canon);
+      if (!n) continue;
+      canonicalMap.set(n, canon);
+
+      // Safe apostrophe-less variant (Archers ring -> Archers' Ring etc.)
+      const noApos = n.replace(/'/g, "");
+      if (!canonicalMap.has(noApos)) canonicalMap.set(noApos, canon);
+    }
+  }
+
+  function validateDropName(inputName) {
+    const n = normalizeDropName(inputName);
+    if (!n) return { valid: false };
+    const canon = canonicalMap.get(n) || canonicalMap.get(n.replace(/'/g, ""));
+    if (canon) return { valid: true, canonical: canon };
+    return { valid: false };
+  }
+
+  async function loadAllowlistFile() {
+    try {
+      const res = await fetch("./drops_allowlist.json", { cache: "no-store" });
+      if (!res.ok) throw new Error(`allowlist ${res.status}`);
+      const data = await res.json();
+      allowlist = {
+        strict: data && data.strict !== false,
+        drops: Array.isArray(data && data.drops) ? data.drops : [],
+      };
+      buildCanonicalMap(allowlist.drops);
+      addFeed(`Allowlist loaded (${allowlist.drops.length} items)`, "ok");
+    } catch (e) {
+      allowlist = { strict: true, drops: [] };
+      canonicalMap.clear();
+      addFeed("Allowlist not loaded (drops_allowlist.json missing/invalid). Strict validation will be ineffective until provided.", "warn");
+    }
+  }
+
+// ---------- canonical name resolver ----------
   const canonicalCache = new Map();
   async function resolveCanonicalName(rawName) {
     const base = getApiBase();
@@ -735,7 +1683,7 @@
 
   function detectHasTimestamps(lines) {
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
-      const raw = (lines[i] && lines[i].text) ? String(lines[i].text) : String(lines[i] || "");
+      const raw = lineToText(lines[i]);
       if (/^\s*\[\d{1,2}:\d{2}:\d{2}/.test(raw)) return true;
     }
     return false;
@@ -750,8 +1698,31 @@
     return false;
   }
 
-  function stitchChatMessages(lines) {
-    const rawLines = (lines || []).map(l => (l && l.text) ? String(l.text) : String(l || "")).filter(Boolean);
+  
+  function toPlainText(v) {
+    if (v == null) return "";
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(toPlainText).join("");
+    if (typeof v === "object") {
+      if (typeof v.text === "string") return v.text;
+      if (typeof v.value === "string") return v.value;
+      if (Array.isArray(v.fragments)) return v.fragments.map(toPlainText).join("");
+      if (Array.isArray(v.parts)) return v.parts.map(toPlainText).join("");
+      return "";
+    }
+    return String(v);
+  }
+  function lineToText(line) {
+    if (typeof line === "string") return line;
+    if (line && typeof line === "object") {
+      if (typeof line.text === "string") return line.text;
+      return toPlainText(line.text);
+    }
+    return toPlainText(line);
+  }
+
+function stitchChatMessages(lines) {
+    const rawLines = (lines || []).map(lineToText).filter(Boolean);
     const hasTs = detectHasTimestamps(lines || []);
     const out = [];
 
@@ -786,19 +1757,28 @@
     return { messages: out, rawCount: rawLines.length, stitchedCount: out.length, hasTimestamps: hasTs };
   }
 
-  // Duplicate protection
-  const recentKeys = [];
-  const recentSet = new Set();
-  function rememberKey(k) {
-    recentKeys.push(k);
-    recentSet.add(k);
-    while (recentKeys.length > 80) {
-      const old = recentKeys.shift();
-      recentSet.delete(old);
-    }
-  }
+  // Duplicate protection (centralised + time-based)
+  const recentDrops = new Map(); // key -> lastSeenMs
+  function seenRecently(key, windowMs = 8000) {
+    const now = Date.now();
+    const last = recentDrops.get(key) || 0;
+    if (now - last < windowMs) return true;
+    recentDrops.set(key, now);
 
-  // ---------- chat reader ----------
+    // lightweight cleanup to avoid unbounded growth
+    if (recentDrops.size > 250) {
+      for (const [k, ts] of recentDrops) {
+        if (now - ts > windowMs * 4) recentDrops.delete(k);
+      }
+      // still too big? drop oldest-ish by iter order
+      while (recentDrops.size > 200) {
+        const firstKey = recentDrops.keys().next().value;
+        recentDrops.delete(firstKey);
+      }
+    }
+    return false;
+  }
+// ---------- chat reader ----------
   let chatReader = null;
   let running = false;
   let pollTimer = null;
@@ -1203,13 +2183,42 @@
       const parsed = parseDropLine(raw, nextRaw);
       if (!parsed) continue;
 
-      const canonicalName = await resolveCanonicalName(parsed.drop_name);
+      // Reject rich-fragment stringify artifacts
+      if (raw.includes("[object Object]")) {
+        addFeed("Ignored line (unparsed rich text): " + raw, "warn");
+        continue;
+      }
 
-      // slightly stronger dupe key
-      const key = `${canonicalName}||${parsed.amount || ""}||${chatState.lastLine}`;
-      if (recentSet.has(key)) continue;
+      // Allowlist validation (primary gate)
+      const strictOn = settings.strictDrops && canonicalMap.size > 0;
+      let canonicalName = parsed.drop_name;
 
-      rememberKey(key);
+      if (strictOn) {
+        const v = validateDropName(parsed.drop_name);
+        if (!v.valid) {
+          addFeed(`Rejected (not in allowlist): ${parsed.drop_name}`, "warn");
+          continue;
+        }
+        canonicalName = v.canonical;
+      }
+
+      // Optional wiki canonicalisation (secondary; never bypass allowlist)
+      if (settings.useWikiCanonical) {
+        const wikiName = await resolveCanonicalName(canonicalName);
+        if (strictOn) {
+          const v2 = validateDropName(wikiName);
+          canonicalName = v2.valid ? v2.canonical : canonicalName;
+        } else {
+          canonicalName = wikiName;
+        }
+      }
+
+
+      // De-dupe across ALL detection paths (broadcast, "You received", etc.)
+      const amtKey = (parsed.amount || "1").toString().trim();
+      const key = `${canonicalName}`.toLowerCase().trim() + "||" + amtKey;
+      if (seenRecently(key, 8000)) continue;
+
       addFeed(`Drop: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
 
       try {
@@ -1239,6 +2248,7 @@
     closeDrawer();
   });
 
+
   // FIX: null-guard backdrop
   ui.backdrop && ui.backdrop.addEventListener("click", closeDrawer);
 
@@ -1249,6 +2259,15 @@
   ui.optHighlight && ui.optHighlight.addEventListener("change", (e) => {
     settings = saveSettings({ highlight: !!e.target.checked });
     addFeed("Highlight during locate: " + (settings.highlight ? "ON" : "OFF"), "ok");
+  });
+
+  ui.optStrictDrops && ui.optStrictDrops.addEventListener("change", (e) => {
+    settings = saveSettings({ strictDrops: !!e.target.checked });
+    addFeed("Strict drop validation: " + (settings.strictDrops ? "ON" : "OFF"), "ok");
+  });
+  ui.optUseWikiCanonical && ui.optUseWikiCanonical.addEventListener("change", (e) => {
+    settings = saveSettings({ useWikiCanonical: !!e.target.checked });
+    addFeed("Wiki canonicalisation: " + (settings.useWikiCanonical ? "ON" : "OFF"), "ok");
   });
 
   // FIX: btnLockSetup uses existing helpers; no missing functions
@@ -1428,6 +2447,8 @@
   pingApi();
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
+  await loadAllowlistFile();
+
   loadBingosAndPopulate();
 
   window.IRB = window.IRB || {};
@@ -1435,6 +2456,7 @@
 
   if (isAlt1) {
     initChatReader();
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
 
@@ -1447,8 +2469,93 @@
   } else {
     setPill(ui.apiPill, "API: —", "warn");
     setPill(ui.chatPill, "Chat: —", "warn");
+    initHistoryPanel();
     refreshSummary();
     refreshSetupState();
   }
 
+
+  // Alt1 Hotkey: use Alt1's configured "Alt+1" (rightclick) to trigger a manual scan/submit
+  function bindAlt1ManualHotkey() {
+    if (!window.alt1) return;
+    // Preferred newer API (not available in some builds)
+    const rc = window.alt1?.events?.rightclick;
+    if (Array.isArray(rc) && typeof rc.push === "function") {
+      rc.push((obj) => {
+        try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
+        manualSubmitFlow();
+      });
+      return;
+    }
+
+    // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
+    window.alt1onrightclick = (obj) => {
+      try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
+      manualSubmitFlow();
+    };
+  }
+
+  // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
 })();
+
+
+// --- Added: Universal broadcast drop detection ---
+function normalizeIgn(raw) {
+  raw = (raw || "").toString().trim();
+  // Anchor to the first capital letter (RSN display starts with A-Z; ironman icons/prefixes may precede it)
+  const i = raw.search(/[A-Z]/);
+  if (i >= 0) return raw.slice(i).trim();
+  return raw;
+}
+
+function stripChatPrefix(s) {
+  return (s || "")
+    // remove timestamp/channel bracket prefixes like "[17:36:57]" "[CC]" etc
+    .replace(/^\s*(?:\[[^\]]+\]\s*)+/i, "")
+    // remove leading % and optional bracket tag before "News:"
+    .replace(/^\s*%\s*(?:\[[^\]]+\]\s*)?/i, "")
+    // remove "News:" label (case-insensitive)
+    .replace(/^\s*news\s*:\s*/i, "")
+    .trim();
+}
+
+// Patch into existing parse function if present
+if (typeof _tryParseReceive === "function") {
+  const __originalTryParseReceive = _tryParseReceive;
+  _tryParseReceive = function(text) {
+    let result = __originalTryParseReceive(text);
+    if (result) return result;
+
+    let t = stripTimestampPrefix(text);
+    t = stripChatPrefix(t);
+
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
+    if (!lockedIgnRaw) return null;
+    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
+
+    // Accept relayed/broadcast formats where the sender name may include icon prefixes (e.g. ironman),
+    // and anchor the "real" IGN to the first capital letter before comparing to the locked IGN.
+    const reBroadcast = new RegExp(
+      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop\\b.*$",
+      "i"
+    );
+
+    const m = t.match(reBroadcast);
+    if (m) {
+      const ignRaw = (m[1] || "").trim();
+      const ign = normalizeIgn(ignRaw).toLowerCase();
+      if (ign !== lockedIgn) return null;
+
+      const item = (m[2] || "").trim();
+      const amt = (m[3] || "1").trim();
+      if (!item) return null;
+
+      return { drop_name: item, amount: amt };
+    }
+
+    return null;
+  };
+}
+// --- End broadcast patch ---
