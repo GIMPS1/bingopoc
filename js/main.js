@@ -628,100 +628,302 @@
     return null;
   }
 
+
+// -------- Manual icon selection overlay (Alt+1) --------
+// User must draw a box over the icon every time. We then match ONLY that selected region.
+function __selectRectOnCapture(capImg, screenX, screenY) {
+  return new Promise((resolve) => {
+    // Create overlay
+    const overlay = document.createElement("div");
+    overlay.style.position = "fixed";
+    overlay.style.left = "0";
+    overlay.style.top = "0";
+    overlay.style.right = "0";
+    overlay.style.bottom = "0";
+    overlay.style.zIndex = "999999";
+    overlay.style.background = "rgba(0,0,0,0.35)";
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+
+    const panel = document.createElement("div");
+    panel.style.background = "rgba(20,20,20,0.92)";
+    panel.style.border = "1px solid rgba(255,255,255,0.15)";
+    panel.style.borderRadius = "10px";
+    panel.style.padding = "10px";
+    panel.style.boxShadow = "0 10px 30px rgba(0,0,0,0.55)";
+    panel.style.userSelect = "none";
+
+    const title = document.createElement("div");
+    title.textContent = "Draw a box around the item icon (ESC to cancel)";
+    title.style.color = "white";
+    title.style.fontSize = "13px";
+    title.style.margin = "0 0 8px 0";
+    title.style.opacity = "0.95";
+
+    const canvas = document.createElement("canvas");
+    const cap = __getImgProps(capImg);
+    const w = cap ? cap.width : (ICON_MATCH.captureSize | 0);
+    const h = cap ? cap.height : (ICON_MATCH.captureSize | 0);
+
+    // Scale up for easier selection (but keep math in capture coordinates)
+    const scale = (w <= 140) ? 3 : (w <= 220 ? 2 : 1);
+    canvas.width = w * scale;
+    canvas.height = h * scale;
+    canvas.style.width = canvas.width + "px";
+    canvas.style.height = canvas.height + "px";
+    canvas.style.cursor = "crosshair";
+    canvas.style.imageRendering = "pixelated";
+    canvas.style.border = "1px solid rgba(255,255,255,0.15)";
+    canvas.style.borderRadius = "8px";
+    canvas.style.display = "block";
+
+    const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+    // Paint capture into canvas
+    try {
+      const imgd = new ImageData(new Uint8ClampedArray(cap.data.buffer ? cap.data.buffer : cap.data), w, h);
+      // draw at native size to an offscreen then scale
+      const off = document.createElement("canvas");
+      off.width = w; off.height = h;
+      const offCtx = off.getContext("2d", { alpha: false });
+      offCtx.putImageData(imgd, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+    } catch (e) {
+      // if ImageData construction fails, just fill dark
+      ctx.fillStyle = "#111";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    const hint = document.createElement("div");
+    hint.style.color = "rgba(255,255,255,0.85)";
+    hint.style.fontSize = "12px";
+    hint.style.marginTop = "8px";
+    hint.style.display = "flex";
+    hint.style.justifyContent = "space-between";
+    hint.style.gap = "10px";
+    hint.innerHTML = `<span>Tip: drag tightly around the 48px icon.</span><span style="opacity:0.8">ESC = cancel</span>`;
+
+    panel.appendChild(title);
+    panel.appendChild(canvas);
+    panel.appendChild(hint);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    let dragging = false;
+    let sx = 0, sy = 0, ex = 0, ey = 0;
+
+    function redraw() {
+      // repaint base
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      try {
+        const imgd = new ImageData(new Uint8ClampedArray(cap.data.buffer ? cap.data.buffer : cap.data), w, h);
+        const off = document.createElement("canvas");
+        off.width = w; off.height = h;
+        const offCtx = off.getContext("2d", { alpha: false });
+        offCtx.putImageData(imgd, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+      } catch (e) {
+        ctx.fillStyle = "#111";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      // selection rect
+      const x0 = Math.min(sx, ex), y0 = Math.min(sy, ey);
+      const x1 = Math.max(sx, ex), y1 = Math.max(sy, ey);
+      const rw = x1 - x0, rh = y1 - y0;
+      if (rw > 0 && rh > 0) {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.25)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.clearRect(x0, y0, rw, rh);
+        ctx.restore();
+
+        ctx.save();
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x0 + 1, y0 + 1, rw - 2, rh - 2);
+        ctx.restore();
+      }
+    }
+
+    function cleanup(result) {
+      window.removeEventListener("keydown", onKey);
+      overlay.removeEventListener("mousedown", onDown, true);
+      overlay.removeEventListener("mousemove", onMove, true);
+      overlay.removeEventListener("mouseup", onUp, true);
+      try { document.body.removeChild(overlay); } catch (e) {}
+      resolve(result);
+    }
+
+    function toLocal(e) {
+      const r = canvas.getBoundingClientRect();
+      const x = Math.max(0, Math.min(canvas.width, (e.clientX - r.left)));
+      const y = Math.max(0, Math.min(canvas.height, (e.clientY - r.top)));
+      return { x, y };
+    }
+
+    function onKey(e) {
+      if (e.key === "Escape") cleanup(null);
+    }
+
+    function onDown(e) {
+      if (e.target !== canvas) return;
+      e.preventDefault();
+      const p = toLocal(e);
+      dragging = true;
+      sx = ex = p.x;
+      sy = ey = p.y;
+      redraw();
+    }
+    function onMove(e) {
+      if (!dragging) return;
+      e.preventDefault();
+      const p = toLocal(e);
+      ex = p.x; ey = p.y;
+      redraw();
+    }
+    function onUp(e) {
+      if (!dragging) return;
+      e.preventDefault();
+      dragging = false;
+      const x0 = Math.min(sx, ex), y0 = Math.min(sy, ey);
+      const x1 = Math.max(sx, ex), y1 = Math.max(sy, ey);
+      const rw = x1 - x0, rh = y1 - y0;
+
+      // Minimum box size to avoid accidental clicks
+      if (rw < 8 || rh < 8) { redraw(); return; }
+
+      // Convert back to capture coordinates
+      const sel = {
+        x: Math.round(x0 / scale),
+        y: Math.round(y0 / scale),
+        w: Math.round(rw / scale),
+        h: Math.round(rh / scale),
+      };
+      cleanup(sel);
+    }
+
+    window.addEventListener("keydown", onKey);
+    overlay.addEventListener("mousedown", onDown, true);
+    overlay.addEventListener("mousemove", onMove, true);
+    overlay.addEventListener("mouseup", onUp, true);
+
+    // Initial redraw
+    redraw();
+  });
+}
+
+function matchIconFromSelection(capImg, sel, templates) {
+  if (!capImg || !sel || !templates || !templates.length) return null;
+  const cap = __getImgProps(capImg);
+  if (!cap) return null;
+
+  __buildTemplateFeatures(templates);
+
+  // Clamp selection inside capture
+  const x = Math.max(0, Math.min(cap.width - 1, sel.x | 0));
+  const y = Math.max(0, Math.min(cap.height - 1, sel.y | 0));
+  const w = Math.max(1, Math.min(cap.width - x, sel.w | 0));
+  const h = Math.max(1, Math.min(cap.height - y, sel.h | 0));
+
+  // Build candidate feature by resizing the selected region to sampleSize (no need to first resize to 48px)
+  const gray = __downsampleToGray16(cap, x, y, w, h, ICON_MATCH.sampleSize);
+  const candFeat = __centerAndInvStd(gray);
+
+  let best = null;
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i];
+    if (!t || !t._feat) continue;
+    const score = __znccScore(t._feat, candFeat);
+    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
+  }
+
+  if (best && best.score >= ICON_MATCH.acceptScore) return best;
+  return null;
+}
+
+
+
 async function manualSubmitFlow() {
     if (!isSetupReady()) {
       showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
       return;
     }
+
+    // Countdown to let the user settle the mouse over the target UI.
     const steps = ["3", "2", "1"];
     for (let i = 0; i < steps.length; i++) {
       const s = steps[i];
-      showEvent("Manual submit", "Hover tooltip text… scanning in " + s, "ok", true, false);
+      showEvent("Manual submit", "Get ready to select the icon… " + s, "ok", true, false);
       try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: " + s); } catch (e) {}
       await new Promise(function (r) { setTimeout(r, 1000); });
     }
     try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
-    showEvent("Manual submit", "Scanning around mouse (icons)…", "ok", true, false);
-    // Try icon matching first
+    // Always require a user-drawn selection (no OCR in this path).
+    showEvent("Manual submit", "Capturing… draw a box over the icon.", "ok", true, false);
+
     const templates = await ensureIconTemplatesLoaded();
-    let iconMatch = null;
-    if (templates && templates.length && window.A1lib && typeof A1lib.capture === "function") {
-      const pos = getMousePos();
-      const mx2 = pos ? pos.x : 0;
-      const my2 = pos ? pos.y : 0;
-      const capW = ICON_MATCH.captureSize, capH = ICON_MATCH.captureSize;
-      const rx2 = Math.max(0, mx2 - (capW >> 1));
-      const ry2 = Math.max(0, my2 - (capH >> 1));
-      let capImg = null;
-      try { capImg = A1lib.capture(rx2, ry2, capW, capH); } catch (e) {}
-      if (capImg) {
-        iconMatch = findBestIconMatch(capImg, templates);
-        if (iconMatch && iconMatch.name) {
-          // qty OCR: top-left quadrant of the matched icon
-          // Manual submit qty OCR disabled (icon matching only for now)
-          const qty = 1;
-          const v = validateDropName(iconMatch.name);
-          const chosenIcon = (v && v.valid) ? (v.canonical || iconMatch.name) : null;
-          if (chosenIcon) {
-            showEvent("Manual submit", `Icon match: ${chosenIcon} x${qty}`, "ok", true, false);
-            try {
-              await submitDrop({ drop_name: chosenIcon, amount: String(qty || 1) });
-              showEvent("Manual submit", `Submitted: ${chosenIcon} x${qty}`, "ok", true, true);
-              playOk();
-              return;
-            } catch (e) {
-              showEvent("Manual submit", "Submit failed (icon): " + (e && e.message ? e.message : e), "warn", true, true);
-              // fall through to tooltip OCR
-            }
-          }
-        }
-      }
+    if (!templates || !templates.length) {
+      showEvent("Manual submit", "No icon templates loaded.", "warn", true, true);
+      return;
     }
-
-    // Fallback to tooltip OCR
-    showEvent("Manual submit", "Icon match failed; scanning tooltip text…", "ok", true, false);
-    const ocrRes = await ocrRegionAroundMouse(300);
-    if (!ocrRes.ok) {
-      showEvent("Manual submit", "OCR failed: " + (ocrRes.reason || "no text"), "warn", true, true);
+    if (!window.A1lib || typeof A1lib.capture !== "function") {
+      showEvent("Manual submit", "A1lib.capture not available.", "warn", true, true);
       return;
     }
 
-    // Try to parse + validate candidates against allowlist/canonical map
-    const candidates = extractDropCandidatesFromOcr(ocrRes.text);
-    let chosen = null;
+    const pos = getMousePos();
+    const mx = pos ? (pos.x | 0) : 0;
+    const my = pos ? (pos.y | 0) : 0;
 
-    for (let i = 0; i < candidates.length; i++) {
-      const v = validateDropName(candidates[i]);
-      if (v && v.valid) { chosen = (v.canonical || candidates[i]); break; }
-    }
+    // Capture a larger region so the user can accurately box the icon.
+    const capW = 220, capH = 220;
+    const rx = Math.max(0, mx - (capW >> 1));
+    const ry = Math.max(0, my - (capH >> 1));
 
-    if (!chosen) {
-      // As a fallback, try validating each line directly
-      const lines = ocrRes.text.split(/\r?\n/);
-      for (let i = 0; i < lines.length; i++) {
-        const v = validateDropName(lines[i]);
-        if (v && v.valid) { chosen = (v.canonical || lines[i]); break; }
-      }
-    }
-
-    if (!chosen) {
-      showEvent("Manual submit", "OCR found text but no valid drop matched.", "warn", true, true);
+    let capImg = null;
+    try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+    if (!capImg) {
+      showEvent("Manual submit", "Capture failed (no image).", "warn", true, true);
       return;
     }
 
-    showEvent("Manual submit", "Submitting: " + chosen, "ok", true, false);
+    const sel = await __selectRectOnCapture(capImg, rx, ry);
+    if (!sel) {
+      showEvent("Manual submit", "Cancelled.", "warn", true, false);
+      return;
+    }
+
+    // Match ONLY the selected region.
+    const iconMatch = matchIconFromSelection(capImg, sel, templates);
+    if (!iconMatch || !iconMatch.name) {
+      showEvent("Manual submit", "No icon match found (try a tighter box).", "warn", true, true);
+      return;
+    }
+
+    // Manual submit qty OCR disabled (icon matching only for now)
+    const qty = 1;
+
+    const v = validateDropName(iconMatch.name);
+    const chosen = (v && v.valid) ? (v.canonical || iconMatch.name) : null;
+    if (!chosen) {
+      showEvent("Manual submit", "Matched icon is not in allowlist: " + iconMatch.name, "warn", true, true);
+      return;
+    }
+
+    showEvent("Manual submit", `Matched: ${chosen} (score ${iconMatch.score.toFixed(3)})`, "ok", true, false);
     try {
-      const res = await submitDrop({ drop_name: chosen, amount: "1" });
-      showEvent("Manual submit", "Submitted: " + chosen, "ok", true, true);
-      playBeep("ok");
+      await submitDrop({ drop_name: chosen, amount: String(qty || 1) });
+      showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+      playOk();
     } catch (e) {
-      const msg = (e && e.message) ? e.message : String(e);
-      showEvent("Manual submit", "Submit failed: " + msg, "bad", true, true);
+      showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "bad", true, true);
       playBeep("bad");
     }
   }
-
   function setPill(pill, label, state) {
     if (!pill) return;
     pill.textContent = label;
