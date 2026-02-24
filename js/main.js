@@ -1035,62 +1035,72 @@ async function manualSubmitFlow() {
     return;
   }
 
-  // Required: user must draw a box around the icon every time.
-  showEvent("Manual submit", "Draw a box around the item icon…", "ok", true, false);
-  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: draw a box around the icon"); } catch (e) {}
+  // Manual submit (OCR-first): hover the item / menu near the mouse and we try to read the item name.
+  showEvent("Manual submit", "OCR scanning (500x500) near mouse…", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover the item (tooltip/menu) then press Alt+1"); } catch (e) {}
 
-  const templates = await ensureIconTemplatesLoaded();
-  if (!templates || !templates.length) {
-    try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
-    showEvent("Manual submit", "No icon templates loaded.", "warn", true, true);
-    return;
-  }
-
-  const selection = await __selectIconRegionAroundMouse(300);
+  // 1) OCR in a larger region for reliability
+  const ocr = await ocrRegionAroundMouse(500);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
-  if (!selection) {
-    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
-    return;
+  if (ocr && ocr.ok && ocr.text) {
+    // Prefer verb-based candidates (Take/Withdraw/etc.)
+    let candidates = [];
+    try { candidates = extractDropCandidatesFromOcr(ocr.text) || []; } catch (e) { candidates = []; }
+
+    // Fallback: pick the first reasonable line (tooltip title often appears as a standalone line)
+    if (!candidates.length) {
+      const lines = String(ocr.text).split(/\r?\n+/).map(s => String(s).trim()).filter(Boolean);
+      if (lines.length) {
+        let s = lines[0];
+        // Strip common leading verbs if OCR included them
+        s = s.replace(/^\b(?:Take|Open|Search|Claim|Collect|Withdraw(?:-All|-1|-5|-10|-X)?|Pick up|Loot)\b\s+/i, "").trim();
+        // Strip trailing count markers
+        s = s.replace(/\s*(?:\(?x\s*\d+\)?|x\s*\d+)\s*$/i, "").trim();
+        if (s.length >= 2) candidates = [s];
+      }
+    }
+
+    if (candidates.length) {
+      const raw = String(candidates[0] || "").trim();
+      // Optionally resolve to wiki canonical (helps allowlist match)
+      let resolved = raw;
+      try {
+        const s = loadSettings();
+        if (s && s.useWikiCanonical) resolved = await resolveCanonicalName(raw);
+      } catch (e) {}
+
+      // Validate against allowlist
+      const v1 = validateDropName(resolved);
+      const v2 = v1 && v1.valid ? v1 : validateDropName(raw);
+      const chosen = (v2 && v2.valid) ? (v2.canonical || resolved) : null;
+
+      if (chosen) {
+        const qty = 1;
+        showEvent("Manual submit", `OCR: ${chosen} x${qty}`, "ok", true, false);
+        try {
+          await submitDrop({ drop_name: chosen, amount: String(qty) });
+          showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
+          playOk();
+          return;
+        } catch (e) {
+          showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
+          return;
+        }
+      } else {
+        showEvent("Manual submit", `OCR read "${resolved}" (not in allowlist)`, "warn", true, true);
+        return;
+      }
+    } else {
+      showEvent("Manual submit", "OCR found no item name. Try hovering the item tooltip or right-click menu.", "warn", true, true);
+      return;
+    }
   }
 
-  const best = matchIconFromSelection(selection, templates);
-
-  if (!best || !best.name) {
-    showEvent("Manual submit", "Manual submit – no icon match found.", "warn", true, true);
-    return;
-  }
-
-  // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
-  const v = validateDropName(best.name);
-  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
-  if (!chosen) {
-    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
-    return;
-  }
-
-  const qty = 1;
-  const accepted = (best.score >= ICON_MATCH.acceptScore);
-
-  // Log proof every attempt
-  try {
-    console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
-  } catch (e) {}
-
-  if (!accepted) {
-    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
-    return;
-  }
-
-  showEvent("Manual submit", `Icon match: ${chosen} x${qty} (score ${(best.score || 0).toFixed(3)})`, "ok", true, false);
-  try {
-    await submitDrop({ drop_name: chosen, amount: String(qty) });
-    showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-    playOk();
-  } catch (e) {
-    showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
-  }
+  // If OCR failed entirely
+  showEvent("Manual submit", ocr && ocr.reason ? `OCR failed: ${ocr.reason}` : "OCR failed.", "warn", true, true);
 }
+
 
 
   function setPill(pill, label, state) {
