@@ -759,15 +759,14 @@
 
 /* -----------------------------
  * Manual-submit OCR fallback: Tesseract.js (WASM)
- * - Used ONLY for manual submits (chat OCR unchanged)
- * - Loaded via <script> in index.html (see index.html)
+ * - Only used for manual submits (chat OCR unchanged)
+ * - Loaded via <script> in index.html
  * ----------------------------- */
 
-let __tess = { worker: null, ready: false, initPromise: null, lastParamsKey: "" };
+let __tess = { worker: null, ready: false, initPromise: null };
 
 async function __initTesseractOnce() {
-  // v5.x: worker comes pre-initialized and language is bundled; do NOT call loadLanguage/initialize.
-  if (__tess.ready) return true;
+  if (__tess.ready && __tess.worker) return true;
   if (__tess.initPromise) return __tess.initPromise;
 
   __tess.initPromise = (async () => {
@@ -776,24 +775,20 @@ async function __initTesseractOnce() {
       return false;
     }
 
-    let worker;
-    try {
-      // ✅ Most stable in Alt1/CEF: default createWorker() (no paths, no logger funcs)
-      worker = await Tesseract.createWorker();
-    } catch (e) {
-      console.warn("[TESS] createWorker failed:", e);
-      return false;
-    }
+    // ✅ v5: createWorker with no options (avoids Worker postMessage cloning issues in Alt1/CEF)
+    const worker = await Tesseract.createWorker();
 
-    // Set only safe runtime parameters (avoid init-only params)
+    // Only set parameters that are allowed after init (avoid load_system_dawg/load_freq_dawg warnings)
     try {
       await worker.setParameters({
         user_defined_dpi: "300",
-        preserve_interword_spaces: "1"
+        preserve_interword_spaces: "1",
+        tessedit_pageseg_mode: String(Tesseract.PSM.SINGLE_LINE),
+        tessedit_enable_dict_correction: "0",
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '-"
       });
-    } catch (e) {
-      // ignore
-    }
+      __tess.tipCfg = true;
+    } catch (e) {}
 
     __tess.worker = worker;
     __tess.ready = true;
@@ -804,34 +799,28 @@ async function __initTesseractOnce() {
 }
 
 function __imgRefToImageData(imgRef) {
-  // Accept ImgRef-like objects from A1lib.capture:
-  // - some builds expose {width,height,data}
-  // - others expose {w,h,imgdata} or {pixels}
+  // ImgRef-like objects from A1lib.capture expose {width,height,data}
   try {
-    const props = (typeof __getImgProps === "function") ? __getImgProps(imgRef) : null;
-    const data = props ? props.data : (imgRef && (imgRef.data || imgRef.imgdata || imgRef.pixels));
-    const width = props ? props.width : (imgRef && (imgRef.width || imgRef.w));
-    const height = props ? props.height : (imgRef && (imgRef.height || imgRef.h));
-    if (!data || !width || !height) return null;
-    return new ImageData(new Uint8ClampedArray(data), width | 0, height | 0);
+    if (!imgRef || !imgRef.data || !imgRef.width || !imgRef.height) return null;
+    return new ImageData(new Uint8ClampedArray(imgRef.data), imgRef.width, imgRef.height);
   } catch (e) {
     return null;
   }
 }
 
-function __preprocessToCanvasBW(imgData, scale, threshold, invert = true) {
+function __preprocessToCanvasBW(imgData, scale, threshold) {
   const srcW = imgData.width | 0, srcH = imgData.height | 0;
   const s = Math.max(1, scale | 0);
   const t = Math.max(0, Math.min(255, threshold | 0));
 
   const tmp = document.createElement("canvas");
-  tmp.width = Math.max(1, srcW);
-  tmp.height = Math.max(1, srcH);
+  tmp.width = srcW;
+  tmp.height = srcH;
   tmp.getContext("2d", { willReadFrequently: true }).putImageData(imgData, 0, 0);
 
   const c = document.createElement("canvas");
-  c.width = Math.max(1, srcW * s);
-  c.height = Math.max(1, srcH * s);
+  c.width = srcW * s;
+  c.height = srcH * s;
 
   const ctx = c.getContext("2d", { willReadFrequently: true });
   ctx.imageSmoothingEnabled = false;
@@ -840,18 +829,11 @@ function __preprocessToCanvasBW(imgData, scale, threshold, invert = true) {
   const d = ctx.getImageData(0, 0, c.width, c.height);
   const p = d.data;
 
-  // Grayscale + hard threshold (fast). For RS tooltips (bright text on dark bg),
-  // invert to black-on-white which Tesseract prefers.
+  // Grayscale + hard threshold (fast + works well on RS tooltips)
   for (let i = 0; i < p.length; i += 4) {
     const r = p[i], g = p[i + 1], b = p[i + 2];
     const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) | 0;
-
-    // binarize
-    let v = lum >= t ? 255 : 0;
-
-    // invert to black text on white background
-    if (invert) v = 255 - v;
-
+    const v = lum >= t ? 255 : 0;
     p[i] = p[i + 1] = p[i + 2] = v;
     p[i + 3] = 255;
   }
@@ -859,7 +841,7 @@ function __preprocessToCanvasBW(imgData, scale, threshold, invert = true) {
   return c;
 }
 
-function __normalizeTessText(t) {
+function __normalizeOcrText(t) {
   return String(t || "")
     .replace(/\u00A0/g, " ")
     .replace(/[ \t]+\n/g, "\n")
@@ -870,67 +852,68 @@ function __normalizeTessText(t) {
 async function __tesseractRecognizeImageData(imgData, opts) {
   const ok = await __initTesseractOnce();
   if (!ok || !__tess.worker) return { ok: false, reason: "Tesseract init failed." };
-  if (!imgData || !imgData.width || !imgData.height) return { ok: false, reason: "No image data." };
 
-  const w0 = imgData.width | 0, h0 = imgData.height | 0;
-  if (w0 < 10 || h0 < 10) return { ok: false, reason: `Image too small (${w0}x${h0}).` };
-
-  const scale = (opts && opts.scale) ? (opts.scale | 0) : 4;
-  const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_LINE;
-
-  // Default whitelist: RuneScape tooltip/action lines are mostly letters + spaces + punctuation.
-  const whitelist = (opts && opts.whitelist)
-    ? String(opts.whitelist)
-    : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 \'-:/()[]+.,&%!?";
-
-  // Auto-threshold tuned for bright tooltip text on dark background.
-  // We take a small sample and pick a threshold slightly above the median luminance.
-  function autoThreshold() {
-    try {
-      const p = imgData.data;
-      if (!p || p.length < 16) return 165;
-      const step = Math.max(4, ((p.length / 4) / 1800) | 0); // sample up to ~1800 pixels
-      const vals = [];
-      for (let i = 0, px = 0; i < p.length && px < 1800; i += 4 * step, px++) {
-        const r = p[i] | 0, g = p[i + 1] | 0, b = p[i + 2] | 0;
-        const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b);
-        vals.push(lum);
-      }
-      vals.sort((a, b) => a - b);
-      const med = vals[(vals.length / 2) | 0] || 0;
-      // Tooltip background tends to be dark -> median low; push threshold upward.
-      const th = Math.max(120, Math.min(220, (med + 45) | 0));
-      return th;
-    } catch (e) {
-      return 165;
-    }
+  if (!imgData || !imgData.data || imgData.width < 10 || imgData.height < 10) {
+    return { ok: false, reason: "Capture too small." };
   }
 
-  const thresholdOpt = (opts && ("threshold" in opts)) ? opts.threshold : "auto";
-  const threshold = (thresholdOpt === "auto" || thresholdOpt == null) ? autoThreshold() : (thresholdOpt | 0);
+  const scale = (opts && opts.scale) ? opts.scale : 4;
+  const psm = (opts && opts.psm != null) ? opts.psm : Tesseract.PSM.SINGLE_LINE;
+  const whitelist = (opts && opts.whitelist) ? opts.whitelist : "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '-";
+
+  // ---- preprocess: upscale (nearest), grayscale, threshold, invert ----
+  const src = document.createElement("canvas");
+  src.width = imgData.width;
+  src.height = imgData.height;
+  const sctx = src.getContext("2d", { willReadFrequently: true });
+  sctx.putImageData(imgData, 0, 0);
+
+  const up = document.createElement("canvas");
+  up.width = Math.max(1, Math.round(src.width * scale));
+  up.height = Math.max(1, Math.round(src.height * scale));
+  const uctx = up.getContext("2d", { willReadFrequently: true });
+  uctx.imageSmoothingEnabled = false;
+  uctx.drawImage(src, 0, 0, up.width, up.height);
+
+  const im = uctx.getImageData(0, 0, up.width, up.height);
+  const d = im.data;
+
+  // Auto threshold biased toward bright tooltip text (light text on dark bg)
+  let sum = 0, cnt = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    if (y > 120) { sum += y; cnt++; }
+  }
+  let thr = cnt ? Math.max(140, Math.min(210, (sum / cnt) * 0.85)) : 165;
+
+  for (let i = 0; i < d.length; i += 4) {
+    const y = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+    const on = y >= thr ? 255 : 0;     // text becomes 255
+    const v = 255 - on;               // invert => text black on white
+    d[i] = d[i + 1] = d[i + 2] = v;
+    d[i + 3] = 255;
+  }
+  uctx.putImageData(im, 0, 0);
+
+  // Set per-call safe params (avoid init-only params)
+  try {
+    await __tess.worker.setParameters({
+      tessedit_pageseg_mode: String(psm),
+      tessedit_char_whitelist: whitelist,
+      user_defined_dpi: "300",
+      preserve_interword_spaces: "1",
+      tessedit_enable_dict_correction: "0"
+    });
+  } catch (e) {}
 
   try {
-    const key = `${psm}|${whitelist}`;
-    if (__tess.lastParamsKey !== key) {
-      await __tess.worker.setParameters({
-        // Only set runtime-safe params (avoid init-only params like load_*_dawg)
-        tessedit_pageseg_mode: String(psm),
-        tessedit_char_whitelist: whitelist,
-        user_defined_dpi: "300",
-        preserve_interword_spaces: "1"
-      });
-      __tess.lastParamsKey = key;
-    }
-
-    const canvas = __preprocessToCanvasBW(imgData, scale, threshold, true);
-    const res = await __tess.worker.recognize(canvas);
-    const text = __normalizeTessText(res && res.data ? res.data.text : "");
-    return text ? { ok: true, text } : { ok: false, reason: "No text." };
+    const res = await __tess.worker.recognize(up);
+    const text = String(res && res.data && res.data.text ? res.data.text : "").trim();
+    return { ok: text.length >= 3, text };
   } catch (e) {
-    return { ok: false, reason: "Tesseract error: " + (e && e.message ? e.message : String(e)) };
+    return { ok: false, reason: String(e && e.message ? e.message : e) };
   }
 }
-
 
 function __padRect(r, pad) {
   const p = Math.max(0, pad | 0);
@@ -958,7 +941,7 @@ async function ocrTooltipNearSelectionTesseract(selection) {
   ];
 
   // "Zoom out" a bit for manual debug/robustness by padding the captured region.
-  const PAD = 20;
+  const PAD = 36;
 
   const reads = [];
   for (let pi = 0; pi < probes.length; pi++) {
@@ -968,17 +951,12 @@ async function ocrTooltipNearSelectionTesseract(selection) {
     try { imgRef = A1lib.capture(pr.x, pr.y, pr.w, pr.h); } catch (e) {}
     if (!imgRef) continue;
 
-    // Skip obviously-bad captures (can happen if probe is off-screen / outside game capture).
-    const iw = (imgRef.width || imgRef.w || 0) | 0;
-    const ih = (imgRef.height || imgRef.h || 0) | 0;
-    if (iw < 60 || ih < 25) continue;
-
     const imgData = __imgRefToImageData(imgRef);
     if (!imgData) continue;
 
     // Try two quick parameter sets; pick best text.
-    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 4, threshold: "auto", psm: Tesseract.PSM.SINGLE_LINE });
-    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 5, threshold: "auto", psm: Tesseract.PSM.SINGLE_BLOCK });
+    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 2, threshold: 165, psm: Tesseract.PSM.SINGLE_BLOCK });
+    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 3, threshold: 155, psm: Tesseract.PSM.SINGLE_BLOCK });
 
     if (r2 && r2.ok && r2.text) {
       reads.push(r2.text);
@@ -993,57 +971,6 @@ async function ocrTooltipNearSelectionTesseract(selection) {
   reads.sort((a, b) => (b ? b.length : 0) - (a ? a.length : 0));
   return { ok: true, text: reads[0] };
 }
-
-// Manual submit: capture a fixed box around the mouse and OCR it with Tesseract.
-// Avoids selector/ImgRef edge-cases that can produce tiny (e.g. 2px wide) captures.
-async function ocrTooltipNearMouseTesseract(mouseAbs) {
-  if (!mouseAbs || mouseAbs.x == null || mouseAbs.y == null) return { ok: false, reason: "No mouse." };
-  if (!(window.A1lib && typeof A1lib.capture === "function")) return { ok: false, reason: "A1lib.capture unavailable." };
-
-  // Tooltip text usually appears slightly below/right of the cursor.
-  const x = (mouseAbs.x | 0);
-  const y = (mouseAbs.y | 0);
-
-  const probes = [
-    // Requested: 100x100 around mouse
-    { x: x - 50, y: y - 50, w: 100, h: 100 },
-    // Bias downward (common for RS tooltips)
-    { x: x - 60, y: y - 10, w: 140, h: 120 },
-    // Wider fallback to fit full "Take <item>" lines at various UI scales
-    { x: x - 120, y: y - 30, w: 260, h: 140 },
-  ];
-
-  const reads = [];
-  for (let pi = 0; pi < probes.length; pi++) {
-    const pr = __padRect(probes[pi], 8);
-
-    let imgRef = null;
-    try { imgRef = A1lib.capture(pr.x, pr.y, pr.w, pr.h); } catch (e) {}
-    if (!imgRef) continue;
-
-    const iw = (imgRef.width || imgRef.w || 0) | 0;
-    const ih = (imgRef.height || imgRef.h || 0) | 0;
-
-    // Guard against the "2x36" type bad capture.
-    if (iw < 20 || ih < 20) continue;
-
-    const imgData = __imgRefToImageData(imgRef);
-    if (!imgData || imgData.width < 20 || imgData.height < 20) continue;
-
-    const r1 = await __tesseractRecognizeImageData(imgData, { scale: 4, threshold: "auto", psm: Tesseract.PSM.SINGLE_LINE });
-    const r2 = r1.ok ? r1 : await __tesseractRecognizeImageData(imgData, { scale: 5, threshold: "auto", psm: Tesseract.PSM.SINGLE_BLOCK });
-
-    if (r2 && r2.ok && r2.text) {
-      reads.push(r2.text);
-      if (/\b(Take|Open|Search|Claim|Collect|Withdraw|Pick up|Loot)\b/i.test(r2.text)) break;
-    }
-  }
-
-  if (!reads.length) return { ok: false, reason: "No text found (tesseract)." };
-  reads.sort((a, b) => (b ? b.length : 0) - (a ? a.length : 0));
-  return { ok: true, text: reads[0] };
-}
-
 
   function getQtyFromSelectionOrOcr(selection, ocrText) {
     // Prefer reading the stack quantity directly from the selected icon.
@@ -1131,90 +1058,58 @@ async function ocrTooltipNearMouseTesseract(mouseAbs) {
   
 
 
-async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
-  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
-
-  const pos = (evObj && evObj.mouseAbs && typeof evObj.mouseAbs.x === "number")
+async function manualSubmitFlow(evObj) {
+  // Manual submit uses Tesseract only. Chat OCR remains unchanged.
+  const mouseAbs = (evObj && evObj.mouseAbs && typeof evObj.mouseAbs.x === "number")
     ? evObj.mouseAbs
     : (typeof getMousePos === "function" ? getMousePos() : null);
 
-  if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") return null;
+  if (!mouseAbs || typeof mouseAbs.x !== "number" || typeof mouseAbs.y !== "number") {
+    showEvent("Manual submit", "No mouse position available.", "warn", true, true);
+    return;
+  }
 
-  const halfW = (boxW / 2) | 0;
-  const halfH = (boxH / 2) | 0;
-
-  const x = Math.max(0, (pos.x | 0) - halfW) | 0;
-  const y = Math.max(0, (pos.y | 0) - halfH) | 0;
+  // Capture a fixed box around mouse (tooltip/menu is near cursor)
+  const boxW = 240, boxH = 120;
+  const x = Math.max(0, (mouseAbs.x | 0) - ((boxW / 2) | 0));
+  const y = Math.max(0, (mouseAbs.y | 0) - ((boxH / 2) | 0));
 
   let img = null;
   try {
-    img = A1lib.capture(x, y, boxW | 0, boxH | 0);
-    // Some Alt1 builds may return a Promise here.
+    img = A1lib.capture(x, y, boxW, boxH);
+    // Some Alt1 builds return a Promise here
     if (img && typeof img.then === "function") img = await img;
-  } catch (e) {
-    return null;
+  } catch (e) {}
+
+  if (!img) {
+    showEvent("Manual submit", "Capture failed. Hover the tooltip and try again.", "warn", true, true);
+    return;
   }
-  if (!img) return null;
 
   const p = __getImgProps(img);
-  if (!async function manualSubmitFlow(evObj = null) {
-  if (!isSetupReady()) {
-    showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
-    return;
-  }
-  if (!window.alt1 || !alt1.permissionPixel) {
-    showEvent("Manual submit", "Alt1 pixel permission missing.", "warn", true, true);
+  if (!p || !p.data || !p.width || !p.height) {
+    showEvent("Manual submit", "Capture returned no pixel data. Try again.", "warn", true, true);
+    try { console.log("[MANUAL] bad capture props:", p); } catch (e) {}
     return;
   }
 
-  // Capture a fixed box around the mouse (tooltip is usually near cursor).
-  // Slightly wider than 100px to fit common tooltip lines.
-  const cap = await __captureBoxAroundMouse(240, 120, evObj);
-  if (!cap) {
-    showEvent("Manual submit", "Could not capture around mouse. Keep tooltip visible and try again.", "warn", true, true);
+  if (p.width < 10 || p.height < 10) {
+    showEvent("Manual submit", `Capture too small (${p.width}x${p.height}).`, "warn", true, true);
     return;
   }
 
-  const imgProps = cap && cap.imgProps ? cap.imgProps : null;
-  if (!imgProps || !imgProps.data || !imgProps.width || !imgProps.height) {
-    showEvent("Manual submit", "Capture failed (no image data). Try again with tooltip visible.", "warn", true, true);
-    try { console.log("[MANUAL] cap=", cap); } catch (e) {}
-    return;
-  }
-
-  // Normalize capture buffer to Uint8ClampedArray (RGBA)
-  let rgba;
-  const buf = imgProps.data;
-  if (buf instanceof Uint8ClampedArray) {
-    rgba = buf;
-  } else if (buf instanceof Uint8Array) {
-    rgba = new Uint8ClampedArray(buf.buffer);
-  } else if (buf && buf.buffer) {
-    rgba = new Uint8ClampedArray(buf.buffer);
-  } else {
-    showEvent("Manual submit", "Capture buffer format unsupported.", "warn", true, true);
-    try { console.log("[MANUAL] imgProps=", imgProps); } catch (e) {}
-    return;
-  }
-
-  // Guard against tiny captures before OCR
-  if (imgProps.width < 10 || imgProps.height < 10) {
-    showEvent("Manual submit", `Capture too small (${imgProps.width}x${imgProps.height}). Try again.`, "warn", true, true);
-    return;
-  }
-
-  const imgData = new ImageData(rgba, imgProps.width, imgProps.height);
+  const rgba = (p.data instanceof Uint8ClampedArray) ? p.data : new Uint8ClampedArray(p.data.buffer ? p.data.buffer : p.data);
+  const imgData = new ImageData(rgba, p.width, p.height);
 
   const ocr = await __tesseractRecognizeImageData(imgData, {
     scale: 4,
-    psm: Tesseract?.PSM?.SINGLE_LINE,
-    whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '-",
-    threshold: 165
+    psm: Tesseract.PSM.SINGLE_LINE,
+    whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '-"
   });
 
-  if (!ocr || !ocr.ok || !ocr.text || String(ocr.text).trim().length < 3) {
-    showEvent("Manual submit", "OCR failed. Hover the tooltip and right-click again.", "warn", true, true);
-    try { console.log("[MANUAL TESS] capture:", imgProps.width, imgProps.height, "text:", ocr && ocr.text); } catch (e) {}
+  if (!ocr || !ocr.ok || !ocr.text) {
+    showEvent("Manual submit", "Could not read tooltip text. Keep tooltip visible and try again.", "warn", true, true);
+    try { console.log("[MANUAL TESS] OCR fail:", ocr && (ocr.reason || ocr.text)); } catch (e) {}
     return;
   }
 
@@ -1228,7 +1123,7 @@ async function __captureBoxAroundMouse(boxW = 240, boxH = 120, evObj = null) {
   }
 
   if (!cands.length) {
-    showEvent("Manual submit", "Read text, but couldn't find an item name in it.", "warn", true, true);
+    showEvent("Manual submit", "Read tooltip text, but couldn't find an item name in it.", "warn", true, true);
     try { console.log("[MANUAL TESS] Raw OCR text:", text); } catch (e) {}
     return;
   }
@@ -2814,20 +2709,17 @@ function stitchChatMessages(lines) {
   if (!window.alt1) return;
 
   const rc = window.alt1?.events?.rightclick;
-
-  // New API (preferred): some builds expose an object with .push(), not necessarily an Array.
   if (rc && typeof rc.push === "function") {
-    rc.push(async (obj) => {
-      try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
-      try { await manualSubmitFlow(obj); } catch (err) { console.error("[MANUAL] rightclick handler error:", err); }
+    rc.push(async (e) => {
+      try { await manualSubmitFlow(e); } catch (err) { console.error(err); }
     });
     return;
   }
 
-  // Legacy fallback ONLY when the new API is unavailable in this Alt1 build.
+  // Legacy fallback
   window.alt1onrightclick = async (obj) => {
     try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
-    try { await manualSubmitFlow(obj); } catch (err) { console.error("[MANUAL] legacy handler error:", err); }
+    try { await manualSubmitFlow(obj); } catch (err) { console.error(err); }
   };
 }
 
