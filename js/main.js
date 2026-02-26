@@ -903,11 +903,11 @@ async function manualSubmitFlow() {
 
   // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
   const v = validateDropName(best.name);
-  const chosen = (v && v.valid) ? (v.canonical || best.name) : null;
-  if (!chosen) {
-    showEvent("Manual submit", `Matched "${best.name}" but it's not in allowlist.`, "warn", true, true);
+  if (!v || !v.valid) {
+    // Silently ignore items not in allowlist
     return;
   }
+  const chosen = v.canonical || best.name;
 
   const qty = 1;
   const accepted = (best.score >= ICON_MATCH.acceptScore);
@@ -1645,7 +1645,7 @@ function initHistoryPanel() {
 
     const patterns = [
       /^You\s+(?:have\s+)?(?:receive|received)\s*:?\s*([0-9]+)\s*x\s*(.+?)\s*$/i,
-      /^You\s+(?:have\s+)?(?:receive|received|find|found|stockpile|stockpiled)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
+      /^You\s+(?:have\s+)?(?:receive|received|find|found)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
       /^Loot\s*:\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
     ];
 
