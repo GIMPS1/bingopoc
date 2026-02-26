@@ -2503,59 +2503,95 @@ function stitchChatMessages(lines) {
 
 // --- Added: Universal broadcast drop detection ---
 function normalizeIgn(raw) {
+  // Strict, deterministic IGN normalization:
+  // - remove leading/trailing whitespace
+  // - strip any leading non-alphanumeric noise (icons, bullets, etc.)
+  // - enforce alphanumeric-only (your requirement)
+  // - case-insensitive comparisons are done by caller via .toLowerCase()
   raw = (raw || "").toString().trim();
-  // Anchor to the first capital letter (RSN display starts with A-Z; ironman icons/prefixes may precede it)
-  const i = raw.search(/[A-Z]/);
-  if (i >= 0) return raw.slice(i).trim();
-  return raw;
+
+  // Remove leading junk (icons/prefix punctuation) but keep the rest intact for now
+  raw = raw.replace(/^[^A-Za-z0-9]+/, "");
+
+  // Enforce alphanumeric-only IGN
+  return raw.replace(/[^A-Za-z0-9]/g, "");
 }
 
 function stripChatPrefix(s) {
-  return (s || "")
-    // remove timestamp/channel bracket prefixes like "[17:36:57]" "[CC]" etc
-    .replace(/^\s*(?:\[[^\]]+\]\s*)+/i, "")
-    // remove leading % and optional bracket tag before "News:"
-    .replace(/^\s*%\s*(?:\[[^\]]+\]\s*)?/i, "")
-    // remove "News:" label (case-insensitive)
-    .replace(/^\s*news\s*:\s*/i, "")
-    .trim();
+  // Goal: reduce lines like
+  // "[00:00:39] ☠ [Iron Rivals] News: ifwewerecgim has received ..."
+  // to:
+  // "ifwewerecgim has received ..."
+  let t = (s || "").toString();
+
+  // 1) Remove leading timestamp blocks like "[17:36:57]" (one or more)
+  t = t.replace(/^\s*(?:\[\d{1,2}:\d{2}:\d{2}\]\s*)+/, "");
+
+  // 2) Remove leading non-alphanumeric noise (icons, bullets, punctuation) before tags/labels
+  // Keep '[' so we can still strip bracket tags next.
+  t = t.replace(/^\s*[^A-Za-z0-9\[]+\s*/g, "");
+
+  // 3) Remove one or more leading bracket tags like "[CC]" "[Iron Rivals]" etc (repeat)
+  t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/, "");
+
+  // 4) Remove leading % and optional bracket tag(s) that sometimes precede News:
+  // e.g. "% [CC] News:" or "%[Iron Rivals] News:"
+  t = t.replace(/^\s*%\s*(?:\[[^\]]+\]\s*)*/i, "");
+
+  // 5) Strip "News:" label (case-insensitive), allowing extra whitespace
+  t = t.replace(/^\s*news\s*:\s*/i, "");
+
+  // 6) Finally, strip again any leading junk/icons that might remain after removing tags/labels
+  t = t.replace(/^\s*[^A-Za-z0-9]+/, "");
+
+  return t.trim();
 }
 
 // Patch into existing parse function if present
 if (typeof _tryParseReceive === "function") {
   const __originalTryParseReceive = _tryParseReceive;
-  _tryParseReceive = function(text) {
-    let result = __originalTryParseReceive(text);
+
+  _tryParseReceive = function (text) {
+    // First try the original parser
+    const result = __originalTryParseReceive(text);
     if (result) return result;
 
+    // Then try broadcast parsing
     let t = stripTimestampPrefix(text);
     t = stripChatPrefix(t);
 
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
     if (!lockedIgnRaw) return null;
-    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
 
-    // Accept relayed/broadcast formats where the sender name may include icon prefixes (e.g. ironman),
-    // and anchor the "real" IGN to the first capital letter before comparing to the locked IGN.
+    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
+    if (!lockedIgn) return null; // if locked ign normalizes to empty, don't match anything
+
+    // Broadcast format:
+    // "IGN has received some Item drop!"
+    // "IGN has received an Item."
+    // "IGN has received Item (x 3) drop!"
+    //
+    // Improvements vs old version:
+    // - IGN capture is strictly alphanumeric (no icons, no spaces)
+    // - "drop" is OPTIONAL (many broadcasts omit it)
+    // - quantity parsing supports "(x 3)" and "x 3" variants
     const reBroadcast = new RegExp(
-      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?x\\s*(\\d+)\\)?)?\\s*drop\\b.*$",
+      "^([A-Za-z0-9]+)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?$",
       "i"
     );
 
     const m = t.match(reBroadcast);
-    if (m) {
-      const ignRaw = (m[1] || "").trim();
-      const ign = normalizeIgn(ignRaw).toLowerCase();
-      if (ign !== lockedIgn) return null;
+    if (!m) return null;
 
-      const item = (m[2] || "").trim();
-      const amt = (m[3] || "1").trim();
-      if (!item) return null;
+    const ign = normalizeIgn(m[1]).toLowerCase();
+    if (!ign || ign !== lockedIgn) return null;
 
-      return { drop_name: item, amount: amt };
-    }
+    const item = (m[2] || "").trim();
+    if (!item) return null;
 
-    return null;
+    const amt = (m[3] || "1").trim();
+
+    return { drop_name: item, amount: amt };
   };
 }
 // --- End broadcast patch ---
