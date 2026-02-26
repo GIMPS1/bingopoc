@@ -960,16 +960,15 @@ async function manualSubmitFlow() {
     el.style.display = on ? "" : "none";
   }
 
+  
 
-
-// Hide the whole setup panel wrapper when setup is complete (IGN locked + Setup locked),
-// and show it again if the user unlocks either one. In settings-only popup mode we keep it visible.
+// Hide the entire setup panel when setup is complete (IGN locked + Bingo/Team locked),
+// and show it again if the user unlocks either. In settings-only popup mode, keep it visible.
 function updateSetupPanelWrapVisibility() {
   const wrap = ui.setupPanelWrap || document.getElementById("setupPanelWrap");
   if (!wrap) return;
 
   if (__settingsOnly) {
-    // In settings popup, always show setup controls so users can reconfigure.
     wrap.style.display = "";
     return;
   }
@@ -977,10 +976,9 @@ function updateSetupPanelWrapVisibility() {
   const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
 
-  // Hide completely only when both are locked.
   wrap.style.display = (sl && il) ? "none" : "";
 }
-  // ---------- UI render (no storage writes) + cross-window sync ----------
+// ---------- UI render (no storage writes) + cross-window sync ----------
   function renderSetupLockedUI(locked) {
     setVisible(ui.setupBlock, !locked);
     setVisible(ui.setupSummary, locked);
@@ -1014,16 +1012,15 @@ function updateSetupPanelWrapVisibility() {
     renderSetupLockedUI(sl);
     renderIgnLockedUI(il);
 
-    
-
-    updateSetupPanelWrapVisibility();
-// keep premium select + lock button in sync
+    // keep premium select + lock button in sync
     try { applySelectionToUI(); } catch (e) {}
     try { updateLockButtonEnabled(); } catch (e) {}
 
     updateConfigPill();
     refreshSummary();
     refreshSetupState();
+    updateSetupPanelWrapVisibility();
+
   }
 
   function syncRuntimeFromStorage() {
@@ -1075,13 +1072,11 @@ function updateSetupPanelWrapVisibility() {
 
   function setIgnLocked(locked) {
     renderIgnLockedUI(locked);
-    updateSetupPanelWrapVisibility();
   }
 
   function setSetupLocked(locked) {
     localStorage.setItem(LS.setupLocked, locked ? "1" : "0");
     renderSetupLockedUI(locked);
-    updateSetupPanelWrapVisibility();
   }
 
   function refreshSummary() {
