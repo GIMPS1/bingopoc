@@ -38,6 +38,7 @@
     setupBlock: $("setupBlock"),
     setupHint: $("setupHint"),
     setupSummary: $("setupSummary"),
+    setupPanelWrap: $("setupPanelWrap"),
     summaryMeta: $("summaryMeta"),
     btnOpenSettings2: $("btnOpenSettings2"),
 
@@ -959,6 +960,26 @@ async function manualSubmitFlow() {
     el.style.display = on ? "" : "none";
   }
 
+
+
+// Hide the whole setup panel wrapper when setup is complete (IGN locked + Setup locked),
+// and show it again if the user unlocks either one. In settings-only popup mode we keep it visible.
+function updateSetupPanelWrapVisibility() {
+  const wrap = ui.setupPanelWrap || document.getElementById("setupPanelWrap");
+  if (!wrap) return;
+
+  if (__settingsOnly) {
+    // In settings popup, always show setup controls so users can reconfigure.
+    wrap.style.display = "";
+    return;
+  }
+
+  const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
+  const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
+
+  // Hide completely only when both are locked.
+  wrap.style.display = (sl && il) ? "none" : "";
+}
   // ---------- UI render (no storage writes) + cross-window sync ----------
   function renderSetupLockedUI(locked) {
     setVisible(ui.setupBlock, !locked);
