@@ -993,7 +993,10 @@ async function manualSubmitFlow() {
     renderSetupLockedUI(sl);
     renderIgnLockedUI(il);
 
-    // keep premium select + lock button in sync
+    
+
+    updateSetupPanelWrapVisibility();
+// keep premium select + lock button in sync
     try { applySelectionToUI(); } catch (e) {}
     try { updateLockButtonEnabled(); } catch (e) {}
 
@@ -1051,11 +1054,13 @@ async function manualSubmitFlow() {
 
   function setIgnLocked(locked) {
     renderIgnLockedUI(locked);
+    updateSetupPanelWrapVisibility();
   }
 
   function setSetupLocked(locked) {
     localStorage.setItem(LS.setupLocked, locked ? "1" : "0");
     renderSetupLockedUI(locked);
+    updateSetupPanelWrapVisibility();
   }
 
   function refreshSummary() {
