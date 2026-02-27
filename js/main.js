@@ -510,39 +510,31 @@
   // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
   // This is very fast (few templates) and robust to minor brightness/contrast changes.
   const ICON_MATCH = {
-    // Matching works on a small downsampled representation of the icon.
-    // With flood-filled template backgrounds, edge-based features are much more stable than raw pixels.
-    sampleSize: 28,     // higher detail => higher match scores + better separation for similar icons
-    acceptScore: 0.72,  // final acceptance threshold (post-snap + blended score)
-    useEdges: true,     // enable edge-magnitude features
-    edgeWeight: 0.65,
+    // Core matcher settings
+    sampleSize: 28,        // higher => more detail (slower)
+    acceptScore: 0.72,     // base acceptance (before adaptive)
+    strongScore: 0.82,     // very strong match (rarely needed, but useful for debug)
 
-    // NEW: automatic whitening + per-icon adaptive thresholds
-    whiten: true,
-    adaptive: true,
+    useEdges: true,
+    edgeWeight: 0.65,      // edgeScore * edgeWeight + grayScore * (1-edgeWeight)
 
-    // NEW: ambiguity guards (best must clearly beat 2nd best)
-    minGap: 0.035,
-    minRatio: 1.06,
-
-    // NEW: snap refinement around selection
-    snapRadius: 6,
-    snapStep: 1,   // blended score: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
+    // Robustness improvements
+    whiten: true,          // high-pass/whitening to reduce background influence
+    adaptive: true,        // per-icon thresholds based on nearest-neighbour similarity
 
     // Ambiguity guards (prevents "confused" matches)
-    minGap: 0.040,      // bestScore - secondScore must be at least this
-    minRatio: 1.08,     // bestScore / secondScore must be at least this (when secondScore > 0)
+    minGap: 0.040,         // best - second must be at least this (base; adaptive may increase)
+    minRatio: 1.08,        // best / second must be at least this (base; adaptive may increase)
 
-    // Snap-to-icon refinement (search around your drawn box for best alignment)
-    snapRadius: 6,      // pixels
-    snapStep: 1,        // pixels
+    // Hover-capture manual submit (Alt+1): no overlay, auto-snaps to icon
+    hoverCaptureSize: 220, // square capture around mouse
+    hoverSearchRadius: 22, // pixels around capture center to search
+    hoverStep: 1,          // search step (1 = tightest snap)
 
-    // Legacy settings (still used by findBestIconMatch path)
-    iconSize: 48,
-    captureSize: 96,
-    searchRadius: 18,
-    step: 3,
-  };
+    // (Legacy) selection-snap settings (kept for compatibility; unused in hover mode)
+    snapRadius: 6,
+    snapStep: 1,
+  };;
 
   // Debug: set true to log icon matching details on every Alt+1
   const DEBUG_ICON_MATCH = true;
@@ -1093,15 +1085,153 @@ function matchIconFromSelection(selection, templates) {
   return best;
 }
 
+// -------- Hover + Alt+1 manual submit (no overlay) --------
+// Capture a square around the mouse and snap to the best-matching icon window automatically.
+function __captureAroundMouse(captureSize) {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  const pos = getMousePos();
+  if (!pos || typeof pos.x !== "number" || typeof pos.y !== "number") return null;
+
+  const capW = (captureSize | 0), capH = (captureSize | 0);
+  const rx = Math.max(0, (pos.x - (capW >> 1)) | 0);
+  const ry = Math.max(0, (pos.y - (capH >> 1)) | 0);
+
+  let capImg = null;
+  try { capImg = A1lib.capture(rx, ry, capW, capH); } catch (e) {}
+  if (!capImg) return null;
+
+  const capProps = __getImgProps(capImg);
+  if (!capProps) return null;
+
+  return { capImg, capProps, rx, ry, mx: pos.x, my: pos.y };
+}
+
+// Find best icon match near the center of a capture (mouse-centered).
+// Returns an object similar to matchIconFromSelection(): {name, score, second, accepted, thr, gap, ratio, ...}
+function __findBestIconMatchAroundMouseCapture(cap, templates) {
+  if (!cap || !cap.capProps || !templates || !templates.length) return null;
+
+  __buildTemplateFeatures(templates); // ensures _feat/_featEdge + ambiguity map
+
+  const capProps = cap.capProps;
+  const sSize = ICON_MATCH.sampleSize | 0;
+
+  const cx = (capProps.width >> 1) | 0;
+  const cy = (capProps.height >> 1) | 0;
+
+  const r = (ICON_MATCH.hoverSearchRadius == null ? 18 : ICON_MATCH.hoverSearchRadius) | 0;
+  const step = (ICON_MATCH.hoverStep == null ? 1 : ICON_MATCH.hoverStep) | 0;
+
+  // Try matching with both common icon sizes (templates are tagged with entry.size from barrows_icon_map.json)
+  const sizesToTry = [32, 48];
+
+  let best = null;
+  let second = null;
+
+  const debug = (DEBUG_ICON_MATCH === true) ? [] : null;
+
+  const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+
+  const useEdges = ICON_MATCH.useEdges === true;
+  const ew = (ICON_MATCH.edgeWeight === undefined ? 0.65 : ICON_MATCH.edgeWeight);
+
+  for (const iconSz of sizesToTry) {
+    const pool = templates.filter(t => (t && (t.size | 0) === (iconSz | 0)));
+    if (!pool.length) continue;
+
+    // Search window around the capture center (mouse).
+    for (let dy = -r; dy <= r; dy += step) {
+      for (let dx = -r; dx <= r; dx += step) {
+        const x = clamp((cx - (iconSz >> 1) + dx) | 0, 0, (capProps.width - iconSz) | 0);
+        const y = clamp((cy - (iconSz >> 1) + dy) | 0, 0, (capProps.height - iconSz) | 0);
+
+        const grayRaw = __downsampleToGray16(capProps, x, y, iconSz, iconSz, sSize);
+        const gray = (ICON_MATCH.whiten === false) ? grayRaw : __whitenGray(grayRaw, sSize);
+        const candFeat = __centerAndInvStd(gray);
+        const candEdgeFeat = useEdges ? __centerAndInvStd(__edgeMag(gray, sSize)) : null;
+
+        for (let i = 0; i < pool.length; i++) {
+          const t = pool[i];
+          if (!t || !t._feat) continue;
+
+          const grayScore = __znccScore(t._feat, candFeat);
+
+          let score = grayScore;
+          if (useEdges && t._featEdge && candEdgeFeat) {
+            const edgeScore = __znccScore(t._featEdge, candEdgeFeat);
+            score = edgeScore * ew + grayScore * (1 - ew);
+          }
+
+          if (!best || score > best.score) {
+            second = best;
+            best = { name: t.name, size: t.size, score, x, y, iconSz, dx, dy };
+          } else if (!second || score > second.score) {
+            second = { name: t.name, size: t.size, score, x, y, iconSz, dx, dy };
+          }
+
+          if (debug) debug.push({ name: t.name, size: t.size, score, dx, dy, iconSz });
+        }
+      }
+    }
+  }
+
+  if (!best) return null;
+  best.second = second;
+
+  // Apply per-icon adaptive thresholds (or fall back to ICON_MATCH base)
+  const thr = __adaptiveThresholds(best.name);
+  const secondScore = second ? second.score : -1;
+  const gap = best.score - secondScore;
+  const ratio = (secondScore > 0) ? (best.score / secondScore) : Infinity;
+
+  if (debug) {
+    try {
+      debug.sort((a, b) => b.score - a.score);
+      console.group("[ICON MATCH TOP 10]");
+      console.table(debug.slice(0, 10).map((x, idx) => ({
+        rank: idx + 1,
+        name: x.name,
+        size: x.size,
+        score: Number((x.score || 0).toFixed(4)),
+        iconSz: x.iconSz,
+        dx: x.dx,
+        dy: x.dy
+      })));
+      console.log("[ICON MATCH BEST]", {
+        best: { name: best.name, size: best.size, score: Number(best.score.toFixed(4)), iconSz: best.iconSz, dx: best.dx, dy: best.dy },
+        second: second ? { name: second.name, size: second.size, score: Number(second.score.toFixed(4)) } : null,
+        gap: Number(gap.toFixed(4)),
+        ratio: (ratio === Infinity ? "∞" : Number(ratio.toFixed(4))),
+        thresholds: { accept: Number(thr.accept.toFixed(4)), minGap: Number(thr.minGap.toFixed(4)), minRatio: Number(thr.minRatio.toFixed(4)) },
+        nn: (thr.nn == null ? null : Number(thr.nn.toFixed(4))),
+      });
+      console.groupEnd();
+    } catch (e) {}
+  }
+
+  const accepted =
+    (best.score >= thr.accept) &&
+    (gap >= thr.minGap) &&
+    (ratio >= thr.minRatio);
+
+  best.accepted = accepted;
+  best.thr = thr;
+  best.gap = gap;
+  best.ratio = ratio;
+
+  return best;
+}
+
+
 async function manualSubmitFlow() {
   if (!isSetupReady()) {
     showEvent("Manual submit", "Setup not locked/ready.", "warn", true, true);
     return;
   }
 
-  // Required: user must draw a box around the icon every time.
-  showEvent("Manual submit", "Draw a box around the item icon…", "ok", true, false);
-  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: draw a box around the icon"); } catch (e) {}
+  // Hover icon + Alt+1: capture around mouse and auto-snap to the icon (no overlay).
+  showEvent("Manual submit", "Hover the item icon… scanning", "ok", true, false);
+  try { if (alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("Manual submit: hover the item icon (Alt+1)"); } catch (e) {}
 
   const templates = await ensureIconTemplatesLoaded();
   if (!templates || !templates.length) {
@@ -1110,42 +1240,42 @@ async function manualSubmitFlow() {
     return;
   }
 
-  const selection = await __selectIconRegionAroundMouse(300);
+  const capSize = (ICON_MATCH.hoverCaptureSize == null ? 220 : ICON_MATCH.hoverCaptureSize) | 0;
+  const cap = __captureAroundMouse(capSize);
   try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
 
-  if (!selection) {
-    showEvent("Manual submit", "Selection cancelled or too small.", "warn", true, true);
+  if (!cap) {
+    showEvent("Manual submit", "Capture failed (mouse position / capture unavailable).", "warn", true, true);
     return;
   }
 
-  const best = matchIconFromSelection(selection, templates);
+  const best = __findBestIconMatchAroundMouseCapture(cap, templates);
 
   if (!best || !best.name) {
-    showEvent("Manual submit", "Manual submit – no icon match found.", "warn", true, true);
+    showEvent("Manual submit", "No icon match found.", "warn", true, true);
     return;
   }
 
-  // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
+  // Allowlist validation (avoid silent no-op)
   const v = validateDropName(best.name);
   if (!v || !v.valid) {
-    showEvent("Manual submit", `Matched ${best.name} but it's not in the allowlist (strict mode).`, "warn", true, true);
+    showEvent("Manual submit", `Matched: ${best.name} (not in allowlist)`, "warn", true, true);
     return;
   }
   const chosen = v.canonical || best.name;
 
-  const qty = 1;
-  const secondScore = best?.second?.score ?? -1;
-  const gap = (best.score || 0) - (secondScore || 0);
-  const ratio = (secondScore && secondScore > 0) ? ((best.score || 0) / secondScore) : Infinity;
-  const accepted = (best.score >= ICON_MATCH.acceptScore) && (gap >= (ICON_MATCH.minGap ?? 0)) && (ratio >= (ICON_MATCH.minRatio ?? 1));
+  const qty = 1; // manual qty OCR disabled for now
+  const accepted = (best.accepted === true);
 
-// Log proof every attempt
+  // Log proof every attempt
   try {
-    console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
+    console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score, accepted }, "thr=", best.thr, "gap=", best.gap, "ratio=", best.ratio);
   } catch (e) {}
 
   if (!accepted) {
-    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}, gap ${isFinite(gap)?gap.toFixed(3):"—"}) below threshold/ambiguity`, "warn", true, true);
+    const sc = (best.score || 0).toFixed(3);
+    const gap = (best.gap || 0).toFixed(3);
+    showEvent("Manual submit", `Ambiguous: ${chosen} (score ${sc}, gap ${gap})`, "warn", true, true);
     return;
   }
 
@@ -1154,7 +1284,7 @@ async function manualSubmitFlow() {
     await submitDrop({ drop_name: chosen, amount: String(qty) });
     showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
     playBeep("ok");
-} catch (e) {
+  } catch (e) {
     showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
   }
 }
