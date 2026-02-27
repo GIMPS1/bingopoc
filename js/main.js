@@ -505,7 +505,7 @@
   };
 
   // Debug: set true to log icon matching details on every Alt+1
-  const DEBUG_ICON_MATCH = true;
+  const DEBUG_ICON_MATCH = false;
 
 
   function __getImgProps(img) {
@@ -1666,7 +1666,7 @@ function initHistoryPanel() {
 
     const patterns = [
       /^You\s+(?:have\s+)?(?:receive|received)\s*:?\s*([0-9]+)\s*x\s*(.+?)\s*$/i,
-      /^You\s+(?:have\s+)?(?:receive|received|find|found)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
+      /^You\s+(?:have\s+)?(?:receive|received|find|found|stockpile|stockpiled)\s*:?\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
       /^Loot\s*:\s*(.+?)\s*(?:\(?x\s*(\d+)\)?)?\s*$/i,
     ];
 
@@ -2217,7 +2217,6 @@ function stitchChatMessages(lines) {
       if (strictOn) {
         const v = validateDropName(parsed.drop_name);
         if (!v.valid) {
-          addFeed(`Rejected (not in allowlist): ${parsed.drop_name}`, "warn");
           continue;
         }
         canonicalName = v.canonical;
