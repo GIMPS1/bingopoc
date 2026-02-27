@@ -1,16 +1,16 @@
-/* IRB v2026-02-27-barrows (BARROWS ICONS)
+/* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-27-barrows";
+  const BUILD_VERSION = "v2026-02-27-barrows-iconmatch2";
 
-  console.log("IRB v2026-02-27-barrows ✅");
+  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • $v2026-02-27-barrows`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -510,12 +510,18 @@
   // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
   // This is very fast (few templates) and robust to minor brightness/contrast changes.
   const ICON_MATCH = {
-    iconSize: 48,     // template icon size (pixels)
-    sampleSize: 16,   // downsample size for matching (pixels)
-    captureSize: 96,  // capture square around mouse (pixels)
-    searchRadius: 18, // +/- pixels around center to search
-    step: 3,          // search step (pixels)
-    acceptScore: 0.86 // minimum correlation to accept
+    // Matching works on a small downsampled representation of the icon.
+    // With flood-filled template backgrounds, edge-based features are much more stable than raw pixels.
+    sampleSize: 20,     // downsample size (pixels). 16 was a bit too low for 32px templates
+    acceptScore: 0.78,  // blended score threshold (lower because edge-features correlate slightly lower)
+    useEdges: true,     // enable edge-magnitude features
+    edgeWeight: 0.65,   // blend weight: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
+
+    // Legacy settings (still used by findBestIconMatch path)
+    iconSize: 48,
+    captureSize: 96,
+    searchRadius: 18,
+    step: 3,
   };
 
   // Debug: set true to log icon matching details on every Alt+1
@@ -566,6 +572,27 @@ function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
   }
   return out;
 }
+
+// Simple edge-magnitude map on a square gray image (size x size).
+// This reduces sensitivity to flood-filled/flat template backgrounds and UI background variation.
+function __edgeMag(gray, size) {
+  const out = new Uint8Array(gray.length);
+  const s = size | 0;
+  for (let y = 1; y < s - 1; y++) {
+    const row = y * s;
+    for (let x = 1; x < s - 1; x++) {
+      const i = row + x;
+      const gx = (gray[i + 1] - gray[i - 1]) | 0;
+      const gy = (gray[i + s] - gray[i - s]) | 0;
+      // L1 magnitude is fast and good enough here
+      let m = Math.abs(gx) + Math.abs(gy);
+      if (m > 255) m = 255;
+      out[i] = m;
+    }
+  }
+  return out;
+}
+
 
 
 function __debugGrayToDataURL(gray, size) {
@@ -627,8 +654,14 @@ function __debugGrayToDataURL(gray, size) {
       if (t && !t._feat) {
         const props = __getImgProps(t.img);
         if (!props) continue;
+
         const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
         t._feat = __centerAndInvStd(gray);
+
+        if (ICON_MATCH.useEdges) {
+          const edges = __edgeMag(gray, ICON_MATCH.sampleSize);
+          t._featEdge = __centerAndInvStd(edges);
+        }
       }
     }
     return templates;
@@ -852,9 +885,14 @@ function matchIconFromSelection(selection, templates) {
   const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
   const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
-  // Downsample the selected region to the sample size, then ZNCC vs templates.
+  // Downsample the selected region to sampleSize.
   const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
   const candFeat = __centerAndInvStd(gray);
+
+  // Optional: edge-based features (more robust with flood-filled template backgrounds)
+  const useEdges = ICON_MATCH.useEdges === true;
+  const candEdgeFeat = useEdges ? __centerAndInvStd(__edgeMag(gray, ICON_MATCH.sampleSize)) : null;
+  const ew = (ICON_MATCH.edgeWeight === undefined ? 0.65 : ICON_MATCH.edgeWeight);
 
   let best = null;
 
@@ -864,7 +902,15 @@ function matchIconFromSelection(selection, templates) {
   for (let i = 0; i < templates.length; i++) {
     const t = templates[i];
     if (!t || !t._feat) continue;
-    const score = __znccScore(t._feat, candFeat);
+
+    const grayScore = __znccScore(t._feat, candFeat);
+
+    let score = grayScore;
+    if (useEdges && t._featEdge && candEdgeFeat) {
+      const edgeScore = __znccScore(t._featEdge, candEdgeFeat);
+      score = edgeScore * ew + grayScore * (1 - ew);
+    }
+
     if (!best || score > best.score) best = { name: t.name, size: t.size, score };
     if (scored) scored.push({ name: t.name, score });
   }
@@ -877,7 +923,7 @@ function matchIconFromSelection(selection, templates) {
       const top = scored.slice(0, 10);
       const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
       console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
-      if (url) console.log("[ICON MATCH DEBUG] cropGray16 png:", url);
+      if (url) console.log("[ICON MATCH DEBUG] cropGray png:", url);
     } catch (e) {}
   }
 
