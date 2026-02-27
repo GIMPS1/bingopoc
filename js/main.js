@@ -512,10 +512,18 @@
   const ICON_MATCH = {
     // Matching works on a small downsampled representation of the icon.
     // With flood-filled template backgrounds, edge-based features are much more stable than raw pixels.
-    sampleSize: 20,     // downsample size (pixels). 16 was a bit too low for 32px templates
-    acceptScore: 0.2,  // blended score threshold (lower because edge-features correlate slightly lower)
+    sampleSize: 28,     // higher detail => higher match scores + better separation for similar icons
+    acceptScore: 0.72,  // final acceptance threshold (post-snap + blended score)
     useEdges: true,     // enable edge-magnitude features
-    edgeWeight: 0.65,   // blend weight: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
+    edgeWeight: 0.65,   // blended score: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
+
+    // Ambiguity guards (prevents "confused" matches)
+    minGap: 0.040,      // bestScore - secondScore must be at least this
+    minRatio: 1.08,     // bestScore / secondScore must be at least this (when secondScore > 0)
+
+    // Snap-to-icon refinement (search around your drawn box for best alignment)
+    snapRadius: 6,      // pixels
+    snapStep: 1,        // pixels
 
     // Legacy settings (still used by findBestIconMatch path)
     iconSize: 48,
@@ -526,6 +534,8 @@
 
   // Debug: set true to log icon matching details on every Alt+1
   const DEBUG_ICON_MATCH = false;
+  // Always print a Top-10 leaderboard for manual icon matching attempts.
+  const DEBUG_ICON_TOP10 = true;
 
 
   function __getImgProps(img) {
@@ -882,52 +892,106 @@ function matchIconFromSelection(selection, templates) {
   const side = Math.max(r.w, r.h);
   const cx = r.x + (r.w >> 1);
   const cy = r.y + (r.h >> 1);
-  const sx = Math.max(0, Math.min(cap.width - side, cx - (side >> 1)));
-  const sy = Math.max(0, Math.min(cap.height - side, cy - (side >> 1)));
 
-  // Downsample the selected region to sampleSize.
-  const gray = __downsampleToGray16(cap, sx, sy, side, side, ICON_MATCH.sampleSize);
-  const candFeat = __centerAndInvStd(gray);
-
-  // Optional: edge-based features (more robust with flood-filled template backgrounds)
+  const outSz = ICON_MATCH.sampleSize | 0;
   const useEdges = ICON_MATCH.useEdges === true;
-  const candEdgeFeat = useEdges ? __centerAndInvStd(__edgeMag(gray, ICON_MATCH.sampleSize)) : null;
   const ew = (ICON_MATCH.edgeWeight === undefined ? 0.65 : ICON_MATCH.edgeWeight);
 
-  let best = null;
+  const snapR = (ICON_MATCH.snapRadius === undefined ? 0 : (ICON_MATCH.snapRadius | 0));
+  const snapStep = Math.max(1, (ICON_MATCH.snapStep === undefined ? 1 : (ICON_MATCH.snapStep | 0)));
 
-  // Debug: collect top scores (small template count, so OK)
-  const scored = (DEBUG_ICON_MATCH ? [] : null);
+  // Search around the user’s box to "snap" to the best aligned icon crop.
+  // For each candidate crop, we score ALL templates and keep the best crop overall.
+  let bestOverall = null; // { name, size, score, sx, sy, side }
+  let scoresForBestCrop = null; // array of { name, size, score } for debug + top-2 checks
 
-  for (let i = 0; i < templates.length; i++) {
-    const t = templates[i];
-    if (!t || !t._feat) continue;
+  const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
+  const maxX = Math.max(0, (cap.width | 0) - (side | 0));
+  const maxY = Math.max(0, (cap.height | 0) - (side | 0));
 
-    const grayScore = __znccScore(t._feat, candFeat);
+  for (let dy = -snapR; dy <= snapR; dy += snapStep) {
+    for (let dx = -snapR; dx <= snapR; dx += snapStep) {
+      const sx = clamp((cx - (side >> 1) + dx) | 0, 0, maxX);
+      const sy = clamp((cy - (side >> 1) + dy) | 0, 0, maxY);
 
-    let score = grayScore;
-    if (useEdges && t._featEdge && candEdgeFeat) {
-      const edgeScore = __znccScore(t._featEdge, candEdgeFeat);
-      score = edgeScore * ew + grayScore * (1 - ew);
+      const gray = __downsampleToGray16(cap, sx, sy, side, side, outSz);
+      const candFeat = __centerAndInvStd(gray);
+
+      const candEdgeFeat = (useEdges ? __centerAndInvStd(__edgeMag(gray, outSz)) : null);
+
+      // Score against all templates for this crop
+      const scored = [];
+      let localBest = null;
+
+      for (let i = 0; i < templates.length; i++) {
+        const t = templates[i];
+        if (!t || !t._feat) continue;
+
+        const grayScore = __znccScore(t._feat, candFeat);
+
+        let score = grayScore;
+        if (useEdges && t._featEdge && candEdgeFeat) {
+          const edgeScore = __znccScore(t._featEdge, candEdgeFeat);
+          score = edgeScore * ew + grayScore * (1 - ew);
+        }
+
+        scored.push({ name: t.name, size: t.size, score });
+        if (!localBest || score > localBest.score) localBest = { name: t.name, size: t.size, score };
+      }
+
+      if (!localBest) continue;
+
+      if (!bestOverall || localBest.score > bestOverall.score) {
+        bestOverall = { ...localBest, sx, sy, side };
+        scoresForBestCrop = scored;
+      }
     }
-
-    if (!best || score > best.score) best = { name: t.name, size: t.size, score };
-    if (scored) scored.push({ name: t.name, score });
   }
 
-  if (!best) return null;
+  if (!bestOverall || !scoresForBestCrop || !scoresForBestCrop.length) return null;
 
-  if (DEBUG_ICON_MATCH) {
+  // Sort once for top-2 checks + debug leaderboard.
+  scoresForBestCrop.sort((a, b) => b.score - a.score);
+  const best = scoresForBestCrop[0];
+  const second = scoresForBestCrop[1] || null;
+
+  const secondScore = second ? second.score : -1;
+  const gap = best.score - secondScore;
+  const ratio = (second && second.score > 0) ? (best.score / second.score) : Infinity;
+
+  // Optional Top-10 leaderboard in console (requested)
+  if (typeof DEBUG_ICON_TOP10 !== "undefined" && DEBUG_ICON_TOP10) {
     try {
-      scored.sort((a, b) => b.score - a.score);
-      const top = scored.slice(0, 10);
-      const url = __debugGrayToDataURL(gray, ICON_MATCH.sampleSize);
-      console.log("[ICON MATCH DEBUG] rect=", { x: r.x, y: r.y, w: r.w, h: r.h }, "norm=", { sx, sy, side }, "top10=", top);
-      if (url) console.log("[ICON MATCH DEBUG] cropGray png:", url);
+      console.groupCollapsed("[ICON MATCH TOP 10]");
+      console.log("snap=", { sx: bestOverall.sx, sy: bestOverall.sy, side: bestOverall.side }, "best=", best, "second=", second, "gap=", gap.toFixed(4), "ratio=", (isFinite(ratio) ? ratio.toFixed(4) : "inf"));
+      console.table(scoresForBestCrop.slice(0, 10).map((x, idx) => ({
+        rank: idx + 1,
+        name: x.name,
+        size: x.size,
+        score: Number((x.score || 0).toFixed(6)),
+        delta_from_best: Number(((best.score - x.score) || 0).toFixed(6)),
+      })));
+      console.groupEnd();
     } catch (e) {}
   }
 
-  return best;
+  const minGap = (ICON_MATCH.minGap === undefined ? 0 : Number(ICON_MATCH.minGap));
+  const minRatio = (ICON_MATCH.minRatio === undefined ? 1 : Number(ICON_MATCH.minRatio));
+
+  // Tight acceptance: threshold + ambiguity guards.
+  const accepted =
+    (best.score >= ICON_MATCH.acceptScore) &&
+    (gap >= minGap) &&
+    (ratio >= minRatio);
+
+  // Return "best" (plus extra telemetry). Caller decides accepted/rejected.
+  return {
+    name: best.name,
+    size: best.size,
+    score: best.score,
+    second: second ? { name: second.name, size: second.size, score: second.score } : null,
+    snap: { sx: bestOverall.sx, sy: bestOverall.sy, side: bestOverall.side }
+  };
 }
 
 async function manualSubmitFlow() {
@@ -971,15 +1035,18 @@ async function manualSubmitFlow() {
   const chosen = v.canonical || best.name;
 
   const qty = 1;
-  const accepted = (best.score >= ICON_MATCH.acceptScore);
+  const secondScore = best?.second?.score ?? -1;
+  const gap = (best.score || 0) - (secondScore || 0);
+  const ratio = (secondScore && secondScore > 0) ? ((best.score || 0) / secondScore) : Infinity;
+  const accepted = (best.score >= ICON_MATCH.acceptScore) && (gap >= (ICON_MATCH.minGap ?? 0)) && (ratio >= (ICON_MATCH.minRatio ?? 1));
 
-  // Log proof every attempt
+// Log proof every attempt
   try {
     console.log("[ICON MATCH]", "best=", { name: best.name, size: best.size, score: best.score }, "accept>=", ICON_MATCH.acceptScore, "accepted=", accepted);
   } catch (e) {}
 
   if (!accepted) {
-    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}), below threshold`, "warn", true, true);
+    showEvent("Manual submit", `Matched closest: ${chosen} (score ${(best.score || 0).toFixed(3)}, gap ${isFinite(gap)?gap.toFixed(3):"—"}) below threshold/ambiguity`, "warn", true, true);
     return;
   }
 
@@ -987,8 +1054,8 @@ async function manualSubmitFlow() {
   try {
     await submitDrop({ drop_name: chosen, amount: String(qty) });
     showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
-    playOk();
-  } catch (e) {
+    playBeep("ok");
+} catch (e) {
     showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
   }
 }
