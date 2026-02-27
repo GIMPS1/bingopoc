@@ -1,0 +1,197 @@
+[
+  {
+    "name": "Ahrim's book of magic",
+    "size": 32,
+    "file": "Ahrim_s_book_of_magic.png"
+  },
+  {
+    "name": "Ahrim's hood",
+    "size": 32,
+    "file": "Ahrim_s_hood.png"
+  },
+  {
+    "name": "Ahrim's robe skirt",
+    "size": 32,
+    "file": "Ahrim_s_robe_skirt.png"
+  },
+  {
+    "name": "Ahrim's robe top",
+    "size": 32,
+    "file": "Ahrim_s_robe_top.png"
+  },
+  {
+    "name": "Ahrim's staff",
+    "size": 32,
+    "file": "Ahrim_s_staff.png"
+  },
+  {
+    "name": "Ahrim's wand",
+    "size": 32,
+    "file": "Ahrim_s_wand.png"
+  },
+  {
+    "name": "Akrisae's hood",
+    "size": 32,
+    "file": "Akrisae_s_hood.png"
+  },
+  {
+    "name": "Akrisae's robe skirt",
+    "size": 32,
+    "file": "Akrisae_s_robe_skirt.png"
+  },
+  {
+    "name": "Akrisae's robe top",
+    "size": 32,
+    "file": "Akrisae_s_robe_top.png"
+  },
+  {
+    "name": "Akrisae's war mace",
+    "size": 32,
+    "file": "Akrisae_s_war_mace.png"
+  },
+  {
+    "name": "Amulet of the forsaken",
+    "size": 32,
+    "file": "Amulet_of_the_forsaken.png"
+  },
+  {
+    "name": "Corruption sigil",
+    "size": 32,
+    "file": "Corruption_sigil.png"
+  },
+  {
+    "name": "Dharok's greataxe",
+    "size": 32,
+    "file": "Dharok_s_greataxe.png"
+  },
+  {
+    "name": "Dharok's helm",
+    "size": 32,
+    "file": "Dharok_s_helm.png"
+  },
+  {
+    "name": "Dharok's platebody",
+    "size": 32,
+    "file": "Dharok_s_platebody.png"
+  },
+  {
+    "name": "Dharok's platelegs",
+    "size": 32,
+    "file": "Dharok_s_platelegs.png"
+  },
+  {
+    "name": "Guthan's chainskirt",
+    "size": 32,
+    "file": "Guthan_s_chainskirt.png"
+  },
+  {
+    "name": "Guthan's helm",
+    "size": 32,
+    "file": "Guthan_s_helm.png"
+  },
+  {
+    "name": "Guthan's platebody",
+    "size": 48,
+    "file": "Guthan_s_platebody.png"
+  },
+  {
+    "name": "Guthan's warspear",
+    "size": 32,
+    "file": "Guthan_s_warspear.png"
+  },
+  {
+    "name": "Karil's coif",
+    "size": 32,
+    "file": "Karil_s_coif.png"
+  },
+  {
+    "name": "Karil's crossbow",
+    "size": 32,
+    "file": "Karil_s_crossbow.png"
+  },
+  {
+    "name": "Karil's off-hand pistol crossbow",
+    "size": 32,
+    "file": "Karil_s_off_hand_pistol_crossbow.png"
+  },
+  {
+    "name": "Karil's pistol crossbow",
+    "size": 32,
+    "file": "Karil_s_pistol_crossbow.png"
+  },
+  {
+    "name": "Karil's skirt",
+    "size": 32,
+    "file": "Karil_s_skirt.png"
+  },
+  {
+    "name": "Karil's top",
+    "size": 32,
+    "file": "Karil_s_top.png"
+  },
+  {
+    "name": "Linza's cuirass",
+    "size": 32,
+    "file": "Linza_s_cuirass.png"
+  },
+  {
+    "name": "Linza's greaves",
+    "size": 32,
+    "file": "Linza_s_greaves.png"
+  },
+  {
+    "name": "Linza's hammer",
+    "size": 32,
+    "file": "Linza_s_hammer.png"
+  },
+  {
+    "name": "Linza's helm",
+    "size": 32,
+    "file": "Linza_s_helm.png"
+  },
+  {
+    "name": "Linza's shield",
+    "size": 32,
+    "file": "Linza_s_shield.png"
+  },
+  {
+    "name": "Torag's hammer",
+    "size": 32,
+    "file": "Torag_s_hammer.png"
+  },
+  {
+    "name": "Torag's helm",
+    "size": 32,
+    "file": "Torag_s_helm.png"
+  },
+  {
+    "name": "Torag's platebody",
+    "size": 32,
+    "file": "Torag_s_platebody.png"
+  },
+  {
+    "name": "Torag's platelegs",
+    "size": 32,
+    "file": "Torag_s_platelegs.png"
+  },
+  {
+    "name": "Verac's brassard",
+    "size": 32,
+    "file": "Verac_s_brassard.png"
+  },
+  {
+    "name": "Verac's flail",
+    "size": 32,
+    "file": "Verac_s_flail.png"
+  },
+  {
+    "name": "Verac's helm",
+    "size": 32,
+    "file": "Verac_s_helm.png"
+  },
+  {
+    "name": "Verac's plateskirt",
+    "size": 32,
+    "file": "Verac_s_plateskirt.png"
+  }
+]

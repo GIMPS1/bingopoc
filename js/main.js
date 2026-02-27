@@ -1,13 +1,17 @@
-/* IRB v2026-02-20-premium-select (FIXED)
+/* IRB v2026-02-27-barrows (BARROWS ICONS)
    Fixes:
-   - Removes calls to missing functions: getBingoById/getSelectedBingoId/getTeamByNo/getSelectedTeamNo/saveSetupFromSelection/setupPremiumSelectUI
-   - Null-guards backdrop listener
-   - Avoids resolving canonical name twice (resolve ONLY in poll; submitDrop trusts input)
-   - Fixes duplicate team_number mapping
+   - Manual-submit icon templates now load from /assets/barrows
+   - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  console.log("IRB v2026-02-20-premium-select FIXED ✅");
+  const BUILD_VERSION = "v2026-02-27-barrows";
+
+  console.log("IRB v2026-02-27-barrows ✅");
+  try {
+    const sub = document.querySelector(".subtitle");
+    if (sub) sub.textContent = `Drop auto-submit • $v2026-02-27-barrows`;
+  } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
   const ui = {
@@ -349,9 +353,14 @@
   }
 
   
-  // ---------- Wiki Icon template matching for manual submit ----------
-  const WIKI_ICON_MAP_URL = "./assets/wiki_icon_map.json";
-  const ICON_TEMPLATE_SIZES = [48]; // use ONLY the large icons for speed/accuracy // sizes in the bundled icon set
+  // ---------- Icon template matching for manual submit ----------
+  function assetUrl(relPath) {
+    try { return new URL(relPath, document.baseURI).toString(); }
+    catch (e) { return relPath; }
+  }
+
+  const WIKI_ICON_MAP_URL = assetUrl("assets/barrows_icon_map.json");
+  const ICON_TEMPLATE_SIZES = [32, 48]; // barrows set is mostly 32px; keep 48px support
 
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
@@ -367,9 +376,12 @@
   }
 
   function __localIconUrl(itemName, size) {
-    const base = "./assets/wikiicons";
-    const file = `${__sanitizeIconFileName(itemName)}_${size}.png`;
-    return `${base}/${file}`;
+    const base = assetUrl("assets/barrows");
+    const base2 = String(base).replace(/\/$/, "");
+    // Prefer size-suffixed filenames if they exist in a future iconset, otherwise use plain.
+    const plain = `${__sanitizeIconFileName(itemName)}.png`;
+    const sized = size ? `${__sanitizeIconFileName(itemName)}_${size}.png` : null;
+    return sized ? `${base2}/${sized}` : `${base2}/${plain}`;
   }
 
   async function ensureIconTemplatesLoaded() {
@@ -383,14 +395,14 @@
         return __iconTemplates;
       }
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/wikiicons/
+      // Load bundled icon map (name/size/file). Icons live in ./assets/barrows/
       let iconMap = [];
       try {
         const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
         iconMap = await res.json();
-        if (!Array.isArray(iconMap)) throw new Error("wiki_icon_map.json must be an array");
+        if (!Array.isArray(iconMap)) throw new Error("barrows_icon_map.json must be an array");
       } catch (e) {
-        console.warn("[icon] failed to load assets/wiki_icon_map.json", e);
+        console.warn("[icon] failed to load assets/barrows_icon_map.json", e);
         __iconTemplates = [];
         return __iconTemplates;
       }
@@ -404,17 +416,19 @@
       // Load templates
       const templates = [];
       const fails = [];
-      const base = "./assets/wikiicons";
-      const wantedSizes = new Set(ICON_TEMPLATE_SIZES);
+      const base = assetUrl("assets/barrows");
+      const wantedSizes = Array.isArray(ICON_TEMPLATE_SIZES) ? new Set(ICON_TEMPLATE_SIZES) : null;
 
       for (const entry of iconMap) {
         const name = entry?.name;
         const size = Number(entry?.size);
         const file = entry?.file;
 
-        if (!name || !file || !wantedSizes.has(size)) continue;
+        if (!name || !file) continue;
+        if (wantedSizes && !wantedSizes.has(size)) continue;
 
-        const url = `${base}/${file}`;
+        const base2 = String(base).replace(/\/$/, "");
+        const url = `${base2}/${file}`;
         try {
           const img = await A1lib.ImageDetect.imageDataFromUrl(url);
           if (img) templates.push({ name, size, file, url, img });
