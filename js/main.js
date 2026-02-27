@@ -545,7 +545,7 @@
   };
 
   // Debug: set true to log icon matching details on every Alt+1
-  const DEBUG_ICON_MATCH = false;
+  const DEBUG_ICON_MATCH = true;
   // Always print a Top-10 leaderboard for manual icon matching attempts.
   const DEBUG_ICON_TOP10 = true;
 
@@ -688,10 +688,13 @@ function __adaptiveThresholds(bestName) {
   const nn = (t && typeof t._nnScore === "number") ? t._nnScore : null;
   if (nn == null || !isFinite(nn)) return { accept: baseAcc, minGap: baseGap, minRatio: baseRatio, nn: null, boost: 0 };
 
-  const x = Math.max(0, nn - 0.90);
-  const accBoost = Math.min(0.12, x * 1.5);
-  const gapBoost = Math.min(0.030, x * 0.35);
-  const ratioBoost = Math.min(0.080, x * 1.00);
+  // Ambiguity model:
+  // nn is the *most similar other template* (ZNCC 0..1). High nn => ambiguous icon.
+  // IMPORTANT: to avoid misses, we mostly tighten separation (gap/ratio), not the raw acceptScore.
+  const x = Math.max(0, nn - 0.96);            // only start tightening when templates are extremely similar
+  const accBoost = Math.min(0.03, x * 0.6);    // tiny accept boost at most (+0.03)
+  const gapBoost = Math.min(0.05, x * 1.6);    // stronger gap requirement for ambiguous icons
+  const ratioBoost = Math.min(0.10, x * 3.0);  // stronger ratio requirement for ambiguous icons
 
   return {
     accept: baseAcc + accBoost,
@@ -701,7 +704,6 @@ function __adaptiveThresholds(bestName) {
     boost: accBoost
   };
 }
-
 
 
 function __debugGrayToDataURL(gray, size) {
@@ -1082,7 +1084,12 @@ function matchIconFromSelection(selection, templates) {
     (gap >= thr.minGap) &&
     (ratio >= thr.minRatio);
 
-  if (!accepted) return null;
+  // Always return the best match for visibility/debugging; caller decides whether to submit.
+  best.accepted = accepted;
+  best.thr = thr;
+  best.gap = gap;
+  best.ratio = ratio;
+
   return best;
 }
 
@@ -1121,7 +1128,7 @@ async function manualSubmitFlow() {
   // Validate and submit. Manual submit qty OCR is disabled for now (always 1).
   const v = validateDropName(best.name);
   if (!v || !v.valid) {
-    // Silently ignore items not in allowlist
+    showEvent("Manual submit", `Matched ${best.name} but it's not in the allowlist (strict mode).`, "warn", true, true);
     return;
   }
   const chosen = v.canonical || best.name;
