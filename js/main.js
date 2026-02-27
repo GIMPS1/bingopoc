@@ -513,7 +513,7 @@
     // Matching works on a small downsampled representation of the icon.
     // With flood-filled template backgrounds, edge-based features are much more stable than raw pixels.
     sampleSize: 20,     // downsample size (pixels). 16 was a bit too low for 32px templates
-    acceptScore: 0.78,  // blended score threshold (lower because edge-features correlate slightly lower)
+    acceptScore: 0.2,  // blended score threshold (lower because edge-features correlate slightly lower)
     useEdges: true,     // enable edge-magnitude features
     edgeWeight: 0.65,   // blend weight: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
 
