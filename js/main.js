@@ -515,7 +515,19 @@
     sampleSize: 28,     // higher detail => higher match scores + better separation for similar icons
     acceptScore: 0.72,  // final acceptance threshold (post-snap + blended score)
     useEdges: true,     // enable edge-magnitude features
-    edgeWeight: 0.65,   // blended score: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
+    edgeWeight: 0.65,
+
+    // NEW: automatic whitening + per-icon adaptive thresholds
+    whiten: true,
+    adaptive: true,
+
+    // NEW: ambiguity guards (best must clearly beat 2nd best)
+    minGap: 0.035,
+    minRatio: 1.06,
+
+    // NEW: snap refinement around selection
+    snapRadius: 6,
+    snapStep: 1,   // blended score: edgeScore * edgeWeight + grayScore * (1-edgeWeight)
 
     // Ambiguity guards (prevents "confused" matches)
     minGap: 0.040,      // bestScore - secondScore must be at least this
@@ -603,6 +615,93 @@ function __edgeMag(gray, size) {
   return out;
 }
 
+// High-pass "whitening" to reduce background/flood-fill influence.
+// Operates on a square grayscale image (size x size). Returns Uint8Array.
+function __whitenGray(gray, size) {
+  const s = size | 0;
+  const out = new Uint8Array(gray.length);
+  // 3x3 box blur then subtract (high-pass). Fast + robust.
+  for (let y = 0; y < s; y++) {
+    const y0 = (y === 0) ? 0 : (y - 1);
+    const y1 = y;
+    const y2 = (y === s - 1) ? (s - 1) : (y + 1);
+    for (let x = 0; x < s; x++) {
+      const x0 = (x === 0) ? 0 : (x - 1);
+      const x1 = x;
+      const x2 = (x === s - 1) ? (s - 1) : (x + 1);
+
+      const i00 = y0 * s + x0, i01 = y0 * s + x1, i02 = y0 * s + x2;
+      const i10 = y1 * s + x0, i11 = y1 * s + x1, i12 = y1 * s + x2;
+      const i20 = y2 * s + x0, i21 = y2 * s + x1, i22 = y2 * s + x2;
+
+      const blur = (gray[i00] + gray[i01] + gray[i02] +
+                    gray[i10] + gray[i11] + gray[i12] +
+                    gray[i20] + gray[i21] + gray[i22]) / 9;
+
+      // High-pass: center around 128 (neutral). Clamp.
+      let v = (gray[y1 * s + x1] - blur + 128);
+      if (v < 0) v = 0;
+      if (v > 255) v = 255;
+      out[y1 * s + x1] = v | 0;
+    }
+  }
+  return out;
+}
+
+// Compute per-template ambiguity (nearest-neighbour similarity) once.
+// Higher nnScore => more ambiguous => require stricter thresholds.
+let __templateByName = null;
+function __computeTemplateAmbiguity(templates) {
+  if (!templates || templates.length < 2) return templates;
+  if (__templateByName) return templates; // already computed
+  __templateByName = new Map();
+  for (const t of templates) {
+    if (t && t.name) __templateByName.set(String(t.name), t);
+  }
+
+  // Nearest-neighbour similarity using grayscale ZNCC over whitened representation.
+  for (let i = 0; i < templates.length; i++) {
+    const a = templates[i];
+    if (!a || !a._feat) continue;
+    let best = -1;
+    for (let j = 0; j < templates.length; j++) {
+      if (i === j) continue;
+      const b = templates[j];
+      if (!b || !b._feat) continue;
+      const sim = __znccScore(a._feat, b._feat);
+      if (sim > best) best = sim;
+    }
+    a._nnScore = best; // ~0.0-1.0
+  }
+  return templates;
+}
+
+function __adaptiveThresholds(bestName) {
+  const baseAcc = (ICON_MATCH.acceptScore == null ? 0.78 : ICON_MATCH.acceptScore);
+  const baseGap = (ICON_MATCH.minGap == null ? 0.0 : ICON_MATCH.minGap);
+  const baseRatio = (ICON_MATCH.minRatio == null ? 1.0 : ICON_MATCH.minRatio);
+
+  if (!ICON_MATCH.adaptive || !__templateByName || !bestName) {
+    return { accept: baseAcc, minGap: baseGap, minRatio: baseRatio, nn: null, boost: 0 };
+  }
+  const t = __templateByName.get(String(bestName));
+  const nn = (t && typeof t._nnScore === "number") ? t._nnScore : null;
+  if (nn == null || !isFinite(nn)) return { accept: baseAcc, minGap: baseGap, minRatio: baseRatio, nn: null, boost: 0 };
+
+  const x = Math.max(0, nn - 0.90);
+  const accBoost = Math.min(0.12, x * 1.5);
+  const gapBoost = Math.min(0.030, x * 0.35);
+  const ratioBoost = Math.min(0.080, x * 1.00);
+
+  return {
+    accept: baseAcc + accBoost,
+    minGap: baseGap + gapBoost,
+    minRatio: baseRatio + ratioBoost,
+    nn,
+    boost: accBoost
+  };
+}
+
 
 
 function __debugGrayToDataURL(gray, size) {
@@ -665,7 +764,8 @@ function __debugGrayToDataURL(gray, size) {
         const props = __getImgProps(t.img);
         if (!props) continue;
 
-        const gray = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        const grayRaw = __downsampleToGray16(props, 0, 0, props.width, props.height, ICON_MATCH.sampleSize);
+        const gray = (ICON_MATCH.whiten === false) ? grayRaw : __whitenGray(grayRaw, ICON_MATCH.sampleSize);
         t._feat = __centerAndInvStd(gray);
 
         if (ICON_MATCH.useEdges) {
@@ -674,6 +774,7 @@ function __debugGrayToDataURL(gray, size) {
         }
       }
     }
+    __computeTemplateAmbiguity(templates);
     return templates;
   }
 
@@ -879,49 +980,47 @@ window.addEventListener("keydown", onKey, true);
   return await prom;
 }
 
+
 function matchIconFromSelection(selection, templates) {
   if (!selection || !selection.capProps || !selection.rect) return null;
   if (!templates || !templates.length) return null;
 
-  __buildTemplateFeatures(templates);
+  __buildTemplateFeatures(templates); // also computes ambiguity map
 
   const cap = selection.capProps;
   const r = selection.rect;
 
-  // Normalize crop to a square (best for icon templates)
-  const side = Math.max(r.w, r.h);
+  const side0 = Math.max(r.w, r.h);
   const cx = r.x + (r.w >> 1);
   const cy = r.y + (r.h >> 1);
 
-  const outSz = ICON_MATCH.sampleSize | 0;
-  const useEdges = ICON_MATCH.useEdges === true;
-  const ew = (ICON_MATCH.edgeWeight === undefined ? 0.65 : ICON_MATCH.edgeWeight);
+  const sSize = ICON_MATCH.sampleSize | 0;
 
-  const snapR = (ICON_MATCH.snapRadius === undefined ? 0 : (ICON_MATCH.snapRadius | 0));
-  const snapStep = Math.max(1, (ICON_MATCH.snapStep === undefined ? 1 : (ICON_MATCH.snapStep | 0)));
+  const snapR = (ICON_MATCH.snapRadius == null ? 0 : ICON_MATCH.snapRadius) | 0;
+  const snapStep = (ICON_MATCH.snapStep == null ? 1 : ICON_MATCH.snapStep) | 0;
 
-  // Search around the user’s box to "snap" to the best aligned icon crop.
-  // For each candidate crop, we score ALL templates and keep the best crop overall.
-  let bestOverall = null; // { name, size, score, sx, sy, side }
-  let scoresForBestCrop = null; // array of { name, size, score } for debug + top-2 checks
+  let best = null;
+  let second = null;
+
+  const debug = (DEBUG_ICON_MATCH === true) ? [] : null;
 
   const clamp = (v, lo, hi) => (v < lo ? lo : (v > hi ? hi : v));
-  const maxX = Math.max(0, (cap.width | 0) - (side | 0));
-  const maxY = Math.max(0, (cap.height | 0) - (side | 0));
 
   for (let dy = -snapR; dy <= snapR; dy += snapStep) {
     for (let dx = -snapR; dx <= snapR; dx += snapStep) {
-      const sx = clamp((cx - (side >> 1) + dx) | 0, 0, maxX);
-      const sy = clamp((cy - (side >> 1) + dy) | 0, 0, maxY);
+      const side = side0;
 
-      const gray = __downsampleToGray16(cap, sx, sy, side, side, outSz);
+      const sx = clamp((cx - (side >> 1) + dx) | 0, 0, (cap.width - side) | 0);
+      const sy = clamp((cy - (side >> 1) + dy) | 0, 0, (cap.height - side) | 0);
+
+      const grayRaw = __downsampleToGray16(cap, sx, sy, side, side, sSize);
+      const gray = (ICON_MATCH.whiten === false) ? grayRaw : __whitenGray(grayRaw, sSize);
       const candFeat = __centerAndInvStd(gray);
 
-      const candEdgeFeat = (useEdges ? __centerAndInvStd(__edgeMag(gray, outSz)) : null);
+      const useEdges = ICON_MATCH.useEdges === true;
+      const ew = (ICON_MATCH.edgeWeight === undefined ? 0.65 : ICON_MATCH.edgeWeight);
 
-      // Score against all templates for this crop
-      const scored = [];
-      let localBest = null;
+      const candEdgeFeat = useEdges ? __centerAndInvStd(__edgeMag(gray, sSize)) : null;
 
       for (let i = 0; i < templates.length; i++) {
         const t = templates[i];
@@ -935,63 +1034,56 @@ function matchIconFromSelection(selection, templates) {
           score = edgeScore * ew + grayScore * (1 - ew);
         }
 
-        scored.push({ name: t.name, size: t.size, score });
-        if (!localBest || score > localBest.score) localBest = { name: t.name, size: t.size, score };
-      }
+        if (!best || score > best.score) {
+          second = best;
+          best = { name: t.name, size: t.size, score, sx, sy, side, dx, dy };
+        } else if (!second || score > second.score) {
+          second = { name: t.name, size: t.size, score, sx, sy, side, dx, dy };
+        }
 
-      if (!localBest) continue;
-
-      if (!bestOverall || localBest.score > bestOverall.score) {
-        bestOverall = { ...localBest, sx, sy, side };
-        scoresForBestCrop = scored;
+        if (debug) debug.push({ name: t.name, score, dx, dy });
       }
     }
   }
 
-  if (!bestOverall || !scoresForBestCrop || !scoresForBestCrop.length) return null;
+  if (!best) return null;
+  best.second = second;
 
-  // Sort once for top-2 checks + debug leaderboard.
-  scoresForBestCrop.sort((a, b) => b.score - a.score);
-  const best = scoresForBestCrop[0];
-  const second = scoresForBestCrop[1] || null;
-
+  const thr = __adaptiveThresholds(best.name);
   const secondScore = second ? second.score : -1;
   const gap = best.score - secondScore;
-  const ratio = (second && second.score > 0) ? (best.score / second.score) : Infinity;
+  const ratio = (secondScore > 0) ? (best.score / secondScore) : Infinity;
 
-  // Optional Top-10 leaderboard in console (requested)
-  if (typeof DEBUG_ICON_TOP10 !== "undefined" && DEBUG_ICON_TOP10) {
+  if (debug) {
     try {
-      console.groupCollapsed("[ICON MATCH TOP 10]");
-      console.log("snap=", { sx: bestOverall.sx, sy: bestOverall.sy, side: bestOverall.side }, "best=", best, "second=", second, "gap=", gap.toFixed(4), "ratio=", (isFinite(ratio) ? ratio.toFixed(4) : "inf"));
-      console.table(scoresForBestCrop.slice(0, 10).map((x, idx) => ({
+      debug.sort((a, b) => b.score - a.score);
+      console.group("[ICON MATCH TOP 10]");
+      console.table(debug.slice(0, 10).map((x, idx) => ({
         rank: idx + 1,
         name: x.name,
-        size: x.size,
-        score: Number((x.score || 0).toFixed(6)),
-        delta_from_best: Number(((best.score - x.score) || 0).toFixed(6)),
+        score: Number((x.score || 0).toFixed(4)),
+        dx: x.dx,
+        dy: x.dy
       })));
+      console.log("[ICON MATCH BEST]", {
+        best: { name: best.name, score: Number(best.score.toFixed(4)), dx: best.dx, dy: best.dy },
+        second: second ? { name: second.name, score: Number(second.score.toFixed(4)) } : null,
+        gap: Number(gap.toFixed(4)),
+        ratio: (ratio === Infinity ? "∞" : Number(ratio.toFixed(4))),
+        thresholds: { accept: Number(thr.accept.toFixed(4)), minGap: Number(thr.minGap.toFixed(4)), minRatio: Number(thr.minRatio.toFixed(4)) },
+        nn: (thr.nn == null ? null : Number(thr.nn.toFixed(4))),
+      });
       console.groupEnd();
     } catch (e) {}
   }
 
-  const minGap = (ICON_MATCH.minGap === undefined ? 0 : Number(ICON_MATCH.minGap));
-  const minRatio = (ICON_MATCH.minRatio === undefined ? 1 : Number(ICON_MATCH.minRatio));
-
-  // Tight acceptance: threshold + ambiguity guards.
   const accepted =
-    (best.score >= ICON_MATCH.acceptScore) &&
-    (gap >= minGap) &&
-    (ratio >= minRatio);
+    (best.score >= thr.accept) &&
+    (gap >= thr.minGap) &&
+    (ratio >= thr.minRatio);
 
-  // Return "best" (plus extra telemetry). Caller decides accepted/rejected.
-  return {
-    name: best.name,
-    size: best.size,
-    score: best.score,
-    second: second ? { name: second.name, size: second.size, score: second.score } : null,
-    snap: { sx: bestOverall.sx, sy: bestOverall.sy, side: bestOverall.side }
-  };
+  if (!accepted) return null;
+  return best;
 }
 
 async function manualSubmitFlow() {
