@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -617,6 +617,9 @@ let __barrowsChestLastScanMs = 0;
 let __barrowsChestScanStartMs = 0;
 let __barrowsChestScanDone = false;
 
+// Lock validation failures (auto-reset invalid cached position)
+let __barrowsChestInvalidCount = 0;
+let __barrowsChestLastInvalidMs = 0;
 function __loadBarrowsChestLock() {
   if (__barrowsChestLock) return __barrowsChestLock;
   try {
@@ -1271,10 +1274,24 @@ if (!__barrowsChestLock) return;
 // Validate cached lock
 const v = __validateBarrowsChestLock(__barrowsChestLock);
 if (!v.ok) {
+  // Track consecutive invalidations; only auto-clear after a few to avoid flicker.
+  const last = __barrowsChestLastInvalidMs || 0;
+  if (now - last > 1500) __barrowsChestInvalidCount = 0; // too long since last failure; reset streak
+  __barrowsChestInvalidCount = (__barrowsChestInvalidCount || 0) + 1;
+  __barrowsChestLastInvalidMs = now;
+
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
     __barrowsChestLastScanKey = "";
     __barrowsChestScanDone = false;
+  }
+
+  // After N consecutive failed validations, clear the cached lock and prompt user to re-locate.
+  if (__barrowsChestInvalidCount >= 5) {
+    __barrowsChestInvalidCount = 0;
+    __saveBarrowsChestLock(null);
+    __statusChest("Chest position invalidated. Re-locate with Alt+1.", "warn");
+  } else {
     __statusChest("Chest not present.", "info");
   }
   return;
