@@ -14,12 +14,12 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-chestscan-minimal";
+  const BUILD_VERSION = "v2026-02-28-barrows-chestscan-minimal-v2";
 
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-chestscan-minimal`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-chestscan-minimal-v2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -2920,7 +2920,7 @@ function stitchChatMessages(lines) {
   const BARROWS_LOCK_KEY = "irb.barrowsChest.lock.v1";
   const BARROWS_SCAN_CFG = {
     // Template match acceptance for locating/validation
-    locateMinScore: 0.70,
+    locateMinScore: 0.55,
     validateMinScore: 0.70,
     // Scanning cadence while chest is present
     autoScanMs: 900,
@@ -3003,7 +3003,7 @@ function stitchChatMessages(lines) {
       const ctx = c.getContext("2d");
       ctx.drawImage(img, 0, 0);
       const id = ctx.getImageData(0, 0, c.width, c.height);
-      const outW = 162, outH = 12;
+      const outW = 324, outH = 24;
       const gray = __downsampleCapToGrayRect({ data: id.data, width: id.width, height: id.height }, 0, 0, id.width, id.height, outW, outH);
       const prep = __znccPrepare(gray);
       __barrowsTopbar = { w: outW, h: outH, gray, mu: prep.mu, invStd: prep.invStd, rawW: id.width, rawH: id.height };
@@ -3023,8 +3023,8 @@ function stitchChatMessages(lines) {
     if (!capProps) return null;
 
     const W = capProps.width | 0, H = capProps.height | 0;
-    const dsW = Math.max(200, (W / 3) | 0);
-    const dsH = Math.max(200, (H / 3) | 0);
+    const dsW = Math.max(300, (W / 2) | 0);
+    const dsH = Math.max(220, (H / 2) | 0);
     const gray = __downsampleCapToGrayRect(capProps, 0, 0, W, H, dsW, dsH);
 
     const tw = tpl.w, th = tpl.h;
@@ -3033,7 +3033,7 @@ function stitchChatMessages(lines) {
     if (maxX <= 0 || maxY <= 0) return null;
 
     let best = -1, bestX = 0, bestY = 0;
-    const step = 3;
+    const step = 4;
     for (let y = 0; y <= maxY; y += step) {
       for (let x = 0; x <= maxX; x += step) {
         const s = __znccScoreWin(gray, dsW, x, y, tpl);
@@ -3042,7 +3042,7 @@ function stitchChatMessages(lines) {
     }
 
     if (best < BARROWS_SCAN_CFG.locateMinScore) {
-      console.log(`[BARROWS] locate: not found (best ${best.toFixed(3)})`);
+      console.log(`[BARROWS] locate: not found (best ${best.toFixed(3)} < min ${BARROWS_SCAN_CFG.locateMinScore})`);
       return null;
     }
 
@@ -3160,7 +3160,7 @@ function stitchChatMessages(lines) {
       if (!lock) {
         showEvent("Barrows chest", "Locating…", "warn");
         const got = await __barrowsLocateChestGlobal();
-        if (!got) showEvent("Barrows chest", "Could not locate chest (open it and try again).", "warn");
+        if (!got) showEvent("Barrows chest", "Could not locate chest. Tip: keep chest unobstructed; try again. (Detector best score will print in console.)", "warn");
         return;
       }
       await __barrowsScanOnce("hotkey");
