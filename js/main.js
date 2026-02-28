@@ -498,17 +498,21 @@ const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
 // Slot/grid assumptions inside the chest window (can be tuned later)
 const BARROWS_CHEST_SLOTS = {
   iconSz: 32,
-  max: 10,
+  max: 8,
   // relative to chest top-left:
   rowY: 40,          // y of icon row (top-left of icon)
   startX: 55,        // x of first icon (top-left of icon)
-  spacing: 44,       // horizontal spacing between icons
+  spacing: 58,       // horizontal spacing between icons
 };
 
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
+
+// Best UX: scan once per chest open, with a short timeout.
+const CHEST_SCAN_TIMEOUT_MS = 3000;
+const CHEST_SCAN_INTERVAL_MS = 800;
 
 // Chest-specific matching thresholds (stricter than manual to avoid false positives)
 const CHEST_ICON_MATCH_OVERRIDES = {
@@ -541,6 +545,8 @@ let __barrowsChestLock = null;   // { x,y,w,h, scale, savedAt }
 let __barrowsChestSeen = false;
 let __barrowsChestLastScanKey = "";
 let __barrowsChestLastScanMs = 0;
+let __barrowsChestScanStartMs = 0;
+let __barrowsChestScanDone = false;
 
 function __loadBarrowsChestLock() {
   if (__barrowsChestLock) return __barrowsChestLock;
@@ -714,7 +720,9 @@ function __scanBarrowsChestForDrops(lock) {
       const dy = (best && typeof best.dy === "number") ? best.dy : 0;
       const ax = (lock.x + x + dx)|0;
       const ay = (lock.y + y + dy)|0;
-      __overlayRectAbs(ax, ay, iconSz, iconSz, [0, 160, 255], 450);
+      const ok = !!(best && best.accepted);
+      // Red = not accepted, Green = accepted
+      __overlayRectAbs(ax, ay, iconSz, iconSz, ok ? [0, 220, 0] : [220, 0, 0], 280);
     }
 
     // Record per-slot debug even if not accepted
@@ -1141,6 +1149,7 @@ if (!v.ok) {
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
     __barrowsChestLastScanKey = "";
+    __barrowsChestScanDone = false;
     __statusChest("Chest not present.", "info");
   }
   return;
@@ -1149,20 +1158,41 @@ if (!v.ok) {
 // Chest present
 if (!__barrowsChestSeen) {
   __barrowsChestSeen = true;
+  __barrowsChestScanStartMs = now;
+  __barrowsChestScanDone = false;
+  __barrowsChestLastScanKey = "";
   __statusChest(`Chest detected (score ${v.score.toFixed(3)}). Scanning...`, "ok");
 }
 
-// Throttle scans to avoid spam
-if (now - __barrowsChestLastScanMs < 1200) return;
+// If we already finished scanning this chest-open (either found drops or timed out), do nothing until chest closes.
+if (__barrowsChestScanDone) return;
+
+// Throttle scans to avoid spam / heavy CPU
+if (now - __barrowsChestLastScanMs < CHEST_SCAN_INTERVAL_MS) return;
 __barrowsChestLastScanMs = now;
 
 const hits = __scanBarrowsChestForDrops(__barrowsChestLock);
 const key = hits.map(h=>h.name).sort().join("|");
-if (key !== __barrowsChestLastScanKey) {
+
+// If we found any valid Barrows items, report once and stop scanning until chest closes.
+if (hits.length) {
   __barrowsChestLastScanKey = key;
-  __statusChest(__formatBarrowsHits(hits), hits.length ? "ok" : "warn");
+  __statusChest(__formatBarrowsHits(hits), "ok");
   if (CHEST_TEST.debug) console.log("[BARROWS CHEST] hits:", hits);
+  __barrowsChestScanDone = true;
+  return;
 }
+
+// No hits yet — if timeout reached, report once and stop scanning until chest closes.
+if ((now - __barrowsChestScanStartMs) >= CHEST_SCAN_TIMEOUT_MS) {
+  __barrowsChestLastScanKey = "";
+  __statusChest("No valid Barrows drops detected!", "warn");
+  __barrowsChestScanDone = true;
+  return;
+}
+
+// Otherwise: keep scanning quietly (but update status text occasionally if desired)
+
 }
 
 function __adaptiveThresholds(bestName) {
