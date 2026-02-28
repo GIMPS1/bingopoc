@@ -1,3 +1,12 @@
+
+function __getImgProps(img) {
+  // In this project we treat Alt1 captures and loaded templates as ImageData-like objects.
+  // They already expose { width, height, data (RGBA) }.
+  if (!img) return null;
+  if (img.data && (img.width != null) && (img.height != null)) return img;
+  return null;
+}
+
 /* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
