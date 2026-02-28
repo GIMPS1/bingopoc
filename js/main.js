@@ -3798,3 +3798,29 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
+
+// --- Alt+R = Force reset Barrows chest lock ---
+document.addEventListener("keydown", function (e) {
+  if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "r") {
+    try {
+      // Clear saved lock
+      __saveBarrowsChestLock(null);
+
+      // Reset runtime state
+      __barrowsChestSeen = false;
+      __barrowsChestLastScanKey = "";
+      __barrowsChestScanDone = false;
+      __barrowsChestScanStartMs = 0;
+      __barrowsChestLastScanMs = 0;
+
+      __statusChest(
+        "Chest lock reset. Hover chest and press Alt+1 to re-locate.",
+        "warn"
+      );
+
+      console.log("[BARROWS CHEST] Lock manually reset via Alt+R");
+    } catch (err) {
+      console.warn("[BARROWS CHEST] Alt+R reset failed:", err);
+    }
+  }
+});
