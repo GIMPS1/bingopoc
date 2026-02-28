@@ -25,6 +25,9 @@
         <button class="iconBtn" id="btnOpenSettings" title="Settings">
           <span class="icon">⚙</span>
         </button>
+        <button class="iconBtn helpBtn" id="btnOpenGuide" title="User guide">
+          <span class="icon">?</span>
+        </button>
       </div>
     </header>
 
@@ -35,7 +38,34 @@
       <!-- Setup -->
       <div id="setupBlock">
 
-        <!-- IGN FIRST -->
+        
+
+<!-- CHATBOX FIRST (Auto-locate & lock) -->
+<div class="grid2" id="autoChatWrap">
+  <div class="field">
+    <label for="btnAutoLocateChat">Chatbox</label>
+    <div class="rowInline">
+      <button class="btn secondary small" id="btnAutoLocateChat" title="Auto-locate and lock chatbox">Auto-locate & lock</button>
+      <div class="pill mini" id="autoChatPill">Chat: —</div>
+    </div>
+    <div class="hint" id="autoChatHint">
+      Required first: auto-locate chat before locking IGN.
+    </div>
+  </div>
+
+  <div class="field">
+    <label for="setupInstructionsDummy2">Step order</label>
+    <input id="setupInstructionsDummy2" type="hidden" value="1" />
+    <div class="hint" id="setupHint">
+      1. Auto-locate Chat (button) and lock it.<br>
+      2. Type IGN and lock it in.<br>
+      3. Choose Bingo & Team, lock it in (page will refresh).<br>
+      4. Open Barrows chest — it will auto-detect and submit uniques.
+    </div>
+  </div>
+</div>
+
+<!-- IGN FIRST -->
         <div class="grid2">
           <div class="field">
             <label for="ign">IGN</label>

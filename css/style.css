@@ -612,3 +612,35 @@ input:focus,select:focus{border-color:rgba(214,178,94,.35); box-shadow:0 0 0 3px
 .manualStatus.ok{color: rgba(180,255,180,.95);}
 .manualStatus.warn{color: rgba(255,220,140,.95);}
 .manualStatus.bad{color: rgba(255,160,160,.95);}
+
+
+/* Help button */
+.helpBtn { border-color: rgba(255,80,80,0.55); }
+.helpBtn .icon { color: rgba(255,80,80,0.95); font-weight: 800; }
+.pill.mini { padding: 3px 8px; font-size: 11px; opacity: 0.95; }
+
+/* Guide panel */
+.guidePanel { max-width: 860px; margin: 14px auto; }
+.guideHeader { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+.guideTitle { font-size: 16px; font-weight: 700; }
+.guideBody { line-height: 1.35; font-size: 13px; }
+.guideBody h3 { margin: 14px 0 8px; font-size: 14px; }
+.guideBody ol, .guideBody ul { margin: 6px 0 10px 18px; }
+.guideBody li { margin: 4px 0; }
+
+
+/* Event line idle animation (Running. Waiting for drops…) */
+.eventLine.idle .eventTitle::after {
+  content: "";
+}
+.eventLine.idle .eventSub::after {
+  content: "...";
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  animation: irbDots 1.8s steps(4, end) infinite;
+}
+@keyframes irbDots {
+  to { width: 1.35em; }
+}

@@ -72,7 +72,11 @@ function __getImgProps(img) {
     teamMenu: $("teamSelectMenu"),
 
     ign: $("ign"),
-    ignHint: $("ignHint"),
+        btnAutoLocateChat: $("btnAutoLocateChat"),
+    autoChatWrap: $("autoChatWrap"),
+    autoChatHint: $("autoChatHint"),
+    autoChatPill: $("autoChatPill"),
+ignHint: $("ignHint"),
     btnLockIgn: $("btnLockIgn"),
 
     btnLockSetup: $("btnLockSetup"),
@@ -94,10 +98,13 @@ function __getImgProps(img) {
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
-    btnOpenSettings: $("btnOpenSettings"),
-    btnCloseSettings: $("btnCloseSettings"),
+        guidePanel: $("guidePanel"),
+btnOpenSettings: $("btnOpenSettings"),
+        btnOpenGuide: $("btnOpenGuide"),
+btnCloseSettings: $("btnCloseSettings"),
 
-    // Settings - setup
+        btnCloseGuide: $("btnCloseGuide"),
+// Settings - setup
     setupState: $("setupState"),
     btnUnlockSetup: $("btnUnlockSetup"),
     btnResetIgn: $("btnResetIgn"),
@@ -127,21 +134,22 @@ function __getImgProps(img) {
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
   const __settingsOnly = __params.get("settings") === "1";
+  const __guideOnly = __params.get("guide") === "1";
 
   function buildSettingsUrl() {
     const base = location.href.split("#")[0].split("?")[0];
     return `${base}?settings=1`;
   }
   function openSettingsPopup() {
-    const url = buildSettingsUrl();
-    const w = 356;
-    const h = 560;
+  const url = buildSettingsUrl();
+  const w = 356;
+  const h = 560;
 
-    if (window.alt1 && typeof alt1.openPopup === "function") {
-      try { alt1.openPopup(url, w, h); return; } catch (e) {}
-    }
-    window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
+  if (window.alt1 && typeof alt1.openPopup === "function") {
+    try { alt1.openPopup(url, w, h); return; } catch (e) {}
   }
+  window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
+}
 
   // ---------- storage ----------
   const LS = {
@@ -180,6 +188,9 @@ function __getImgProps(img) {
   // ---------- UI helpers ----------
   const FEED_MAX = 3;
   const feedItems = [];
+
+  let __lastNonIdleEventAt = Date.now();
+  let __idleModeOn = false;
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -225,11 +236,21 @@ function __getImgProps(img) {
     } catch (e) {}
   }
 
-  function showEvent(title, subtitle, level = "ok", flash = true, sound = false) {
+  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
     ui.eventTitle.textContent = title;
     ui.eventSub.textContent = subtitle;
 
+
+// Idle mode styling
+if (ui.eventLine) {
+  if (isIdle) ui.eventLine.classList.add("idle");
+  else ui.eventLine.classList.remove("idle");
+}
+if (!isIdle) {
+  __idleModeOn = false;
+  __lastNonIdleEventAt = Date.now();
+}
     ui.eventLine.classList.remove("ok","bad","warn","flash");
     ui.eventLine.classList.add(level);
 
@@ -274,6 +295,30 @@ function __getImgProps(img) {
     }
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
+
+
+function showIdleRunning() {
+  if (!ui.eventLine) return;
+  // Only show idle when setup is ready (otherwise setup hints should stay visible)
+  try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
+  if (__idleModeOn) return;
+  __idleModeOn = true;
+  showEvent("Running", "Waiting for drops", "ok", false, false, true);
+}
+
+function startIdleTicker() {
+  // If nothing has updated the event line recently, revert to idle status.
+  const idleMs = 12000;
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      if (__idleModeOn) return;
+      if ((now - __lastNonIdleEventAt) >= idleMs) {
+        showIdleRunning();
+      }
+    } catch (e) {}
+  }, 700);
+}
 
   function getMousePos() {
     try {
@@ -1950,7 +1995,9 @@ function updateSetupPanelWrapVisibility() {
   const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
 
-  wrap.style.display = (sl && il) ? "none" : "";
+    const cl = !!localStorage.getItem(LS.chatPos);
+
+  wrap.style.display = (sl && il && cl) ? "none" : "";
 }
 // ---------- UI render (no storage writes) + cross-window sync ----------
   function renderSetupLockedUI(locked) {
@@ -1959,9 +2006,47 @@ function updateSetupPanelWrapVisibility() {
     initHistoryPanel();
     refreshSummary();
     refreshSetupState();
+
+    try { updateAutoChatUI(); } catch (e) {}
+    try { updateSetupGating(); } catch (e) {}
   }
 
-  function renderIgnLockedUI(locked) {
+  function isChatLocked() {
+  return !!localStorage.getItem(LS.chatPos);
+}
+
+function updateAutoChatUI() {
+  const locked = isChatLocked();
+  if (ui.autoChatPill) {
+    ui.autoChatPill.textContent = locked ? "Chat: locked" : "Chat: not set";
+    ui.autoChatPill.className = "pill mini " + (locked ? "ok" : "warn");
+  }
+  if (ui.btnAutoLocateChat) ui.btnAutoLocateChat.disabled = locked || !isAlt1;
+  if (ui.autoChatWrap) ui.autoChatWrap.style.display = locked ? "none" : "";
+}
+
+function updateSetupGating() {
+  // Enforce order:
+  // 1) Chat must be locked before IGN
+  // 2) IGN must be locked before Bingo/Team lock
+  const cl = isChatLocked();
+  const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
+
+  if (ui.ign) ui.ign.disabled = !cl || il;
+  if (ui.btnLockIgn) ui.btnLockIgn.disabled = !cl || il;
+
+  // Bingo/team controls live in the main setup panel; disable until IGN locked.
+  const lockSetupBtn = ui.btnLockSetup;
+  if (lockSetupBtn) lockSetupBtn.disabled = !il || lockSetupBtn.disabled; // keep existing disabled if selections missing
+
+  // Disable dropdown buttons until IGN locked
+  try {
+    if (ui.bingoBtn) ui.bingoBtn.disabled = !il;
+    if (ui.teamBtn) ui.teamBtn.disabled = !il;
+  } catch (e) {}
+}
+
+function renderIgnLockedUI(locked) {
     const field = ui.ign ? ui.ign.closest(".field") : null;
     if (!ui.ign || !ui.btnLockIgn) return;
 
@@ -3229,6 +3314,28 @@ function stitchChatMessages(lines) {
   }
 
   // ---------- events ----------
+
+// User guide
+
+ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
+  try {
+    const base = location.href.split("#")[0].split("?")[0];
+    const url = `${base}?guide=1`;
+    const w = 420;
+    const h = 620;
+    if (window.alt1 && typeof alt1.openPopup === "function") {
+      try { alt1.openPopup(url, w, h); return; } catch (e) {}
+    }
+    window.open(url, "irb_guide", `width=${w},height=${h},resizable=yes`);
+  } catch (e) {
+    console.warn("Guide popup failed:", e);
+  }
+});
+
+ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
+  try { window.close(); } catch (e) {}
+});
+
   if (!__settingsOnly) {
     ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
@@ -3238,8 +3345,30 @@ function stitchChatMessages(lines) {
   }
 
   ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
-    if (__settingsOnly) {
-      try { window.close(); } catch (e) {}
+    if (__guideOnly) {
+    try {
+      // Guide-only popup: hide main UI and show the guide panel
+      const topbar = document.querySelector(".topbar");
+      const panel = document.querySelector(".panel");
+      const setupBlock = document.getElementById("setupBlock");
+      const setupSummary = document.getElementById("setupSummary");
+      const statusPanel = document.getElementById("statusPanel");
+
+      if (topbar) topbar.style.display = "none";
+      if (panel) panel.style.display = "none";
+      if (setupBlock) setupBlock.style.display = "none";
+      if (setupSummary) setupSummary.style.display = "none";
+      if (statusPanel) statusPanel.style.display = "none";
+
+      if (ui.drawer) ui.drawer.style.display = "none";
+      if (ui.backdrop) ui.backdrop.style.display = "none";
+
+      if (ui.guidePanel) ui.guidePanel.style.display = "";
+    } catch (e) {}
+  }
+
+  if (__settingsOnly) {
+    try { window.close(); } catch (e) {}
       return;
     }
     closeDrawer();
@@ -3292,6 +3421,10 @@ function stitchChatMessages(lines) {
     playBeep("ok");
     pingApi();
     if (isSetupReady()) start();
+
+    // Force-refresh after locking Bingo/Team so runtime state is clean
+    try { setTimeout(() => location.reload(), 80); } catch (e) {}
+
   });
 
   ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
@@ -3301,7 +3434,38 @@ function stitchChatMessages(lines) {
     stop();
   });
 
-  ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
+  
+ui.btnAutoLocateChat && ui.btnAutoLocateChat.addEventListener("click", () => {
+  if (!isAlt1) { addFeed("Alt1 not detected.", "bad"); return; }
+  const ok = initChatReader();
+  if (!ok) { addFeed("Chat reader unavailable.", "bad"); return; }
+
+  // Use chatReader.find() then lock/save immediately
+  try {
+    chatReader.find();
+    if (chatReader.pos === null) {
+      addFeed("Auto-locate failed: chatbox not found. Make sure chat is visible.", "bad");
+      if (ui.autoChatHint) ui.autoChatHint.textContent = "Chat not found — open chatbox and try again.";
+      return;
+    }
+    saveChatPos(chatReader.pos);
+    chatState.locked = true;
+    chatState.usingFallback = false;
+    chatState.confPct = 95;
+    setChatPillLocked();
+    tryOverlayRect(chatReader.pos, true);
+    addFeed("Chatbox auto-located & locked ✅", "ok");
+    playBeep("ok");
+    updateAutoChatUI();
+    updateSetupGating();
+    refreshSetupState();
+    updateSetupPanelWrapVisibility();
+  } catch (e) {
+    addFeed("Auto-locate failed: " + e.message, "bad");
+  }
+});
+
+ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     const ign = (ui.ign?.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
     localStorage.setItem(LS.ign, ign);
@@ -3441,6 +3605,7 @@ function stitchChatMessages(lines) {
   }
 
   addFeed("Plugin loaded.", "ok");
+  try { startIdleTicker(); } catch (e) {}
   pingApi();
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
