@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
 
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
@@ -808,6 +808,14 @@ function __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outW, outH) {
   }
   return out;
 }
+
+// --- compat shim: some modules expect __downsampleToGray16(...) ---
+function __downsampleToGray16(capProps, sx, sy, sw, sh, outSz) {
+  // Wrapper around __downsampleCapToGrayRect; returns Uint8Array(outSz*outSz)
+  return __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outSz, outSz);
+}
+
+
 
 function __detectBarrowsChestTopbarInCapture(cap, topT) {
   // Returns { score, x, y } in capture-local coords, or null.
