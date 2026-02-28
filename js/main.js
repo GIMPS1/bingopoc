@@ -502,7 +502,7 @@ const BARROWS_CHEST_SLOTS = {
   // relative to chest top-left:
   rowY: 40,          // y of icon row (top-left of icon)
   startX: 55,        // x of first icon (top-left of icon)
-  spacing: 58,       // horizontal spacing between icons
+  spacing: 55,       // horizontal spacing between icons
 };
 
 // Barrows chest scan debug
@@ -674,6 +674,46 @@ function __validateBarrowsChestLock(lock) {
   return { ok: score >= 0.72, score };
 }
 
+// Chest scan slot occupancy + color logic
+const CHEST_SLOT_OCCUPANCY = {
+  featW: 16,
+  featH: 16,
+  // variance threshold for "icon present" (tuned for Barrows chest dark background)
+  minVar: 55,
+  // edge energy threshold (backup)
+  minEdge: 1200,
+  // score at/above which we consider a near-miss worthy of red highlight
+  nearMissScore: 0.55,
+};
+
+function __isChestSlotOccupied(capProps, x, y, w, h) {
+  try {
+    const g = __downsampleCapToGrayRect(capProps, x, y, w, h, CHEST_SLOT_OCCUPANCY.featW, CHEST_SLOT_OCCUPANCY.featH);
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += g[i];
+    const mean = sum / g.length;
+    let v = 0;
+    for (let i = 0; i < g.length; i++) { const d = g[i] - mean; v += d*d; }
+    const varr = v / g.length;
+
+    // simple edge energy
+    let edge = 0;
+    const W = CHEST_SLOT_OCCUPANCY.featW|0;
+    const H = CHEST_SLOT_OCCUPANCY.featH|0;
+    for (let yy = 0; yy < H; yy++) {
+      const row = yy * W;
+      for (let xx = 0; xx < W; xx++) {
+        const p = g[row + xx];
+        if (xx+1 < W) edge += Math.abs(p - g[row + xx + 1]);
+        if (yy+1 < H) edge += Math.abs(p - g[row + xx + W]);
+      }
+    }
+    return { occupied: (varr >= CHEST_SLOT_OCCUPANCY.minVar) || (edge >= CHEST_SLOT_OCCUPANCY.minEdge), varr, edge, mean };
+  } catch (e) {
+    return { occupied: true, varr: 0, edge: 0, mean: 0 };
+  }
+}
+
 function __scanBarrowsChestForDrops(lock) {
   if (!lock) return [];
   if (!__iconTemplates) {
@@ -707,31 +747,47 @@ function __scanBarrowsChestForDrops(lock) {
     }
 
 
-    const selection = {
-      capProps: cap,
-      rect: { x, y, w: iconSz, h: iconSz },
-    };
+const occ = __isChestSlotOccupied(cap, x, y, iconSz, iconSz);
 
-    const best = matchIconFromSelection(selection, __iconTemplates);
+const selection = {
+  capProps: cap,
+  rect: { x, y, w: iconSz, h: iconSz },
+};
 
-    // Visual proof: draw slot boxes at the snapped position actually evaluated
-    if (CHEST_SCAN_DEBUG_OVERLAY) {
-      const dx = (best && typeof best.dx === "number") ? best.dx : 0;
-      const dy = (best && typeof best.dy === "number") ? best.dy : 0;
-      const ax = (lock.x + x + dx)|0;
-      const ay = (lock.y + y + dy)|0;
-      const ok = !!(best && best.accepted);
-      // Red = not accepted, Green = accepted
-      __overlayRectAbs(ax, ay, iconSz, iconSz, ok ? [0, 220, 0] : [220, 0, 0], 280);
-    }
+// Only attempt template match on occupied slots (saves CPU + reduces noise)
+const best = occ.occupied ? matchIconFromSelection(selection, __iconTemplates) : null;
+
+// Visual proof: draw slot boxes at the snapped position actually evaluated
+if (CHEST_SCAN_DEBUG_OVERLAY) {
+  const dx = (best && typeof best.dx === "number") ? best.dx : 0;
+  const dy = (best && typeof best.dy === "number") ? best.dy : 0;
+  const ax = (lock.x + x + dx)|0;
+  const ay = (lock.y + y + dy)|0;
+
+  const isBarrows = !!(best && best.accepted && validateDropName(best.name));
+  const nearMiss = !!(occ.occupied && best && !isBarrows && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore);
+
+  // Color scheme:
+  // - Green: accepted Barrows unique
+  // - Red: near-miss (looked close but failed)
+  // - Gray: empty slot or junk / low-confidence
+  const col = isBarrows ? [0, 220, 0] : (nearMiss ? [220, 0, 0] : [140, 140, 140]);
+  __overlayRectAbs(ax, ay, iconSz, iconSz, col, 280);
+}
+
 
     // Record per-slot debug even if not accepted
     if (CHEST_SCAN_DEBUG_TABLE) {
       rows.push({
         slot: i,
+        occupied: !!occ.occupied,
+        var: Number((occ.varr ?? 0).toFixed(1)),
+        edge: Number((occ.edge ?? 0).toFixed(0)),
         best: best ? best.name : "",
         score: best ? Number(best.score.toFixed(4)) : 0,
         accepted: !!(best && best.accepted),
+        isBarrows: !!(best && best.accepted && validateDropName(best.name)),
+        nearMiss: !!(occ.occupied && best && !(best.accepted && validateDropName(best.name)) && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore),
         gap: best ? Number((best.gap ?? 0).toFixed(4)) : 0,
         ratio: best ? Number((best.ratio ?? 0).toFixed(4)) : 0,
         dx: best ? (best.dx|0) : 0,
