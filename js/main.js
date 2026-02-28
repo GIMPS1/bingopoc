@@ -374,6 +374,73 @@ function __getImgProps(img) {
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
   let __iconTemplatesLoading = null;
+
+  function __sanitizeIconFileName(itemName) {
+    // Keep consistent with generated icon map filenames
+    return String(itemName || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\d]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  }
+
+  function __localIconUrl(itemName, size) {
+    const base = assetUrl("assets/barrows");
+    const base2 = String(base).replace(/\/$/, "");
+    const plain = `${__sanitizeIconFileName(itemName)}.png`;
+    // Allow optional size-suffixed future naming, fall back to plain
+    const sized = size ? `${__sanitizeIconFileName(itemName)}_${size}.png` : null;
+    return sized ? `${base2}/${sized}` : `${base2}/${plain}`;
+  }
+
+  async function ensureIconTemplatesLoaded() {
+    if (__iconTemplates) return __iconTemplates;
+    if (__iconTemplatesLoading) return __iconTemplatesLoading;
+
+    __iconTemplatesLoading = (async () => {
+      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
+        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // Load bundled icon map (name/size/file). Icons live in ./assets/barrows/
+      let iconMap = [];
+      try {
+        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
+        iconMap = await res.json();
+        if (!Array.isArray(iconMap)) throw new Error("barrows_icon_map.json must be an array");
+      } catch (e) {
+        console.warn("[icon] failed to load assets/barrows_icon_map.json", e);
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      const templates = [];
+      for (const entry of iconMap) {
+        if (!entry || !entry.name) continue;
+        const name = String(entry.name);
+        const size = (entry.size | 0) || 32;
+        // Prefer explicit file from map, otherwise derive
+        const url = entry.file ? assetUrl(`assets/barrows/${entry.file}`) : __localIconUrl(name, size);
+
+        try {
+          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
+          if (!img || !img.data || !img.width || !img.height) continue;
+          templates.push({ name, size: img.width | 0, img });
+        } catch (e) {
+          // ignore missing files; keep going
+        }
+      }
+
+      __iconTemplates = templates;
+      console.log(`[icon] templates loaded: ${templates.length}`);
+      return __iconTemplates;
+    })();
+
+    return __iconTemplatesLoading;
+  }
+
 // -------- Barrows Chest UI detection (TEST TOOL) --------
 // Uses UI template matching (no OCR) against a cropped top-bar image.
 const CHEST_TEST = {
@@ -567,7 +634,11 @@ function __validateBarrowsChestLock(lock) {
 
 function __scanBarrowsChestForDrops(lock) {
   if (!lock) return [];
-  if (!__iconTemplates) return [];
+  if (!__iconTemplates) {
+    // Kick off async load; scan will run on next tick once templates are available.
+    try { ensureIconTemplatesLoaded(); } catch (e) {}
+    return [];
+  }
   const cap = __captureRect(lock.x, lock.y, lock.w, lock.h);
   if (!cap) return [];
 
