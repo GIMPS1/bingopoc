@@ -1187,7 +1187,7 @@ function __forceBarrowsChestScanNow() {
   }
 }
 
-function __chestTestTick() {
+async function __chestTestTick() {
 if (!CHEST_TEST.enabled) return;
 if (!__barrowsTopbarT) return; // not loaded yet
 
@@ -1233,8 +1233,43 @@ const key = hits.map(h=>h.name).sort().join("|");
 // If we found any valid Barrows items, report once and stop scanning until chest closes.
 if (hits.length) {
   __barrowsChestLastScanKey = key;
+
+  // Always show what we found
   __statusChest(__formatBarrowsHits(hits), "ok");
   if (CHEST_TEST.debug) console.log("[BARROWS CHEST] hits:", hits);
+
+  // Only submit if setup is ready (IGN + Bingo/Team locked)
+  try {
+    if (!isSetupReady || !isSetupReady()) {
+      __statusChest("Setup not ready — detected but not submitted.", "warn");
+      __barrowsChestScanDone = true;
+      return;
+    }
+  } catch (e) {
+    __statusChest("Setup check failed — detected but not submitted.", "warn");
+    __barrowsChestScanDone = true;
+    return;
+  }
+
+  // Submit each detected Barrows item (qty 1)
+  for (const h of hits) {
+    const vName = validateDropName(h.name);
+    const canonical = (vName && vName.valid && vName.canonical) ? vName.canonical : h.name;
+
+    // De-dupe with the same recent-key mechanism used elsewhere, when available
+    try {
+      const k = String(canonical).toLowerCase().trim() + "||1";
+      if (typeof seenRecently === "function" && seenRecently(k, 8000)) continue;
+    } catch (e) {}
+
+    try {
+      await submitDrop({ drop_name: canonical, amount: "1" });
+      addFeed(`Submitted ✅ ${canonical} x1`, "ok");
+    } catch (e) {
+      addFeed(`Submit failed ❌ (${canonical}): ${e.message}`, "bad");
+    }
+  }
+
   __barrowsChestScanDone = true;
   return;
 }
@@ -3094,7 +3129,7 @@ function stitchChatMessages(lines) {
   async function poll() {
     if (!running || !chatReader) return;
     // Barrows chest UI detection test (template match)
-    try { __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
+    try { await __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
 
     if (!isSetupReady()) return;
 
