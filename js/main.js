@@ -501,7 +501,7 @@ const BARROWS_CHEST_SLOTS = {
   max: 10,
   // relative to chest top-left:
   rowY: 40,          // y of icon row (top-left of icon)
-  startX: 22,        // x of first icon (top-left of icon)
+  startX: 66,        // x of first icon (top-left of icon)
   spacing: 44,       // horizontal spacing between icons
 };
 
@@ -512,11 +512,10 @@ let __lastChestScanDebugAt = 0;
 
 // Chest-specific matching thresholds (stricter than manual to avoid false positives)
 const CHEST_ICON_MATCH_OVERRIDES = {
-  accept: 0.70,     // require strong match for auto chest scan
+  acceptScore: 0.70,     // require strong match for auto chest scan
   minGap: 0.04,
   minRatio: 1.08,
-  snapRadius: 12,   // allow local snap to the real icon center
-  snapStep: 1,
+  searchRadius: 30,   // allow local snap to the real icon center
 };
 
 function __mixColorSafe(r, g, b) {
@@ -682,12 +681,10 @@ function __scanBarrowsChestForDrops(lock) {
   // Temporarily tighten thresholds for chest scanning (do not affect manual mode)
   const __savedIconMatch = { ...ICON_MATCH };
   try {
-    ICON_MATCH.accept = CHEST_ICON_MATCH_OVERRIDES.accept;
+    ICON_MATCH.acceptScore = CHEST_ICON_MATCH_OVERRIDES.acceptScore;
     ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
     ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
-    ICON_MATCH.snapRadius = CHEST_ICON_MATCH_OVERRIDES.snapRadius;
-    ICON_MATCH.snapStep = CHEST_ICON_MATCH_OVERRIDES.snapStep;
-  } catch (e) {}
+    ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;  } catch (e) {}
 
   const hits = [];
   const rows = [];
