@@ -550,6 +550,42 @@ const BARROWS_CHEST_SLOTS = {
   spacing: 55,       // horizontal spacing between icons
 };
 
+// --- Chest geometry helpers (drift-free anchoring + slot rects) ---
+function __chestScale(lock) {
+  if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
+  if (lock && typeof lock.w === "number" && lock.w > 0) return lock.w / CHEST_TEST.chestWidth;
+  return 1.0;
+}
+
+function __scaledChestInsets(scale) {
+  return {
+    insetX: Math.round(CHEST_TEST.topbarInsetX * scale),
+    insetY: Math.round(CHEST_TEST.topbarInsetY * scale),
+  };
+}
+
+function __scaledChestSize(scale) {
+  return {
+    w: Math.round(CHEST_TEST.chestWidth * scale),
+    h: Math.round(CHEST_TEST.chestHeight * scale),
+  };
+}
+
+function __barrowsSlotRects(lock) {
+  const s = __chestScale(lock);
+  // Round ONCE per parameter; build x positions as x0 + i*dx to prevent cumulative drift.
+  const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
+  const y0   = Math.round(BARROWS_CHEST_SLOTS.rowY   * s);
+  const x0   = Math.round(BARROWS_CHEST_SLOTS.startX * s);
+  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing* s);
+
+  const rects = [];
+  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
+    rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
+  }
+  return rects;
+}
+
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
@@ -683,18 +719,23 @@ function __locateBarrowsChestFromMouse() {
     return null;
   }
 
-  // Convert to absolute chest rect based on known inset geometry.
+  // Convert to absolute chest rect based on known inset geometry (scaled, drift-free).
   const absTopbarX = sx + refined.x;
   const absTopbarY = sy + refined.y;
-  const chestX = (absTopbarX - CHEST_TEST.topbarInsetX)|0;
-  const chestY = (absTopbarY - CHEST_TEST.topbarInsetY)|0;
+
+  const scale = refined.scale || 1.0;
+  const { insetX, insetY } = __scaledChestInsets(scale);
+  const { w, h } = __scaledChestSize(scale);
+
+  const chestX = (absTopbarX - insetX) | 0;
+  const chestY = (absTopbarY - insetY) | 0;
 
   const lock = {
     x: chestX,
     y: chestY,
-    w: CHEST_TEST.chestWidth,
-    h: CHEST_TEST.chestHeight,
-    scale: refined.scale,
+    w,
+    h,
+    scale,
     savedAt: Date.now(),
   };
 
@@ -707,10 +748,12 @@ function __locateBarrowsChestFromMouse() {
 
 function __validateBarrowsChestLock(lock) {
   if (!lock || !__barrowsTopbarT) return { ok:false, score:0 };
-  // Capture just the topbar area where we expect it.
-  const tw = Math.max(40, Math.round(__barrowsTopbarT.w * (lock.scale || 1)));
-  const th = Math.max(10, Math.round(__barrowsTopbarT.h * (lock.scale || 1)));
-  const cap = __captureRect(lock.x + CHEST_TEST.topbarInsetX, lock.y + CHEST_TEST.topbarInsetY, tw, th);
+  const s = __chestScale(lock);
+  // Capture just the topbar area where we expect it (scaled).
+  const tw = Math.max(40, Math.round(__barrowsTopbarT.w * s));
+  const th = Math.max(10, Math.round(__barrowsTopbarT.h * s));
+  const { insetX, insetY } = __scaledChestInsets(s);
+  const cap = __captureRect(lock.x + insetX, lock.y + insetY, tw, th);
   if (!cap) return { ok:false, score:0 };
 
   const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
@@ -779,11 +822,13 @@ function __scanBarrowsChestForDrops(lock) {
 
   const hits = [];
   const rows = [];
-  const iconSz = BARROWS_CHEST_SLOTS.iconSz|0;
-  const y = BARROWS_CHEST_SLOTS.rowY|0;
 
-  for (let i=0; i<BARROWS_CHEST_SLOTS.max; i++) {
-    const x = (BARROWS_CHEST_SLOTS.startX + i*BARROWS_CHEST_SLOTS.spacing)|0;
+  const slots = __barrowsSlotRects(lock);
+
+  for (let i = 0; i < slots.length; i++) {
+    const x = slots[i].x | 0;
+    const y = slots[i].y | 0;
+    const iconSz = slots[i].w | 0;
 
     // Skip if outside bounds
     if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) {
