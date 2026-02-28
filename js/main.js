@@ -108,6 +108,7 @@ btnCloseSettings: $("btnCloseSettings"),
     setupState: $("setupState"),
     btnUnlockSetup: $("btnUnlockSetup"),
     btnResetIgn: $("btnResetIgn"),
+    btnResetBarrowsLock: $("btnResetBarrowsLock"),
 
     // Settings - chat
     btnScanChats: $("btnScanChats"),
@@ -191,6 +192,8 @@ btnCloseSettings: $("btnCloseSettings"),
 
   let __lastNonIdleEventAt = Date.now();
   let __idleModeOn = false;
+  let __idleDotsTimer = null;
+  let __idleDotsPhase = 0;
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -238,19 +241,31 @@ btnCloseSettings: $("btnCloseSettings"),
 
   function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
+
+    // Idle handling:
+    // - Any non-idle event exits idle mode and resets the idle timer.
+    // - Idle events keep idle mode on and animate the subtitle via idle dots.
+    if (isIdle) {
+      __idleModeOn = true;
+      if (ui.eventLine) ui.eventLine.classList.add("idle");
+      if (ui.eventTitle) ui.eventTitle.textContent = title;
+      if (ui.eventSub) ui.eventSub.textContent = subtitle;
+      __startIdleDots();
+      // Keep styling consistent
+      ui.eventLine.classList.remove("ok","bad","warn","flash");
+      ui.eventLine.classList.add(level);
+      return;
+    }
+
+    // Leaving idle mode
+    __idleModeOn = false;
+    __lastNonIdleEventAt = Date.now();
+    __stopIdleDots();
+    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
+
     ui.eventTitle.textContent = title;
     ui.eventSub.textContent = subtitle;
 
-
-// Idle mode styling
-if (ui.eventLine) {
-  if (isIdle) ui.eventLine.classList.add("idle");
-  else ui.eventLine.classList.remove("idle");
-}
-if (!isIdle) {
-  __idleModeOn = false;
-  __lastNonIdleEventAt = Date.now();
-}
     ui.eventLine.classList.remove("ok","bad","warn","flash");
     ui.eventLine.classList.add(level);
 
@@ -260,6 +275,9 @@ if (!isIdle) {
     }
     if (sound) playChime();
   }
+
+
+  
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
@@ -296,26 +314,45 @@ if (!isIdle) {
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
+let __idleDotsTimer = null;
+let __idleDotsPhase = 0;
+
+function __stopIdleDots() {
+  if (__idleDotsTimer) { try { clearInterval(__idleDotsTimer); } catch (e) {} }
+  __idleDotsTimer = null;
+  __idleDotsPhase = 0;
+}
+
+function __startIdleDots() {
+  __stopIdleDots();
+  __idleDotsTimer = setInterval(() => {
+    try {
+      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
+      __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
+      const dots = ".".repeat(__idleDotsPhase);
+      ui.eventSub.textContent = "Waiting for drops" + dots;
+    } catch (e) {}
+  }, 650);
+}
 
 function showIdleRunning() {
-  if (!ui.eventLine) return;
   // Only show idle when setup is ready (otherwise setup hints should stay visible)
   try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
   if (__idleModeOn) return;
   __idleModeOn = true;
-  showEvent("Running", "Waiting for drops", "ok", false, false, true);
+  if (ui.eventLine) ui.eventLine.classList.add("idle");
+  if (ui.eventTitle) ui.eventTitle.textContent = "Running";
+  if (ui.eventSub) ui.eventSub.textContent = "Waiting for drops";
+  __startIdleDots();
 }
 
 function startIdleTicker() {
-  // If nothing has updated the event line recently, revert to idle status.
   const idleMs = 12000;
   setInterval(() => {
     try {
       const now = Date.now();
       if (__idleModeOn) return;
-      if ((now - __lastNonIdleEventAt) >= idleMs) {
-        showIdleRunning();
-      }
+      if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
     } catch (e) {}
   }, 700);
 }
@@ -549,42 +586,35 @@ const BARROWS_CHEST_SLOTS = {
   startX: 55,        // x of first icon (top-left of icon)
   spacing: 55,       // horizontal spacing between icons
 };
-
-// --- Chest geometry helpers (drift-free anchoring + slot rects) ---
+// --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
 function __chestScale(lock) {
   if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
   if (lock && typeof lock.w === "number" && lock.w > 0) return lock.w / CHEST_TEST.chestWidth;
   return 1.0;
 }
-
 function __scaledChestInsets(scale) {
   return {
     insetX: Math.round(CHEST_TEST.topbarInsetX * scale),
     insetY: Math.round(CHEST_TEST.topbarInsetY * scale),
   };
 }
-
 function __scaledChestSize(scale) {
   return {
     w: Math.round(CHEST_TEST.chestWidth * scale),
     h: Math.round(CHEST_TEST.chestHeight * scale),
   };
 }
-
 function __barrowsSlotRects(lock) {
   const s = __chestScale(lock);
-  // Round ONCE per parameter; build x positions as x0 + i*dx to prevent cumulative drift.
   const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
   const y0   = Math.round(BARROWS_CHEST_SLOTS.rowY   * s);
   const x0   = Math.round(BARROWS_CHEST_SLOTS.startX * s);
   const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing* s);
-
   const rects = [];
-  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
-    rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
-  }
+  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
   return rects;
 }
+
 
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
@@ -719,22 +749,22 @@ function __locateBarrowsChestFromMouse() {
     return null;
   }
 
-  // Convert to absolute chest rect based on known inset geometry (scaled, drift-free).
+  // Convert to absolute chest rect based on known inset geometry (scale-correct).
   const absTopbarX = sx + refined.x;
   const absTopbarY = sy + refined.y;
 
   const scale = refined.scale || 1.0;
-  const { insetX, insetY } = __scaledChestInsets(scale);
-  const { w, h } = __scaledChestSize(scale);
+  const ins = __scaledChestInsets(scale);
+  const sz = __scaledChestSize(scale);
 
-  const chestX = (absTopbarX - insetX) | 0;
-  const chestY = (absTopbarY - insetY) | 0;
+  const chestX = (absTopbarX - ins.insetX) | 0;
+  const chestY = (absTopbarY - ins.insetY) | 0;
 
   const lock = {
     x: chestX,
     y: chestY,
-    w,
-    h,
+    w: sz.w,
+    h: sz.h,
     scale,
     savedAt: Date.now(),
   };
@@ -748,12 +778,12 @@ function __locateBarrowsChestFromMouse() {
 
 function __validateBarrowsChestLock(lock) {
   if (!lock || !__barrowsTopbarT) return { ok:false, score:0 };
+  // Capture just the topbar area where we expect it.
   const s = __chestScale(lock);
-  // Capture just the topbar area where we expect it (scaled).
   const tw = Math.max(40, Math.round(__barrowsTopbarT.w * s));
   const th = Math.max(10, Math.round(__barrowsTopbarT.h * s));
-  const { insetX, insetY } = __scaledChestInsets(s);
-  const cap = __captureRect(lock.x + insetX, lock.y + insetY, tw, th);
+  const ins = __scaledChestInsets(s);
+  const cap = __captureRect(lock.x + ins.insetX, lock.y + ins.insetY, tw, th);
   if (!cap) return { ok:false, score:0 };
 
   const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
@@ -822,7 +852,6 @@ function __scanBarrowsChestForDrops(lock) {
 
   const hits = [];
   const rows = [];
-
   const slots = __barrowsSlotRects(lock);
 
   for (let i = 0; i < slots.length; i++) {
@@ -3359,19 +3388,26 @@ function stitchChatMessages(lines) {
   }
 
   // ---------- events ----------
-
-// User guide
-
+// User guide popup (themed)
 ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
   try {
     const base = location.href.split("#")[0].split("?")[0];
-    const url = `${base}?guide=1`;
-    const w = 420;
-    const h = 620;
+    const root = base.replace(/\/[^\/]*$/, ""); // folder
+    const url = root + "/userguide.html";
+    const w = 440;
+    const h = 660;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
     window.open(url, "irb_guide", `width=${w},height=${h},resizable=yes`);
+  } catch (e) {
+    console.warn("Guide popup failed:", e);
+  }
+});
+
+
+// User guide
+
   } catch (e) {
     console.warn("Guide popup failed:", e);
   }
@@ -3532,6 +3568,47 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     refreshSetupState();
     stop();
   });
+  // Barrows chest lock reset (Settings)
+  (function () {
+    const btn = ui.btnResetBarrowsLock || __ensureBarrowsResetButton();
+    ui.btnResetBarrowsLock = btn;
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      try { __saveBarrowsChestLock(null); } catch (e) {}
+      try { localStorage.removeItem("irb_barrowsChestRect"); } catch (e) {} // legacy cache key
+      __barrowsChestSeen = false;
+      __barrowsChestLastScanKey = "";
+      __barrowsChestLastScanMs = 0;
+      __barrowsChestScanDone = false;
+      addFeed("Barrows chest lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn");
+      playBeep("warn");
+    });
+  })();
+
+
+  // Ensure Barrows chest lock reset button exists in the Settings drawer (create if missing)
+  function __ensureBarrowsResetButton() {
+    try {
+      let btn = document.getElementById("btnResetBarrowsLock");
+      if (btn) return btn;
+
+      const anchor = document.getElementById("btnResetIgn") || document.getElementById("btnUnlockSetup");
+      if (!anchor || !anchor.parentNode) return null;
+
+      btn = document.createElement("button");
+      btn.id = "btnResetBarrowsLock";
+      btn.type = "button";
+      // match styling of the IGN reset button when possible
+      btn.className = anchor.className || "btn";
+      btn.textContent = "Reset Barrows chest lock";
+      btn.title = "Clears the saved Barrows chest position (press Alt+1 to re-lock).";
+
+      anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      return btn;
+    } catch (e) { return null; }
+  }
+
+
 
   ui.btnRecalibrate && ui.btnRecalibrate.addEventListener("click", () => {
     locateChatboxAndStore();
