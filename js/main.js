@@ -839,6 +839,82 @@ function __downsampleToGray16(capProps, sx, sy, sw, sh, outSz) {
 }
 
 
+function __whitenGray(gray, size) {
+  // Simple local-contrast whitening to reduce UI background influence.
+  // Returns a Uint8Array of same length as input (size*size).
+  const n = gray.length | 0;
+  const out = new Uint8Array(n);
+  const w = size | 0;
+
+  // 3x3 box blur high-pass: out = clamp(gray - blur + 128)
+  for (let y = 0; y < w; y++) {
+    const y0 = (y - 1 < 0 ? 0 : y - 1);
+    const y1 = y;
+    const y2 = (y + 1 >= w ? w - 1 : y + 1);
+    for (let x = 0; x < w; x++) {
+      const x0 = (x - 1 < 0 ? 0 : x - 1);
+      const x1 = x;
+      const x2 = (x + 1 >= w ? w - 1 : x + 1);
+
+      let sum = 0;
+      sum += gray[y0 * w + x0]; sum += gray[y0 * w + x1]; sum += gray[y0 * w + x2];
+      sum += gray[y1 * w + x0]; sum += gray[y1 * w + x1]; sum += gray[y1 * w + x2];
+      sum += gray[y2 * w + x0]; sum += gray[y2 * w + x1]; sum += gray[y2 * w + x2];
+
+      const blur = (sum / 9) | 0;
+      const v = (gray[y * w + x] | 0) - blur + 128;
+      out[y * w + x] = (v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+  }
+  return out;
+}
+
+
+function __edgeMag(gray, size) {
+  // Sobel magnitude on grayscale Uint8Array(size*size). Returns Uint8Array(size*size).
+  const w = size | 0;
+  const n = gray.length | 0;
+  const out = new Uint8Array(n);
+
+  for (let y = 0; y < w; y++) {
+    const y0 = (y - 1 < 0 ? 0 : y - 1);
+    const y2 = (y + 1 >= w ? w - 1 : y + 1);
+    for (let x = 0; x < w; x++) {
+      const x0 = (x - 1 < 0 ? 0 : x - 1);
+      const x2 = (x + 1 >= w ? w - 1 : x + 1);
+
+      const a00 = gray[y0 * w + x0] | 0, a01 = gray[y0 * w + x] | 0, a02 = gray[y0 * w + x2] | 0;
+      const a10 = gray[y  * w + x0] | 0, /*a11*/             a12 = gray[y  * w + x2] | 0;
+      const a20 = gray[y2 * w + x0] | 0, a21 = gray[y2 * w + x] | 0, a22 = gray[y2 * w + x2] | 0;
+
+      const gx = (-a00 + a02) + (-2 * a10 + 2 * a12) + (-a20 + a22);
+      const gy = (-a00 - 2 * a01 - a02) + (a20 + 2 * a21 + a22);
+      const mag = Math.min(255, (Math.abs(gx) + Math.abs(gy)) >> 1);
+      out[y * w + x] = mag;
+    }
+  }
+  return out;
+}
+
+function __computeTemplateAmbiguity(templates) {
+  // Compute nearest-neighbor similarity for each template. Used by adaptive thresholds.
+  if (!templates || templates.length < 2) return;
+  for (let i = 0; i < templates.length; i++) {
+    const ti = templates[i];
+    let best = -1;
+    if (!ti || !ti._feat) { ti._nnScore = null; continue; }
+    for (let j = 0; j < templates.length; j++) {
+      if (i === j) continue;
+      const tj = templates[j];
+      if (!tj || !tj._feat) continue;
+      const s = __znccScore(ti._feat, tj._feat);
+      if (s > best) best = s;
+    }
+    ti._nnScore = (best >= 0 ? best : null);
+  }
+}
+
+
 
 function __detectBarrowsChestTopbarInCapture(cap, topT) {
   // Returns { score, x, y } in capture-local coords, or null.
