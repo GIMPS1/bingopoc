@@ -38,7 +38,12 @@ function __getImgProps(img) {
 
     // For hover-snap/manual selection searches
     searchRadius: 18
-  };
+  }
+
+  // Debug: enable icon match debug arrays (used by chest scanning + manual top-10)
+  // Set to false to disable heavy console.table output.
+  var DEBUG_ICON_MATCH = true;
+;
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
