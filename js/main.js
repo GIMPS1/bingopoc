@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan";
 
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
@@ -410,6 +410,30 @@ const BARROWS_CHEST_SLOTS = {
   spacing: 44,       // horizontal spacing between icons
 };
 
+// Barrows chest scan debug
+const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
+let __lastChestScanDebugAt = 0;
+
+function __mixColorSafe(r, g, b) {
+  if (window.A1lib && typeof A1lib.mixColor === "function") return A1lib.mixColor(r, g, b);
+  // ARGB fallback (opaque)
+  return (255 << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
+}
+
+function __overlayRectAbs(x, y, w, h, rgb, ms = 400) {
+  if (!(window.alt1 && typeof alt1.overLayRect === "function")) return;
+  const color = __mixColorSafe(rgb[0], rgb[1], rgb[2]);
+  const t = 2;
+  try {
+    alt1.overLayRect(color, x, y, w, t, ms, 2);
+    alt1.overLayRect(color, x, y + h - t, w, t, ms, 2);
+    alt1.overLayRect(color, x, y, t, h, ms, 2);
+    alt1.overLayRect(color, x + w - t, y, t, h, ms, 2);
+  } catch (e) {}
+}
+
+
 let __barrowsChestLock = null;   // { x,y,w,h, scale, savedAt }
 let __barrowsChestSeen = false;
 let __barrowsChestLastScanKey = "";
@@ -548,24 +572,63 @@ function __scanBarrowsChestForDrops(lock) {
   if (!cap) return [];
 
   const hits = [];
+  const rows = [];
   const iconSz = BARROWS_CHEST_SLOTS.iconSz|0;
   const y = BARROWS_CHEST_SLOTS.rowY|0;
+
   for (let i=0; i<BARROWS_CHEST_SLOTS.max; i++) {
     const x = (BARROWS_CHEST_SLOTS.startX + i*BARROWS_CHEST_SLOTS.spacing)|0;
 
     // Skip if outside bounds
-    if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) continue;
+    if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) {
+      rows.push({ slot: i, skipped: true });
+      continue;
+    }
+
+    // Visual proof: draw slot boxes in absolute coordinates
+    if (CHEST_SCAN_DEBUG_OVERLAY) {
+      const ax = (lock.x + x)|0;
+      const ay = (lock.y + y)|0;
+      __overlayRectAbs(ax, ay, iconSz, iconSz, [0, 160, 255], 450);
+    }
 
     const selection = {
       capProps: cap,
       rect: { x, y, w: iconSz, h: iconSz },
     };
+
     const best = matchIconFromSelection(selection, __iconTemplates);
+
+    // Record per-slot debug even if not accepted
+    if (CHEST_SCAN_DEBUG_TABLE) {
+      rows.push({
+        slot: i,
+        best: best ? best.name : "",
+        score: best ? Number(best.score.toFixed(4)) : 0,
+        accepted: !!(best && best.accepted),
+        gap: best ? Number((best.gap ?? 0).toFixed(4)) : 0,
+        ratio: best ? Number((best.ratio ?? 0).toFixed(4)) : 0,
+      });
+    }
+
     if (!best || !best.accepted) continue;
 
     // Only include actual Barrows list drops (validateDropName handles allowlist)
     if (!validateDropName(best.name)) continue;
     hits.push({ name: best.name, score: best.score });
+  }
+
+  // Console proof: print one table per ~1s to avoid spam
+  if (CHEST_SCAN_DEBUG_TABLE) {
+    const now = Date.now();
+    if ((now - __lastChestScanDebugAt) > 900) {
+      __lastChestScanDebugAt = now;
+      try {
+        console.group("[CHEST SCAN] slot results");
+        console.table(rows);
+        console.groupEnd();
+      } catch (e) {}
+    }
   }
 
   // De-dupe same icon detected multiple slots (rare but possible with noise)
