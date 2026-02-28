@@ -7,19 +7,19 @@ function __getImgProps(img) {
   return null;
 }
 
-/* IRB v2026-02-28-barrows-iconmatch3-chestlocate (BARROWS ICONS)
+/* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chestlocate";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey";
 
-  console.log("IRB v2026-02-28-barrows-iconmatch3-chestlocate ✅");
+  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-iconmatch3-chestlocate`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -80,9 +80,6 @@ function __getImgProps(img) {
     btnLockChat: $("btnLockChat"),
     btnHighlightChat: $("btnHighlightChat"),
     btnRecalibrate: $("btnRecalibrate"),
-    btnLocateBarrowsChest: $("btnLocateBarrowsChest"),
-    btnClearBarrowsChest: $("btnClearBarrowsChest"),
-    barrowsChestHint: $("barrowsChestHint"),
     optAutoDetect: $("optAutoDetect"),
     optHighlight: $("optHighlight"),
     optStrictDrops: $("optStrictDrops"),
@@ -380,7 +377,7 @@ function __getImgProps(img) {
 // -------- Barrows Chest UI detection (TEST TOOL) --------
 // Uses UI template matching (no OCR) against a cropped top-bar image.
 const CHEST_TEST = {
-  enabled: false,              // keep as a separate automated testing tool
+  enabled: true,              // keep as a separate automated testing tool
   captureSize: 760,           // square capture around mouse for detection
   cooldownMs: 1200,           // throttle to avoid freezes
   coarseStepX: 12,
@@ -399,6 +396,194 @@ const CHEST_TEST = {
 };
 
 const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png"); // user-provided crop
+
+// --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
+const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
+
+// Slot/grid assumptions inside the chest window (can be tuned later)
+const BARROWS_CHEST_SLOTS = {
+  iconSz: 32,
+  max: 10,
+  // relative to chest top-left:
+  rowY: 44,          // y of icon row (top-left of icon)
+  startX: 18,        // x of first icon (top-left of icon)
+  spacing: 44,       // horizontal spacing between icons
+};
+
+let __barrowsChestLock = null;   // { x,y,w,h, scale, savedAt }
+let __barrowsChestSeen = false;
+let __barrowsChestLastScanKey = "";
+let __barrowsChestLastScanMs = 0;
+
+function __loadBarrowsChestLock() {
+  if (__barrowsChestLock) return __barrowsChestLock;
+  try {
+    const raw = localStorage.getItem(BARROWS_CHEST_LOCK_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj.x !== "number" || typeof obj.y !== "number") return null;
+    __barrowsChestLock = obj;
+    return __barrowsChestLock;
+  } catch (e) { return null; }
+}
+
+function __saveBarrowsChestLock(lock) {
+  __barrowsChestLock = lock || null;
+  try {
+    if (!lock) localStorage.removeItem(BARROWS_CHEST_LOCK_KEY);
+    else localStorage.setItem(BARROWS_CHEST_LOCK_KEY, JSON.stringify(lock));
+  } catch (e) {}
+}
+
+function __statusChest(msg, kind="info") {
+  try { showEvent("Barrows chest", msg, kind, true, true); } catch (e) {}
+}
+
+function __captureRect(x, y, w, h) {
+  try {
+    if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+    const img = A1lib.capture(x|0, y|0, w|0, h|0);
+    return __getImgProps(img);
+  } catch (e) { return null; }
+}
+
+function __locateBarrowsChestFromMouse() {
+  // User-triggered: hover/cursor near the chest window and press Alt+1.
+  // We search around the mouse for the topbar template (multi-scale) and then lock the chest rect.
+  const mp = getMousePos && getMousePos();
+  if (!mp) { __statusChest("Mouse position unavailable. Try again.", "warn"); return null; }
+
+  const scanW = 900, scanH = 420;
+  const sx = Math.max(0, (mp.x - (scanW>>1))|0);
+  const sy = Math.max(0, (mp.y - (scanH>>1))|0);
+  const cap = __captureRect(sx, sy, scanW, scanH);
+  if (!cap) { __statusChest("Capture failed. Try again.", "warn"); return null; }
+
+  // Ensure template loaded
+  if (!__barrowsTopbarT) { __statusChest("Topbar template not loaded yet.", "warn"); return null; }
+
+  // Try a small scale set to handle interface scaling differences
+  const scales = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20];
+  let best = null;
+
+  for (const sc of scales) {
+    const tw = Math.max(40, Math.round(__barrowsTopbarT.w * sc));
+    const th = Math.max(10, Math.round(__barrowsTopbarT.h * sc));
+    if (tw >= cap.width || th >= cap.height) continue;
+
+    // Coarse scan step (fast)
+    const step = 6;
+    for (let y=0; y<=cap.height - th; y+=step) {
+      for (let x=0; x<=cap.width - tw; x+=step) {
+        const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, CHEST_TEST.featW, CHEST_TEST.featH);
+        const feat = __centerAndInvStd(gray);
+        const score = __znccScore(__barrowsTopbarT.feat, feat);
+        if (!best || score > best.score) best = { x, y, tw, th, score, scale: sc };
+      }
+    }
+  }
+
+  if (!best) { __statusChest("Unable to search capture area.", "warn"); return null; }
+
+  // Refine locally around best for 1px accuracy at its scale
+  const rx0 = Math.max(0, best.x - 12), ry0 = Math.max(0, best.y - 12);
+  const rx1 = Math.min(cap.width - best.tw, best.x + 12);
+  const ry1 = Math.min(cap.height - best.th, best.y + 12);
+  let refined = best;
+  for (let y=ry0; y<=ry1; y+=1) {
+    for (let x=rx0; x<=rx1; x+=1) {
+      const gray = __downsampleCapToGrayRect(cap, x, y, best.tw, best.th, CHEST_TEST.featW, CHEST_TEST.featH);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(__barrowsTopbarT.feat, feat);
+      if (score > refined.score) refined = { ...best, x, y, score };
+    }
+  }
+
+  if (refined.score < 0.72) {
+    __statusChest(`Not confident enough (score ${refined.score.toFixed(3)}). Hover the top bar and try again.`, "warn");
+    if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locate failed best:", refined);
+    return null;
+  }
+
+  // Convert to absolute chest rect based on known inset geometry.
+  const absTopbarX = sx + refined.x;
+  const absTopbarY = sy + refined.y;
+  const chestX = (absTopbarX - CHEST_TEST.topbarInsetX)|0;
+  const chestY = (absTopbarY - CHEST_TEST.topbarInsetY)|0;
+
+  const lock = {
+    x: chestX,
+    y: chestY,
+    w: CHEST_TEST.chestWidth,
+    h: CHEST_TEST.chestHeight,
+    scale: refined.scale,
+    savedAt: Date.now(),
+  };
+
+  __saveBarrowsChestLock(lock);
+  __statusChest(`Saved chest position at (${lock.x}, ${lock.y}) score ${refined.score.toFixed(3)}`, "ok");
+  if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locked:", lock, "refined:", refined);
+
+  return lock;
+}
+
+function __validateBarrowsChestLock(lock) {
+  if (!lock || !__barrowsTopbarT) return { ok:false, score:0 };
+  // Capture just the topbar area where we expect it.
+  const tw = Math.max(40, Math.round(__barrowsTopbarT.w * (lock.scale || 1)));
+  const th = Math.max(10, Math.round(__barrowsTopbarT.h * (lock.scale || 1)));
+  const cap = __captureRect(lock.x + CHEST_TEST.topbarInsetX, lock.y + CHEST_TEST.topbarInsetY, tw, th);
+  if (!cap) return { ok:false, score:0 };
+
+  const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
+  const feat = __centerAndInvStd(gray);
+  const score = __znccScore(__barrowsTopbarT.feat, feat);
+  return { ok: score >= 0.72, score };
+}
+
+function __scanBarrowsChestForDrops(lock) {
+  if (!lock) return [];
+  if (!__iconTemplates) return [];
+  const cap = __captureRect(lock.x, lock.y, lock.w, lock.h);
+  if (!cap) return [];
+
+  const hits = [];
+  const iconSz = BARROWS_CHEST_SLOTS.iconSz|0;
+  const y = BARROWS_CHEST_SLOTS.rowY|0;
+  for (let i=0; i<BARROWS_CHEST_SLOTS.max; i++) {
+    const x = (BARROWS_CHEST_SLOTS.startX + i*BARROWS_CHEST_SLOTS.spacing)|0;
+
+    // Skip if outside bounds
+    if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) continue;
+
+    const selection = {
+      capProps: cap,
+      rect: { x, y, w: iconSz, h: iconSz },
+    };
+    const best = matchIconFromSelection(selection, __iconTemplates);
+    if (!best || !best.accepted) continue;
+
+    // Only include actual Barrows list drops (validateDropName handles allowlist)
+    if (!validateDropName(best.name)) continue;
+    hits.push({ name: best.name, score: best.score });
+  }
+
+  // De-dupe same icon detected multiple slots (rare but possible with noise)
+  const seen = new Set();
+  const uniq = [];
+  for (const h of hits) {
+    if (seen.has(h.name)) continue;
+    seen.add(h.name);
+    uniq.push(h);
+  }
+  return uniq;
+}
+
+function __formatBarrowsHits(hits) {
+  if (!hits || !hits.length) return "No valid Barrows drops detected!";
+  return "Found: " + hits.map(h => h.name).join(", ");
+}
+
 
 let __barrowsTopbarT = null;          // { w,h, feat }
 let __barrowsTopbarTLoading = null;
@@ -647,156 +832,45 @@ function __drawChestRect(cache, good) {
 }
 
 function __chestTestTick() {
-  if (!CHEST_TEST.enabled) return;
-  if (!__barrowsTopbarT) return; // not loaded yet
+if (!CHEST_TEST.enabled) return;
+if (!__barrowsTopbarT) return; // not loaded yet
 
-  const now = Date.now();
+// Load cached lock once per session
+__loadBarrowsChestLock();
 
-  // Lazy-load cached rect from localStorage once per session (optional).
-  if (!__barrowsChestCache) {
-    const saved = __loadChestCacheFromLocalStorage();
-    if (saved) __barrowsChestCache = saved;
+const now = Date.now();
+
+// If no lock yet, do nothing (user must press Alt+1 to locate)
+if (!__barrowsChestLock) return;
+
+// Validate cached lock
+const v = __validateBarrowsChestLock(__barrowsChestLock);
+if (!v.ok) {
+  if (__barrowsChestSeen) {
+    __barrowsChestSeen = false;
+    __barrowsChestLastScanKey = "";
+    __statusChest("Chest not present.", "info");
   }
-
-  // If we have a cached rect, validate it cheaply and avoid full scanning.
-  if (__barrowsChestCache) {
-    if (now - __lastChestValidateMs < 350) return;
-    __lastChestValidateMs = now;
-
-    const v = __validateChestCache(__barrowsChestCache, __barrowsTopbarT);
-    if (v.ok) {
-      __barrowsChestCache.lastSeenMs = now;
-      if (CHEST_TEST.debug) {
-        __drawChestRect(__barrowsChestCache, true);
-      }
-      return;
-    }
-
-    // Validation failed → clear cache and re-detect.
-    if (CHEST_TEST.debug) {
-      console.log("[BARROWS CHEST] cache invalid (score:", v.score.toFixed(3), ") → re-scan");
-      __drawChestRect(__barrowsChestCache, false);
-    }
-    __barrowsChestCache = null;
-    __saveChestCacheToLocalStorage(null);
-  }
-
-  // No cache: do a throttled global scan.
-  if (now - __lastChestScanMs < CHEST_TEST.cooldownMs) return;
-  __lastChestScanMs = now;
-
-  const found = __detectChestGlobalOnce();
-  if (!found) {
-    if (CHEST_TEST.debug && now - __lastChestSeenMs > 2000) {
-      console.log("[BARROWS CHEST] not found (global scan)");
-    }
-    return;
-  }
-
-  __barrowsChestCache = found;
-  __saveChestCacheToLocalStorage(found);
-  __lastChestSeenMs = now;
-
-  if (CHEST_TEST.debug) {
-    console.log("[BARROWS CHEST] detected score:", found.score.toFixed(3), "rect:", found);
-    __drawChestRect(found, true);
-  }
-  showEvent("Chest test", `Barrows chest detected (score ${found.score.toFixed(3)})`, "ok", true, true);
+  return;
 }
 
-
-// ---------------- Barrows Chest locate (user-assisted) ----------------
-let __barrowsLocateArmed = false;
-
-function __updateBarrowsChestHint() {
-  try {
-    if (!ui.barrowsChestHint) return;
-    const cached = __loadChestCacheFromLocalStorage();
-    if (!cached) {
-      ui.barrowsChestHint.textContent = "Status: not configured";
-      return;
-    }
-    ui.barrowsChestHint.textContent = `Status: locked at (${cached.x}, ${cached.y})`;
-  } catch (e) {}
+// Chest present
+if (!__barrowsChestSeen) {
+  __barrowsChestSeen = true;
+  __statusChest(`Chest detected (score ${v.score.toFixed(3)}). Scanning...`, "ok");
 }
 
-function __armLocateBarrowsChest() {
-  __barrowsLocateArmed = true;
-  CHEST_TEST.enabled = true; // enable validation/scanning loop for testing
-  showEvent("Barrows Chest", "Right-click the Barrows Chest window to lock its position.", "warn", true, true);
-  addFeed("Barrows Chest locate armed: right-click the chest window.", "warn");
+// Throttle scans to avoid spam
+if (now - __barrowsChestLastScanMs < 1200) return;
+__barrowsChestLastScanMs = now;
+
+const hits = __scanBarrowsChestForDrops(__barrowsChestLock);
+const key = hits.map(h=>h.name).sort().join("|");
+if (key !== __barrowsChestLastScanKey) {
+  __barrowsChestLastScanKey = key;
+  __statusChest(__formatBarrowsHits(hits), hits.length ? "ok" : "warn");
+  if (CHEST_TEST.debug) console.log("[BARROWS CHEST] hits:", hits);
 }
-
-function __clearLocateBarrowsChest() {
-  __barrowsLocateArmed = false;
-  __barrowsChestCache = null;
-  __saveChestCacheToLocalStorage(null);
-  __updateBarrowsChestHint();
-  showEvent("Barrows Chest", "Cleared saved chest location.", "ok", true, true);
-}
-
-function __captureAroundPoint(px, py, w, h) {
-  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
-  if (!window.alt1 || !alt1.permissionPixel) return null;
-
-  const rx = ((px | 0) - ((w | 0) >> 1)) | 0;
-  const ry = ((py | 0) - ((h | 0) >> 1)) | 0;
-
-  const cap = A1lib.capture(rx, ry, w | 0, h | 0);
-  if (!cap) return null;
-  return { rx, ry, width: cap.width | 0, height: cap.height | 0, data: cap.data };
-}
-
-function __detectChestNearPoint(px, py) {
-  // Local scan around the user click for robustness and speed.
-  const cap = __captureAroundPoint(px, py, 900, 240);
-  if (!cap) return null;
-
-  const hit = __detectBarrowsChestTopbarInCapture(cap, __barrowsTopbarT);
-  if (!hit) return null;
-
-  // Accept slightly lower here because the user click may be near edges; we refine after lock.
-  const need = Math.min(CHEST_TEST.acceptScore, 0.74);
-  if (!(hit.score >= need)) return null;
-
-  const chestLeft = (cap.rx + hit.x - (CHEST_TEST.topbarInsetX | 0)) | 0;
-  const chestTop  = (cap.ry + hit.y - (CHEST_TEST.topbarInsetY | 0)) | 0;
-  const chestW    = (CHEST_TEST.chestWidth | 0);
-  const chestH    = (CHEST_TEST.chestHeight | 0);
-
-  return { x: chestLeft, y: chestTop, w: chestW, h: chestH, score: hit.score, lastSeenMs: Date.now() };
-}
-
-function __handleLocateBarrowsChestClick(obj) {
-  try {
-    const mx = (obj && obj.mouseAbs && typeof obj.mouseAbs.x === "number") ? obj.mouseAbs.x : (obj && typeof obj.x === "number" ? obj.x : null);
-    const my = (obj && obj.mouseAbs && typeof obj.mouseAbs.y === "number") ? obj.mouseAbs.y : (obj && typeof obj.y === "number" ? obj.y : null);
-    if (mx == null || my == null) {
-      showEvent("Barrows Chest", "Could not read click coordinates.", "bad", true, true);
-      return false;
-    }
-
-    const found = __detectChestNearPoint(mx, my);
-    if (!found) {
-      showEvent("Barrows Chest", "Could not lock chest. Try right-clicking directly on the top bar.", "bad", true, true);
-      return true; // consumed
-    }
-
-    __barrowsChestCache = found;
-    __saveChestCacheToLocalStorage(found);
-    __updateBarrowsChestHint();
-
-    __barrowsLocateArmed = false;
-    showEvent("Barrows Chest", `Locked ✓ (score ${found.score.toFixed(3)})`, "ok", true, true);
-    if (CHEST_TEST.debug) {
-      console.log("[BARROWS CHEST] locked by user click:", found);
-      __drawChestRect(found, true);
-    }
-    return true; // consumed
-  } catch (e) {
-    console.warn("[BARROWS CHEST] locate error", e);
-    return true;
-  }
 }
 
 function __adaptiveThresholds(bestName) {
@@ -1471,8 +1545,6 @@ function updateSetupPanelWrapVisibility() {
     setVisible(ui.setupSummary, locked);
     initHistoryPanel();
     refreshSummary();
-    __updateBarrowsChestHint();
-
     refreshSetupState();
   }
 
@@ -2843,21 +2915,6 @@ function stitchChatMessages(lines) {
     locateChatboxAndStore();
   });
 
-
-  ui.btnLocateBarrowsChest && ui.btnLocateBarrowsChest.addEventListener("click", () => {
-    // Ensure template is loaded so the first click can lock immediately.
-    ensureBarrowsTopbarTemplateLoaded().then(() => {
-      __armLocateBarrowsChest();
-    }).catch((e) => {
-      console.warn("[BARROWS CHEST] template load failed", e);
-      showEvent("Barrows Chest", "Failed to load topbar template. Ensure assets/ui/barrows_topbar.png exists.", "bad", true, true);
-    });
-  });
-
-  ui.btnClearBarrowsChest && ui.btnClearBarrowsChest.addEventListener("click", () => {
-    __clearLocateBarrowsChest();
-  });
-
   ui.btnScanChats && ui.btnScanChats.addEventListener("click", () => {
     if (!chatReader) initChatReader();
     scanChatboxes();
@@ -3012,7 +3069,7 @@ function stitchChatMessages(lines) {
     if (Array.isArray(rc) && typeof rc.push === "function") {
       rc.push((obj) => {
         try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
-        manualSubmitFlow();
+        if (!__loadBarrowsChestLock()) { __locateBarrowsChestFromMouse(); } else { manualSubmitFlow(); }
       });
       return;
     }
@@ -3020,13 +3077,7 @@ function stitchChatMessages(lines) {
     // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
     window.alt1onrightclick = (obj) => {
       try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
-      try {
-        if (__barrowsLocateArmed) {
-          const consumed = __handleLocateBarrowsChestClick(obj);
-          if (consumed) return;
-        }
-      } catch (e) {}
-      manualSubmitFlow();
+      if (!__loadBarrowsChestLock()) { __locateBarrowsChestFromMouse(); } else { manualSubmitFlow(); }
     };
   }
 
