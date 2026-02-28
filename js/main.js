@@ -7,14 +7,14 @@ function __getImgProps(img) {
   return null;
 }
 
-/* IRB v2026-02-28-barrows-iconmatch2-chestscan-v5p2 (BARROWS ICONS)
+/* IRB v2026-02-28-barrows-iconmatch2-chestscan-v5p6-settingsclear+toast
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -115,6 +115,9 @@ btnCloseSettings: $("btnCloseSettings"),
     btnLockChat: $("btnLockChat"),
     btnHighlightChat: $("btnHighlightChat"),
     btnRecalibrate: $("btnRecalibrate"),
+
+    // Settings - barrows
+    btnClearBarrowsLock: $("btnClearBarrowsLock"),
     optAutoDetect: $("optAutoDetect"),
     optHighlight: $("optHighlight"),
     optStrictDrops: $("optStrictDrops"),
@@ -143,7 +146,7 @@ btnCloseSettings: $("btnCloseSettings"),
   function openSettingsPopup() {
   const url = buildSettingsUrl();
   const w = 356;
-  const h = 560;
+  const h = 633;
 
   if (window.alt1 && typeof alt1.openPopup === "function") {
     try { alt1.openPopup(url, w, h); return; } catch (e) {}
@@ -441,6 +444,45 @@ function startIdleTicker() {
     return { ok: true, text: text, x: x, y: y, w: w, h: h };
   }
 
+  // Mouse tooltip (3s) for submit confirmation
+  let __mouseToastTimer = 0;
+  function __showMouseToast(text, kind="ok") {
+    try {
+      const el = document.getElementById("mouseSubmitToast");
+      if (!el) return;
+      el.textContent = String(text || "");
+      // simple kind styling
+      if (kind === "ok") el.style.border = "1px solid rgba(80, 200, 120, 0.9)";
+      else if (kind === "warn") el.style.border = "1px solid rgba(240, 180, 60, 0.9)";
+      else el.style.border = "1px solid rgba(220, 80, 80, 0.9)";
+
+      const mp = getMousePos();
+      const pad = 14;
+      let x = (mp?.x ?? 80) + pad;
+      let y = (mp?.y ?? 80) + pad;
+
+      // keep on-screen
+      const vw = window.innerWidth || 520;
+      const vh = window.innerHeight || 520;
+      el.style.display = "block";
+      el.style.left = x + "px";
+      el.style.top = y + "px";
+      // after display, clamp using actual size
+      const rect = el.getBoundingClientRect();
+      if (rect.right > vw) x = Math.max(4, vw - rect.width - 4);
+      if (rect.bottom > vh) y = Math.max(4, vh - rect.height - 4);
+      el.style.left = x + "px";
+      el.style.top = y + "px";
+
+      if (__mouseToastTimer) clearTimeout(__mouseToastTimer);
+      __mouseToastTimer = setTimeout(() => {
+        try { el.style.display = "none"; } catch (e) {}
+      }, 3000);
+    } catch (e) {}
+  }
+
+
+
   function extractDropCandidatesFromOcr(text) {
     const t = (text || "").replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
     if (!t) return [];
@@ -617,6 +659,9 @@ let __barrowsChestLastScanMs = 0;
 let __barrowsChestScanStartMs = 0;
 let __barrowsChestScanDone = false;
 
+// Lock validation failures (auto-reset invalid cached position)
+let __barrowsChestInvalidCount = 0;
+let __barrowsChestLastInvalidMs = 0;
 function __loadBarrowsChestLock() {
   if (__barrowsChestLock) return __barrowsChestLock;
   try {
@@ -1271,10 +1316,23 @@ if (!__barrowsChestLock) return;
 // Validate cached lock
 const v = __validateBarrowsChestLock(__barrowsChestLock);
 if (!v.ok) {
+  // Track consecutive invalidations; only auto-clear after a few to avoid flicker.
+  const last = __barrowsChestLastInvalidMs || 0;
+  if (now - last > 1500) __barrowsChestInvalidCount = 0; // too long since last failure; reset streak
+  __barrowsChestInvalidCount = (__barrowsChestInvalidCount || 0) + 1;
+  __barrowsChestLastInvalidMs = now;
+
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
     __barrowsChestLastScanKey = "";
     __barrowsChestScanDone = false;
+  }
+
+  // After N consecutive failed validations, show a hint (lock is NOT auto-cleared).
+  if (__barrowsChestInvalidCount >= 5) {
+    __barrowsChestInvalidCount = 0;
+    __statusChest("Chest not present. If the window moved, clear Barrows lock in Settings and re-locate with Alt+1.", "info");
+  } else {
     __statusChest("Chest not present.", "info");
   }
   return;
@@ -2729,6 +2787,7 @@ function initHistoryPanel() {
     const url = `${base}/b/${bingoId}/api/mock_drop`;
     const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    try { __showMouseToast(`Submitted: ${canonical}${amount ? " x"+amount : ""}`, "ok"); } catch (e) {}
     return true;
   }
 
@@ -3345,7 +3404,7 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
     const root = base.replace(/\/[^\/]*$/, ""); // folder
     const url = root + "/userguide.html";
     const w = 440;
-    const h = 660;
+    const h = 789;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
@@ -3455,6 +3514,25 @@ ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
     playBeep("warn");
     stop();
   });
+
+
+  // Settings - Barrows chest
+  ui.btnClearBarrowsLock && ui.btnClearBarrowsLock.addEventListener("click", () => {
+    try {
+      __saveBarrowsChestLock(null);
+      __barrowsChestSeen = false;
+      __barrowsChestLastScanKey = "";
+      __barrowsChestLastScanMs = 0;
+      __barrowsChestScanStartMs = 0;
+      __barrowsChestScanDone = false;
+      __barrowsChestInvalidCount = 0;
+      __statusChest("Barrows chest lock cleared. Hover chest and press Alt+1 to re-locate.", "warn");
+      playBeep("warn");
+    } catch (e) {
+      console.warn("[BARROWS CHEST] Failed to clear lock:", e);
+    }
+  });
+
 
   
 ui.btnAutoLocateChat && ui.btnAutoLocateChat.addEventListener("click", () => {

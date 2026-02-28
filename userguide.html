@@ -62,13 +62,13 @@
     </section>
   </div>
 
- <script>
-  (function(){
-    const btn = document.getElementById("btnCloseGuide");
-    if (btn) btn.addEventListener("click", () => { 
-      try { window.close(); } catch(e) {} 
-    });
-  })();
-</script>
+  <script>
+    (function(){
+      const btn = document.getElementById("btnCloseGuide");
+      if (btn) btn.addEventListener("click", () => { try { window.close(); } catch(e) {} });
+      // Alt1 popup windows sometimes ignore close; provide fallback message
+      try { if (window.alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("IRB Guide"); } catch(e) {}
+    })();
+  </script>
 </body>
 </html>

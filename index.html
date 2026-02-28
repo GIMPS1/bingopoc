@@ -217,7 +217,16 @@
           </div>
         </div>
 
+        
         <div class="section">
+          <div class="sectionTitle">Barrows chest</div>
+          <div class="hint">If the chest window moved or boxes misalign, clear the saved lock and re-locate with Alt+1.</div>
+          <div class="rowInline" style="margin-top:10px; gap:10px; flex-wrap:wrap;">
+            <button class="btn danger small" id="btnClearBarrowsLock">Clear Barrows lock</button>
+          </div>
+        </div>
+
+<div class="section">
           <div class="sectionTitle">Chatbox</div>
           <button class="btn secondary" id="btnScanChats">Scan & highlight chatboxes</button>
 
@@ -262,5 +271,7 @@
 
   <script src="./js/main.js"></script>
 
+
+  <div id="mouseSubmitToast" style="position:fixed; display:none; z-index:999999; padding:6px 10px; border-radius:8px; font-size:12px; background:rgba(20,20,20,0.92); color:#fff; pointer-events:none; box-shadow:0 4px 16px rgba(0,0,0,0.35);"></div>
 </body>
 </html>
