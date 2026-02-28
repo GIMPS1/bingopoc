@@ -143,7 +143,7 @@ btnCloseSettings: $("btnCloseSettings"),
   function openSettingsPopup() {
   const url = buildSettingsUrl();
   const w = 356;
-  const h = 560;
+  const h = 633;
 
   if (window.alt1 && typeof alt1.openPopup === "function") {
     try { alt1.openPopup(url, w, h); return; } catch (e) {}
@@ -3345,7 +3345,7 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
     const root = base.replace(/\/[^\/]*$/, ""); // folder
     const url = root + "/userguide.html";
     const w = 440;
-    const h = 660;
+    const h = 789;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
