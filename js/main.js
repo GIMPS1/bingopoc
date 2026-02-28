@@ -560,6 +560,9 @@ function __captureFullRs() {
   return { capImg, capProps, rx, ry };
 }
 
+// Compatibility alias (some parts of the code call captureFullRs without the __ prefix)
+function captureFullRs(){ return __captureFullRs(); }
+
 function __captureRegion(rx, ry, rw, rh) {
   if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
   if (!window.alt1 || !alt1.permissionPixel) return null;
