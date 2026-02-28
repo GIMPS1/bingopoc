@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -143,7 +143,7 @@ btnCloseSettings: $("btnCloseSettings"),
   function openSettingsPopup() {
   const url = buildSettingsUrl();
   const w = 356;
-  const h = 633;
+  const h = 560;
 
   if (window.alt1 && typeof alt1.openPopup === "function") {
     try { alt1.openPopup(url, w, h); return; } catch (e) {}
@@ -188,6 +188,9 @@ btnCloseSettings: $("btnCloseSettings"),
   // ---------- UI helpers ----------
   const FEED_MAX = 3;
   const feedItems = [];
+
+  let __lastNonIdleEventAt = Date.now();
+  let __idleModeOn = false;
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -239,12 +242,6 @@ btnCloseSettings: $("btnCloseSettings"),
     ui.eventSub.textContent = subtitle;
 
 
-
-    // Leaving idle mode
-    __idleModeOn = false;
-    __lastNonIdleEventAt = Date.now();
-    __stopIdleDots();
-    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
 // Idle mode styling
 if (ui.eventLine) {
   if (isIdle) ui.eventLine.classList.add("idle");
@@ -299,47 +296,26 @@ if (!isIdle) {
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
-let __idleModeOn = false;
-let __lastNonIdleEventAt = Date.now();
-let __idleDotsTimer = null;
-let __idleDotsPhase = 0;
-
-function __stopIdleDots() {
-  if (__idleDotsTimer) { try { clearInterval(__idleDotsTimer); } catch (e) {} }
-  __idleDotsTimer = null;
-  __idleDotsPhase = 0;
-}
-
-function __startIdleDots() {
-  __stopIdleDots();
-  __idleDotsTimer = setInterval(() => {
-    try {
-      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
-      __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
-      const dots = ".".repeat(__idleDotsPhase);
-      ui.eventSub.textContent = "Waiting for drops" + dots;
-    } catch (e) {}
-  }, 650);
-}
 
 function showIdleRunning() {
+  if (!ui.eventLine) return;
   // Only show idle when setup is ready (otherwise setup hints should stay visible)
   try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
   if (__idleModeOn) return;
   __idleModeOn = true;
-  if (ui.eventLine) ui.eventLine.classList.add("idle");
-  if (ui.eventTitle) ui.eventTitle.textContent = "Running";
-  if (ui.eventSub) ui.eventSub.textContent = "Waiting for drops";
-  __startIdleDots();
+  showEvent("Running", "Waiting for drops", "ok", false, false, true);
 }
 
 function startIdleTicker() {
+  // If nothing has updated the event line recently, revert to idle status.
   const idleMs = 12000;
   setInterval(() => {
     try {
       const now = Date.now();
       if (__idleModeOn) return;
-      if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
+      if ((now - __lastNonIdleEventAt) >= idleMs) {
+        showIdleRunning();
+      }
     } catch (e) {}
   }, 700);
 }
@@ -574,6 +550,42 @@ const BARROWS_CHEST_SLOTS = {
   spacing: 55,       // horizontal spacing between icons
 };
 
+// --- Chest geometry helpers (drift-free anchoring + slot rects) ---
+function __chestScale(lock) {
+  if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
+  if (lock && typeof lock.w === "number" && lock.w > 0) return lock.w / CHEST_TEST.chestWidth;
+  return 1.0;
+}
+
+function __scaledChestInsets(scale) {
+  return {
+    insetX: Math.round(CHEST_TEST.topbarInsetX * scale),
+    insetY: Math.round(CHEST_TEST.topbarInsetY * scale),
+  };
+}
+
+function __scaledChestSize(scale) {
+  return {
+    w: Math.round(CHEST_TEST.chestWidth * scale),
+    h: Math.round(CHEST_TEST.chestHeight * scale),
+  };
+}
+
+function __barrowsSlotRects(lock) {
+  const s = __chestScale(lock);
+  // Round ONCE per parameter; build x positions as x0 + i*dx to prevent cumulative drift.
+  const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
+  const y0   = Math.round(BARROWS_CHEST_SLOTS.rowY   * s);
+  const x0   = Math.round(BARROWS_CHEST_SLOTS.startX * s);
+  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing* s);
+
+  const rects = [];
+  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
+    rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
+  }
+  return rects;
+}
+
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
@@ -617,9 +629,6 @@ let __barrowsChestLastScanMs = 0;
 let __barrowsChestScanStartMs = 0;
 let __barrowsChestScanDone = false;
 
-// Lock validation failures (auto-reset invalid cached position)
-let __barrowsChestInvalidCount = 0;
-let __barrowsChestLastInvalidMs = 0;
 function __loadBarrowsChestLock() {
   if (__barrowsChestLock) return __barrowsChestLock;
   try {
@@ -710,18 +719,23 @@ function __locateBarrowsChestFromMouse() {
     return null;
   }
 
-  // Convert to absolute chest rect based on known inset geometry.
+  // Convert to absolute chest rect based on known inset geometry (scaled, drift-free).
   const absTopbarX = sx + refined.x;
   const absTopbarY = sy + refined.y;
-  const chestX = (absTopbarX - CHEST_TEST.topbarInsetX)|0;
-  const chestY = (absTopbarY - CHEST_TEST.topbarInsetY)|0;
+
+  const scale = refined.scale || 1.0;
+  const { insetX, insetY } = __scaledChestInsets(scale);
+  const { w, h } = __scaledChestSize(scale);
+
+  const chestX = (absTopbarX - insetX) | 0;
+  const chestY = (absTopbarY - insetY) | 0;
 
   const lock = {
     x: chestX,
     y: chestY,
-    w: CHEST_TEST.chestWidth,
-    h: CHEST_TEST.chestHeight,
-    scale: refined.scale,
+    w,
+    h,
+    scale,
     savedAt: Date.now(),
   };
 
@@ -734,10 +748,12 @@ function __locateBarrowsChestFromMouse() {
 
 function __validateBarrowsChestLock(lock) {
   if (!lock || !__barrowsTopbarT) return { ok:false, score:0 };
-  // Capture just the topbar area where we expect it.
-  const tw = Math.max(40, Math.round(__barrowsTopbarT.w * (lock.scale || 1)));
-  const th = Math.max(10, Math.round(__barrowsTopbarT.h * (lock.scale || 1)));
-  const cap = __captureRect(lock.x + CHEST_TEST.topbarInsetX, lock.y + CHEST_TEST.topbarInsetY, tw, th);
+  const s = __chestScale(lock);
+  // Capture just the topbar area where we expect it (scaled).
+  const tw = Math.max(40, Math.round(__barrowsTopbarT.w * s));
+  const th = Math.max(10, Math.round(__barrowsTopbarT.h * s));
+  const { insetX, insetY } = __scaledChestInsets(s);
+  const cap = __captureRect(lock.x + insetX, lock.y + insetY, tw, th);
   if (!cap) return { ok:false, score:0 };
 
   const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
@@ -806,11 +822,13 @@ function __scanBarrowsChestForDrops(lock) {
 
   const hits = [];
   const rows = [];
-  const iconSz = BARROWS_CHEST_SLOTS.iconSz|0;
-  const y = BARROWS_CHEST_SLOTS.rowY|0;
 
-  for (let i=0; i<BARROWS_CHEST_SLOTS.max; i++) {
-    const x = (BARROWS_CHEST_SLOTS.startX + i*BARROWS_CHEST_SLOTS.spacing)|0;
+  const slots = __barrowsSlotRects(lock);
+
+  for (let i = 0; i < slots.length; i++) {
+    const x = slots[i].x | 0;
+    const y = slots[i].y | 0;
+    const iconSz = slots[i].w | 0;
 
     // Skip if outside bounds
     if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) {
@@ -1274,24 +1292,10 @@ if (!__barrowsChestLock) return;
 // Validate cached lock
 const v = __validateBarrowsChestLock(__barrowsChestLock);
 if (!v.ok) {
-  // Track consecutive invalidations; only auto-clear after a few to avoid flicker.
-  const last = __barrowsChestLastInvalidMs || 0;
-  if (now - last > 1500) __barrowsChestInvalidCount = 0; // too long since last failure; reset streak
-  __barrowsChestInvalidCount = (__barrowsChestInvalidCount || 0) + 1;
-  __barrowsChestLastInvalidMs = now;
-
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
     __barrowsChestLastScanKey = "";
     __barrowsChestScanDone = false;
-  }
-
-  // After N consecutive failed validations, clear the cached lock and prompt user to re-locate.
-  if (__barrowsChestInvalidCount >= 5) {
-    __barrowsChestInvalidCount = 0;
-    __saveBarrowsChestLock(null);
-    __statusChest("Chest position invalidated. Re-locate with Alt+1.", "warn");
-  } else {
     __statusChest("Chest not present.", "info");
   }
   return;
@@ -3355,14 +3359,15 @@ function stitchChatMessages(lines) {
   }
 
   // ---------- events ----------
-// User guide popup (themed)
+
+// User guide
+
 ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
   try {
     const base = location.href.split("#")[0].split("?")[0];
-    const root = base.replace(/\/[^\/]*$/, ""); // folder
-    const url = root + "/userguide.html";
-    const w = 440;
-    const h = 789;
+    const url = `${base}?guide=1`;
+    const w = 420;
+    const h = 620;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
@@ -3371,6 +3376,7 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
     console.warn("Guide popup failed:", e);
   }
 });
+
 ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
   try { window.close(); } catch (e) {}
 });
