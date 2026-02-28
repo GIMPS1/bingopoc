@@ -365,6 +365,202 @@
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
   let __iconTemplatesLoading = null;
+// -------- Barrows Chest UI detection (TEST TOOL) --------
+// Uses UI template matching (no OCR) against a cropped top-bar image.
+const CHEST_TEST = {
+  enabled: true,              // keep as a separate automated testing tool
+  captureSize: 760,           // square capture around mouse for detection
+  cooldownMs: 1200,           // throttle to avoid freezes
+  coarseStepX: 12,
+  coarseStepY: 4,
+  refineRadius: 14,
+  refineStep: 2,
+  featW: 96,                  // downsampled feature width
+  featH: 10,                  // downsampled feature height
+  acceptScore: 0.78,          // UI match threshold
+  // Chest geometry relative to the matched topbar crop
+  chestWidth: 560,
+  chestHeight: 312,
+  topbarInsetX: 37,           // (560 - 486) / 2
+  topbarInsetY: 0,
+  debug: true,
+};
+
+const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png"); // user-provided crop
+
+let __barrowsTopbarT = null;          // { w,h, feat }
+let __barrowsTopbarTLoading = null;
+let __lastChestTestMs = 0;
+let __lastChestSeenMs = 0;
+let __lastChestRect = null;
+
+async function ensureBarrowsTopbarTemplateLoaded() {
+  if (__barrowsTopbarT) return __barrowsTopbarT;
+  if (__barrowsTopbarTLoading) return __barrowsTopbarTLoading;
+
+  __barrowsTopbarTLoading = (async () => {
+    const img = await __loadImageToCanvasImageData(BARROWS_TOPBAR_URL);
+    if (!img) throw new Error("Failed to load barrows_topbar.png");
+    const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, CHEST_TEST.featW, CHEST_TEST.featH);
+    const feat = __centerAndInvStd(featGray);
+    __barrowsTopbarT = { w: img.width, h: img.height, feat };
+    return __barrowsTopbarT;
+  })().finally(() => { __barrowsTopbarTLoading = null; });
+
+  return __barrowsTopbarTLoading;
+}
+
+async function __loadImageToCanvasImageData(url) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => {
+      try {
+        const c = document.createElement("canvas");
+        c.width = im.naturalWidth || im.width;
+        c.height = im.naturalHeight || im.height;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(im, 0, 0);
+        const id = ctx.getImageData(0, 0, c.width, c.height);
+        resolve(id);
+      } catch (e) { resolve(null); }
+    };
+    im.onerror = () => resolve(null);
+    im.src = url;
+  });
+}
+
+function __downsampleImageDataToGrayRect(imgData, sx, sy, sw, sh, outW, outH) {
+  // Returns Uint8Array length outW*outH (0..255)
+  const out = new Uint8Array((outW | 0) * (outH | 0));
+  const src = imgData.data;
+  const W = imgData.width | 0;
+  const H = imgData.height | 0;
+
+  const x0 = sx | 0, y0 = sy | 0, w0 = sw | 0, h0 = sh | 0;
+  for (let oy = 0; oy < outH; oy++) {
+    const fy = (oy + 0.5) / outH;
+    const y = (y0 + fy * h0) | 0;
+    const yy = (y < 0 ? 0 : (y >= H ? H - 1 : y));
+    for (let ox = 0; ox < outW; ox++) {
+      const fx = (ox + 0.5) / outW;
+      const x = (x0 + fx * w0) | 0;
+      const xx = (x < 0 ? 0 : (x >= W ? W - 1 : x));
+      const i = (yy * W + xx) * 4;
+      const r = src[i] | 0, g = src[i + 1] | 0, b = src[i + 2] | 0;
+      out[oy * outW + ox] = (r * 3 + g * 6 + b) / 10;
+    }
+  }
+  return out;
+}
+
+function __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outW, outH) {
+  // capProps is from __getImgProps (data is RGBA)
+  const out = new Uint8Array((outW | 0) * (outH | 0));
+  const src = capProps.data;
+  const W = capProps.width | 0;
+  const H = capProps.height | 0;
+
+  const x0 = sx | 0, y0 = sy | 0, w0 = sw | 0, h0 = sh | 0;
+  for (let oy = 0; oy < outH; oy++) {
+    const fy = (oy + 0.5) / outH;
+    const y = (y0 + fy * h0) | 0;
+    const yy = (y < 0 ? 0 : (y >= H ? H - 1 : y));
+    for (let ox = 0; ox < outW; ox++) {
+      const fx = (ox + 0.5) / outW;
+      const x = (x0 + fx * w0) | 0;
+      const xx = (x < 0 ? 0 : (x >= W ? W - 1 : x));
+      const i = (yy * W + xx) * 4;
+      const r = src[i] | 0, g = src[i + 1] | 0, b = src[i + 2] | 0;
+      out[oy * outW + ox] = (r * 3 + g * 6 + b) / 10;
+    }
+  }
+  return out;
+}
+
+function __detectBarrowsChestTopbarInCapture(cap, topT) {
+  // Returns { score, x, y } in capture-local coords, or null.
+  const capProps = cap.capProps;
+  const tW = topT.w | 0, tH = topT.h | 0;
+  if (capProps.width < tW || capProps.height < tH) return null;
+
+  const outW = CHEST_TEST.featW | 0;
+  const outH = CHEST_TEST.featH | 0;
+
+  let best = null;
+
+  const maxX = (capProps.width - tW) | 0;
+  const maxY = (capProps.height - tH) | 0;
+
+  // Coarse pass
+  for (let y = 0; y <= maxY; y += CHEST_TEST.coarseStepY) {
+    for (let x = 0; x <= maxX; x += CHEST_TEST.coarseStepX) {
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tW, tH, outW, outH);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(topT.feat, feat);
+      if (!best || score > best.score) best = { score, x, y };
+    }
+  }
+
+  if (!best) return null;
+
+  // Refine around best
+  let rb = best;
+  const rr = CHEST_TEST.refineRadius | 0;
+  for (let dy = -rr; dy <= rr; dy += CHEST_TEST.refineStep) {
+    const y = rb.y + dy;
+    if (y < 0 || y > maxY) continue;
+    for (let dx = -rr; dx <= rr; dx += CHEST_TEST.refineStep) {
+      const x = rb.x + dx;
+      if (x < 0 || x > maxX) continue;
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tW, tH, outW, outH);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(topT.feat, feat);
+      if (score > rb.score) rb = { score, x, y };
+    }
+  }
+
+  return rb;
+}
+
+function __chestTestTick() {
+  if (!CHEST_TEST.enabled) return;
+  const now = Date.now();
+  if (now - __lastChestTestMs < CHEST_TEST.cooldownMs) return;
+  __lastChestTestMs = now;
+
+  if (!__barrowsTopbarT) return; // not loaded yet
+
+  // Use capture-around-mouse as a safe, bounded search area (test tool).
+  const cap = __captureAroundMouse(CHEST_TEST.captureSize);
+  if (!cap) return;
+
+  const hit = __detectBarrowsChestTopbarInCapture(cap, __barrowsTopbarT);
+  if (!hit || !(hit.score >= CHEST_TEST.acceptScore)) {
+    if (CHEST_TEST.debug && now - __lastChestSeenMs > 2000) {
+      console.log("[BARROWS CHEST] not found (best:", hit ? hit.score.toFixed(3) : "none", ")");
+    }
+    return;
+  }
+
+  __lastChestSeenMs = now;
+
+  // Convert capture-local to screen coords and infer full chest rect.
+  const chestLeft = (cap.rx + hit.x - CHEST_TEST.topbarInsetX) | 0;
+  const chestTop  = (cap.ry + hit.y - CHEST_TEST.topbarInsetY) | 0;
+
+  const rect = { x: chestLeft, y: chestTop, w: CHEST_TEST.chestWidth, h: CHEST_TEST.chestHeight, score: hit.score };
+  __lastChestRect = rect;
+
+  // Visualize and log.
+  try { drawOutlineRect(chestLeft, chestTop, rect.w, rect.h, 800, 3, 0x00ff00); } catch (e) {}
+
+  if (CHEST_TEST.debug) {
+    console.log("[BARROWS CHEST] detected score", hit.score.toFixed(3), "at", rect);
+  }
+  showEvent("Chest test", `Barrows chest detected (score ${hit.score.toFixed(3)})`, "ok", true, false);
+}
+
 
   function __sanitizeIconFileName(itemName) {
     // Match the download script naming: letters/numbers/underscore only
@@ -2510,6 +2706,9 @@ function stitchChatMessages(lines) {
 
   async function poll() {
     if (!running || !chatReader) return;
+    // Barrows chest UI detection test (template match)
+    try { __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
+
     if (!isSetupReady()) return;
 
     if (chatReader.pos === null) {
@@ -2824,6 +3023,8 @@ function stitchChatMessages(lines) {
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   await loadAllowlistFile();
+  try { await ensureBarrowsTopbarTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
+
 
   loadBingosAndPopulate();
 
