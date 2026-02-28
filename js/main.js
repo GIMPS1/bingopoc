@@ -365,307 +365,331 @@
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
   let __iconTemplatesLoading = null;
+// -------- Barrows Chest UI detection (TEST TOOL) --------
+// Uses UI template matching (no OCR) against a cropped top-bar image.
+const CHEST_TEST = {
+  enabled: true,              // keep as a separate automated testing tool
+  captureSize: 760,           // square capture around mouse for detection
+  cooldownMs: 1200,           // throttle to avoid freezes
+  coarseStepX: 12,
+  coarseStepY: 4,
+  refineRadius: 14,
+  refineStep: 2,
+  featW: 96,                  // downsampled feature width
+  featH: 10,                  // downsampled feature height
+  acceptScore: 0.78,          // UI match threshold
+  // Chest geometry relative to the matched topbar crop
+  chestWidth: 560,
+  chestHeight: 312,
+  topbarInsetX: 37,           // (560 - 486) / 2
+  topbarInsetY: 0,
+  debug: true,
+};
 
-  function __sanitizeIconFileName(itemName) {
-    // Match the download script naming: letters/numbers/underscore only
-    return String(itemName || "")
-      .trim()
-      .replace(/\s+/g, " ")
-      .replace(/[^\w\d]+/g, "_")
-      .replace(/^_+|_+$/g, "");
-  }
+const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png"); // user-provided crop
 
-  function __localIconUrl(itemName, size) {
-    const base = assetUrl("assets/barrows");
-    const base2 = String(base).replace(/\/$/, "");
-    // Prefer size-suffixed filenames if they exist in a future iconset, otherwise use plain.
-    const plain = `${__sanitizeIconFileName(itemName)}.png`;
-    const sized = size ? `${__sanitizeIconFileName(itemName)}_${size}.png` : null;
-    return sized ? `${base2}/${sized}` : `${base2}/${plain}`;
-  }
+let __barrowsTopbarT = null;          // { w,h, feat }
+let __barrowsTopbarTLoading = null;
+let __lastChestTestMs = 0;
+let __lastChestSeenMs = 0;
+let __lastChestRect = null;
 
-  async function ensureIconTemplatesLoaded() {
-    if (__iconTemplates) return __iconTemplates;
-    if (__iconTemplatesLoading) return __iconTemplatesLoading;
+async function ensureBarrowsTopbarTemplateLoaded() {
+  if (__barrowsTopbarT) return __barrowsTopbarT;
+  if (__barrowsTopbarTLoading) return __barrowsTopbarTLoading;
 
-    __iconTemplatesLoading = (async () => {
-      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
-        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
-        __iconTemplates = [];
-        return __iconTemplates;
-      }
+  __barrowsTopbarTLoading = (async () => {
+    const img = await __loadImageToCanvasImageData(BARROWS_TOPBAR_URL);
+    if (!img) throw new Error("Failed to load barrows_topbar.png");
+    const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, CHEST_TEST.featW, CHEST_TEST.featH);
+    const feat = __centerAndInvStd(featGray);
+    __barrowsTopbarT = { w: img.width, h: img.height, feat };
+    return __barrowsTopbarT;
+  })().finally(() => { __barrowsTopbarTLoading = null; });
 
-      // Load bundled icon map (name/size/file). Icons live in ./assets/barrows/
-      let iconMap = [];
+  return __barrowsTopbarTLoading;
+}
+
+async function __loadImageToCanvasImageData(url) {
+  return new Promise((resolve) => {
+    const im = new Image();
+    im.crossOrigin = "anonymous";
+    im.onload = () => {
       try {
-        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
-        iconMap = await res.json();
-        if (!Array.isArray(iconMap)) throw new Error("barrows_icon_map.json must be an array");
-      } catch (e) {
-        console.warn("[icon] failed to load assets/barrows_icon_map.json", e);
-        __iconTemplates = [];
-        return __iconTemplates;
-      }
+        const c = document.createElement("canvas");
+        c.width = im.naturalWidth || im.width;
+        c.height = im.naturalHeight || im.height;
+        const ctx = c.getContext("2d", { willReadFrequently: true });
+        ctx.drawImage(im, 0, 0);
+        const id = ctx.getImageData(0, 0, c.width, c.height);
+        resolve(id);
+      } catch (e) { resolve(null); }
+    };
+    im.onerror = () => resolve(null);
+    im.src = url;
+  });
+}
 
-      // Optional allowlist filter: only keep drops that exist in allowlist.drops
-      if (allowlist && Array.isArray(allowlist.drops) && allowlist.drops.length) {
-        const allowSet = new Set(allowlist.drops.map(s => (s || "").toLowerCase()));
-        iconMap = iconMap.filter(e => allowSet.has(String(e?.name || "").toLowerCase()));
-      }
+function __downsampleImageDataToGrayRect(imgData, sx, sy, sw, sh, outW, outH) {
+  // Returns Uint8Array length outW*outH (0..255)
+  const out = new Uint8Array((outW | 0) * (outH | 0));
+  const src = imgData.data;
+  const W = imgData.width | 0;
+  const H = imgData.height | 0;
 
-      // Load templates
-      const templates = [];
-      const fails = [];
-      const base = assetUrl("assets/barrows");
-      const wantedSizes = Array.isArray(ICON_TEMPLATE_SIZES) ? new Set(ICON_TEMPLATE_SIZES) : null;
-
-      for (const entry of iconMap) {
-        const name = entry?.name;
-        const size = Number(entry?.size);
-        const file = entry?.file;
-
-        if (!name || !file) continue;
-        if (wantedSizes && !wantedSizes.has(size)) continue;
-
-        const base2 = String(base).replace(/\/$/, "");
-        const url = `${base2}/${file}`;
-        try {
-          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
-          if (img) templates.push({ name, size, file, url, img });
-          else fails.push({ name, size, file, reason: "imageDataFromUrl returned null" });
-        } catch (err) {
-          fails.push({ name, size, file, reason: String(err?.message || err) });
-        }
-      }
-
-      console.log(`[icon] templates loaded: ${templates.length} (fails: ${fails.length})`);
-      if (fails.length) console.warn("[icon] template load failures (first 10):", fails.slice(0, 10));
-
-      __iconTemplates = templates;
-      return __iconTemplates;
-    })();
-
-    return __iconTemplatesLoading;
-  }
-
-
-  function normalizeAlt1OcrResult(val) {
-    if (val == null) return "";
-    if (typeof val === "string") {
-      const s = val.trim();
-      if (!s) return "";
-      if (s[0] === "{" && s.indexOf('"text"') !== -1) {
-        try {
-          const obj = JSON.parse(s);
-          if (obj && typeof obj.text === "string") return obj.text.trim();
-        } catch (e) {}
-      }
-      return s;
-    }
-    if (typeof val === "object") {
-      if (typeof val.text === "string") return val.text.trim();
-      try {
-        const s = String(val);
-        if (s[0] === "{" && s.indexOf('"text"') !== -1) {
-          const obj = JSON.parse(s);
-          if (obj && typeof obj.text === "string") return obj.text.trim();
-        }
-      } catch (e) {}
-    }
-    return String(val).trim();
-  }
-
-  function readStackQtyAt(rsX, rsY) {
-    if (!window.alt1 || !alt1.permissionPixel) return 1;
-    // tight region: top-left corner digits
-    const w = 26, h = 18;
-    const bid = alt1.bindRegion(rsX, rsY, w, h);
-    if (!bid) return 1;
-
-    const optsSmall = JSON.stringify({ fontname: "small", allowgap: true });
-    const optsChat = JSON.stringify({ fontname: "chat", allowgap: true });
-
-    const yOffsets = [0, 1, 2, 3, 4, 5, 6];
-    for (let i = 0; i < yOffsets.length; i++) {
-      const y = yOffsets[i];
-      let res = "";
-      try { res = alt1.bindReadStringEx(bid, 0, y, optsSmall); } catch (e) {}
-      let txt = normalizeAlt1OcrResult(res);
-      if (!txt) {
-        try { res = alt1.bindReadStringEx(bid, 0, y, optsChat); } catch (e) {}
-        txt = normalizeAlt1OcrResult(res);
-      }
-      const m = (txt || "").match(/\d[\d,]*/);
-      if (m) {
-        const n = parseInt(m[0].replace(/,/g, ""), 10);
-        if (isFinite(n) && n > 0) return n;
-      }
-    }
-    return 1;
-  }
-
-  
-  // -------- Icon matching (fast) --------
-  // We use ONLY the large (48px) icons and perform a small local search around the mouse.
-  // Matching method: zero-mean normalized cross-correlation (ZNCC) on a 16x16 grayscale downsample.
-  // This is very fast (few templates) and robust to minor brightness/contrast changes.
-  const ICON_MATCH = {
-    // Core matcher settings
-    sampleSize: 28,        // higher => more detail (slower)
-    acceptScore: 0.72,     // base acceptance (before adaptive)
-    strongScore: 0.82,     // very strong match (rarely needed, but useful for debug)
-
-    useEdges: true,
-    edgeWeight: 0.65,      // edgeScore * edgeWeight + grayScore * (1-edgeWeight)
-
-    // Robustness improvements
-    whiten: true,          // high-pass/whitening to reduce background influence
-    adaptive: true,        // per-icon thresholds based on nearest-neighbour similarity
-
-    // Ambiguity guards (prevents "confused" matches)
-    minGap: 0.040,         // best - second must be at least this (base; adaptive may increase)
-    minRatio: 1.08,        // best / second must be at least this (base; adaptive may increase)
-
-    // Hover-capture manual submit (Alt+1): no overlay, auto-snaps to icon
-    hoverCaptureSize: 220, // square capture around mouse
-    hoverSearchRadius: 22, // pixels around capture center to search
-    hoverStep: 1,          // search step (1 = tightest snap)
-
-    // (Legacy) selection-snap settings (kept for compatibility; unused in hover mode)
-    snapRadius: 6,
-    snapStep: 1,
-  };;
-
-  // Debug: set true to log icon matching details on every Alt+1
-  const DEBUG_ICON_MATCH = true;
-  // Always print a Top-10 leaderboard for manual icon matching attempts.
-  const DEBUG_ICON_TOP10 = true;
-
-
-  function __getImgProps(img) {
-    if (!img) return null;
-    const data = img.data || img.imgdata || img.pixels;
-    const width = img.width || img.w;
-    const height = img.height || img.h;
-    if (!data || !width || !height) return null;
-    return { data, width, height };
-  }
-
-  
-function __downsampleToGray16(src, sx, sy, sw, sh, outSize) {
-  // Nearest-neighbor downsample for speed. Alpha-aware: composite onto a neutral background
-  // so transparent template pixels don't become "black" and ruin similarity.
-  const out = new Uint8Array(outSize * outSize);
-  const invW = sw / outSize;
-  const invH = sh / outSize;
-
-  const w = src.width;
-  const data = src.data;
-
-  // Neutral mid-gray background (tuned for RS UI; exact value not critical)
-  const bg = 40;
-
-  let k = 0;
-  for (let y = 0; y < outSize; y++) {
-    const py = sy + Math.min(sh - 1, Math.max(0, (y * invH) | 0));
-    const row = (py * w) | 0;
-    for (let x = 0; x < outSize; x++) {
-      const px = sx + Math.min(sw - 1, Math.max(0, (x * invW) | 0));
-      const i = ((row + px) << 2) | 0;
-      let r = data[i] | 0, g = data[i + 1] | 0, b = data[i + 2] | 0;
-      const a = (data[i + 3] === undefined ? 255 : (data[i + 3] | 0));
-      if (a !== 255) {
-        const invA = 255 - a;
-        r = ((r * a + bg * invA) / 255) | 0;
-        g = ((g * a + bg * invA) / 255) | 0;
-        b = ((b * a + bg * invA) / 255) | 0;
-      }
-      // Integer luminance approximation (BT.601)
-      out[k++] = ((r * 299 + g * 587 + b * 114) / 1000) | 0;
+  const x0 = sx | 0, y0 = sy | 0, w0 = sw | 0, h0 = sh | 0;
+  for (let oy = 0; oy < outH; oy++) {
+    const fy = (oy + 0.5) / outH;
+    const y = (y0 + fy * h0) | 0;
+    const yy = (y < 0 ? 0 : (y >= H ? H - 1 : y));
+    for (let ox = 0; ox < outW; ox++) {
+      const fx = (ox + 0.5) / outW;
+      const x = (x0 + fx * w0) | 0;
+      const xx = (x < 0 ? 0 : (x >= W ? W - 1 : x));
+      const i = (yy * W + xx) * 4;
+      const r = src[i] | 0, g = src[i + 1] | 0, b = src[i + 2] | 0;
+      out[oy * outW + ox] = (r * 3 + g * 6 + b) / 10;
     }
   }
   return out;
 }
 
-// Simple edge-magnitude map on a square gray image (size x size).
-// This reduces sensitivity to flood-filled/flat template backgrounds and UI background variation.
-function __edgeMag(gray, size) {
-  const out = new Uint8Array(gray.length);
-  const s = size | 0;
-  for (let y = 1; y < s - 1; y++) {
-    const row = y * s;
-    for (let x = 1; x < s - 1; x++) {
-      const i = row + x;
-      const gx = (gray[i + 1] - gray[i - 1]) | 0;
-      const gy = (gray[i + s] - gray[i - s]) | 0;
-      // L1 magnitude is fast and good enough here
-      let m = Math.abs(gx) + Math.abs(gy);
-      if (m > 255) m = 255;
-      out[i] = m;
+function __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outW, outH) {
+  // capProps is from __getImgProps (data is RGBA)
+  const out = new Uint8Array((outW | 0) * (outH | 0));
+  const src = capProps.data;
+  const W = capProps.width | 0;
+  const H = capProps.height | 0;
+
+  const x0 = sx | 0, y0 = sy | 0, w0 = sw | 0, h0 = sh | 0;
+  for (let oy = 0; oy < outH; oy++) {
+    const fy = (oy + 0.5) / outH;
+    const y = (y0 + fy * h0) | 0;
+    const yy = (y < 0 ? 0 : (y >= H ? H - 1 : y));
+    for (let ox = 0; ox < outW; ox++) {
+      const fx = (ox + 0.5) / outW;
+      const x = (x0 + fx * w0) | 0;
+      const xx = (x < 0 ? 0 : (x >= W ? W - 1 : x));
+      const i = (yy * W + xx) * 4;
+      const r = src[i] | 0, g = src[i + 1] | 0, b = src[i + 2] | 0;
+      out[oy * outW + ox] = (r * 3 + g * 6 + b) / 10;
     }
   }
   return out;
 }
 
-// High-pass "whitening" to reduce background/flood-fill influence.
-// Operates on a square grayscale image (size x size). Returns Uint8Array.
-function __whitenGray(gray, size) {
-  const s = size | 0;
-  const out = new Uint8Array(gray.length);
-  // 3x3 box blur then subtract (high-pass). Fast + robust.
-  for (let y = 0; y < s; y++) {
-    const y0 = (y === 0) ? 0 : (y - 1);
-    const y1 = y;
-    const y2 = (y === s - 1) ? (s - 1) : (y + 1);
-    for (let x = 0; x < s; x++) {
-      const x0 = (x === 0) ? 0 : (x - 1);
-      const x1 = x;
-      const x2 = (x === s - 1) ? (s - 1) : (x + 1);
+function __detectBarrowsChestTopbarInCapture(cap, topT) {
+  // Returns { score, x, y } in capture-local coords, or null.
+  const capProps = cap.capProps;
+  const tW = topT.w | 0, tH = topT.h | 0;
+  if (capProps.width < tW || capProps.height < tH) return null;
 
-      const i00 = y0 * s + x0, i01 = y0 * s + x1, i02 = y0 * s + x2;
-      const i10 = y1 * s + x0, i11 = y1 * s + x1, i12 = y1 * s + x2;
-      const i20 = y2 * s + x0, i21 = y2 * s + x1, i22 = y2 * s + x2;
+  const outW = CHEST_TEST.featW | 0;
+  const outH = CHEST_TEST.featH | 0;
 
-      const blur = (gray[i00] + gray[i01] + gray[i02] +
-                    gray[i10] + gray[i11] + gray[i12] +
-                    gray[i20] + gray[i21] + gray[i22]) / 9;
+  let best = null;
 
-      // High-pass: center around 128 (neutral). Clamp.
-      let v = (gray[y1 * s + x1] - blur + 128);
-      if (v < 0) v = 0;
-      if (v > 255) v = 255;
-      out[y1 * s + x1] = v | 0;
+  const maxX = (capProps.width - tW) | 0;
+  const maxY = (capProps.height - tH) | 0;
+
+  // Coarse pass
+  for (let y = 0; y <= maxY; y += CHEST_TEST.coarseStepY) {
+    for (let x = 0; x <= maxX; x += CHEST_TEST.coarseStepX) {
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tW, tH, outW, outH);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(topT.feat, feat);
+      if (!best || score > best.score) best = { score, x, y };
     }
   }
-  return out;
+
+  if (!best) return null;
+
+  // Refine around best
+  let rb = best;
+  const rr = CHEST_TEST.refineRadius | 0;
+  for (let dy = -rr; dy <= rr; dy += CHEST_TEST.refineStep) {
+    const y = rb.y + dy;
+    if (y < 0 || y > maxY) continue;
+    for (let dx = -rr; dx <= rr; dx += CHEST_TEST.refineStep) {
+      const x = rb.x + dx;
+      if (x < 0 || x > maxX) continue;
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tW, tH, outW, outH);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(topT.feat, feat);
+      if (score > rb.score) rb = { score, x, y };
+    }
+  }
+
+  return rb;
 }
 
-// Compute per-template ambiguity (nearest-neighbour similarity) once.
-// Higher nnScore => more ambiguous => require stricter thresholds.
-let __templateByName = null;
-function __computeTemplateAmbiguity(templates) {
-  if (!templates || templates.length < 2) return templates;
-  if (__templateByName) return templates; // already computed
-  __templateByName = new Map();
-  for (const t of templates) {
-    if (t && t.name) __templateByName.set(String(t.name), t);
+// --- Barrows chest detector (TEST TOOL) ---
+// Global one-time scan + cache + lightweight validation (no mouse dependency).
+let __barrowsChestCache = null; // { x,y,w,h, score, lastSeenMs }
+let __lastChestScanMs = 0;
+let __lastChestValidateMs = 0;
+
+function __captureFullRs() {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  if (!window.alt1 || !alt1.permissionPixel) return null;
+
+  // Prefer rsX/rsY/rsWidth/rsHeight if available; fall back to 0,0 + rs dimensions.
+  const rx = (typeof alt1.rsX === "number" ? alt1.rsX : 0) | 0;
+  const ry = (typeof alt1.rsY === "number" ? alt1.rsY : 0) | 0;
+  const rw = (typeof alt1.rsWidth === "number" ? alt1.rsWidth : (typeof alt1.width === "number" ? alt1.width : 0)) | 0;
+  const rh = (typeof alt1.rsHeight === "number" ? alt1.rsHeight : (typeof alt1.height === "number" ? alt1.height : 0)) | 0;
+
+  if (rw <= 0 || rh <= 0) return null;
+
+  let capImg = null;
+  try { capImg = A1lib.capture(rx, ry, rw, rh); } catch (e) {}
+  if (!capImg) return null;
+
+  const capProps = __getImgProps(capImg);
+  if (!capProps) return null;
+
+  return { capImg, capProps, rx, ry };
+}
+
+function __captureRegion(rx, ry, rw, rh) {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  if (!window.alt1 || !alt1.permissionPixel) return null;
+  if (rw <= 0 || rh <= 0) return null;
+
+  let capImg = null;
+  try { capImg = A1lib.capture(rx | 0, ry | 0, rw | 0, rh | 0); } catch (e) {}
+  if (!capImg) return null;
+
+  const capProps = __getImgProps(capImg);
+  if (!capProps) return null;
+
+  return { capImg, capProps, rx: rx | 0, ry: ry | 0 };
+}
+
+function __loadChestCacheFromLocalStorage() {
+  try {
+    const raw = localStorage.getItem("irb_barrowsChestRect");
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj.x !== "number" || typeof obj.y !== "number" || typeof obj.w !== "number" || typeof obj.h !== "number") return null;
+    return { x: obj.x | 0, y: obj.y | 0, w: obj.w | 0, h: obj.h | 0, score: +obj.score || 0, lastSeenMs: Date.now() };
+  } catch (e) {
+    return null;
+  }
+}
+
+function __saveChestCacheToLocalStorage(cache) {
+  try {
+    if (!cache) { localStorage.removeItem("irb_barrowsChestRect"); return; }
+    localStorage.setItem("irb_barrowsChestRect", JSON.stringify({ x: cache.x, y: cache.y, w: cache.w, h: cache.h, score: cache.score }));
+  } catch (e) {}
+}
+
+function __validateChestCache(cache, topT) {
+  // Validate by matching the topbar template at the expected inset location (no scanning).
+  // Returns { ok:boolean, score:number }
+  const insetX = CHEST_TEST.topbarInsetX | 0;
+  const insetY = CHEST_TEST.topbarInsetY | 0;
+
+  const rx = (cache.x + insetX) | 0;
+  const ry = (cache.y + insetY) | 0;
+  const rw = topT.w | 0;
+  const rh = topT.h | 0;
+
+  const cap = __captureRegion(rx, ry, rw, rh);
+  if (!cap) return { ok: false, score: 0 };
+
+  const gray = __downsampleCapToGrayRect(cap.capProps, 0, 0, rw, rh, CHEST_TEST.featW | 0, CHEST_TEST.featH | 0);
+  const feat = __centerAndInvStd(gray);
+  const score = __znccScore(topT.feat, feat);
+
+  // Slightly lower threshold for validation to avoid flicker due to capture noise.
+  const ok = score >= Math.max(0.70, (CHEST_TEST.acceptScore - 0.06));
+  return { ok, score };
+}
+
+function __detectChestGlobalOnce() {
+  // One-time global scan of the full RS viewport.
+  const cap = __captureFullRs();
+  if (!cap) return null;
+
+  const hit = __detectBarrowsChestTopbarInCapture(cap, __barrowsTopbarT);
+  if (!hit || !(hit.score >= CHEST_TEST.acceptScore)) return null;
+
+  // Convert capture-local to screen coords and expand to full chest rect.
+  const chestLeft = (cap.rx + hit.x - (CHEST_TEST.topbarInsetX | 0)) | 0;
+  const chestTop  = (cap.ry + hit.y - (CHEST_TEST.topbarInsetY | 0)) | 0;
+  const chestW    = (CHEST_TEST.chestWidth | 0);
+  const chestH    = (CHEST_TEST.chestHeight | 0);
+
+  return { x: chestLeft, y: chestTop, w: chestW, h: chestH, score: hit.score, lastSeenMs: Date.now() };
+}
+
+function __drawChestRect(cache, good) {
+  try {
+    if (!cache) return;
+    const col = good ? [0, 255, 0] : [255, 180, 0];
+    // Uses overlay canvas helper already in file.
+    tryOverlayRect({ x: cache.x, y: cache.y, w: cache.w, h: cache.h }, true);
+  } catch (e) {}
+}
+
+function __chestTestTick() {
+  if (!CHEST_TEST.enabled) return;
+  if (!__barrowsTopbarT) return; // not loaded yet
+
+  const now = Date.now();
+
+  // Lazy-load cached rect from localStorage once per session (optional).
+  if (!__barrowsChestCache) {
+    const saved = __loadChestCacheFromLocalStorage();
+    if (saved) __barrowsChestCache = saved;
   }
 
-  // Nearest-neighbour similarity using grayscale ZNCC over whitened representation.
-  for (let i = 0; i < templates.length; i++) {
-    const a = templates[i];
-    if (!a || !a._feat) continue;
-    let best = -1;
-    for (let j = 0; j < templates.length; j++) {
-      if (i === j) continue;
-      const b = templates[j];
-      if (!b || !b._feat) continue;
-      const sim = __znccScore(a._feat, b._feat);
-      if (sim > best) best = sim;
+  // If we have a cached rect, validate it cheaply and avoid full scanning.
+  if (__barrowsChestCache) {
+    if (now - __lastChestValidateMs < 350) return;
+    __lastChestValidateMs = now;
+
+    const v = __validateChestCache(__barrowsChestCache, __barrowsTopbarT);
+    if (v.ok) {
+      __barrowsChestCache.lastSeenMs = now;
+      if (CHEST_TEST.debug) {
+        __drawChestRect(__barrowsChestCache, true);
+      }
+      return;
     }
-    a._nnScore = best; // ~0.0-1.0
+
+    // Validation failed → clear cache and re-detect.
+    if (CHEST_TEST.debug) {
+      console.log("[BARROWS CHEST] cache invalid (score:", v.score.toFixed(3), ") → re-scan");
+      __drawChestRect(__barrowsChestCache, false);
+    }
+    __barrowsChestCache = null;
+    __saveChestCacheToLocalStorage(null);
   }
-  return templates;
+
+  // No cache: do a throttled global scan.
+  if (now - __lastChestScanMs < CHEST_TEST.cooldownMs) return;
+  __lastChestScanMs = now;
+
+  const found = __detectChestGlobalOnce();
+  if (!found) {
+    if (CHEST_TEST.debug && now - __lastChestSeenMs > 2000) {
+      console.log("[BARROWS CHEST] not found (global scan)");
+    }
+    return;
+  }
+
+  __barrowsChestCache = found;
+  __saveChestCacheToLocalStorage(found);
+  __lastChestSeenMs = now;
+
+  if (CHEST_TEST.debug) {
+    console.log("[BARROWS CHEST] detected score:", found.score.toFixed(3), "rect:", found);
+    __drawChestRect(found, true);
+  }
+  showEvent("Chest test", `Barrows chest detected (score ${found.score.toFixed(3)})`, "ok", true, true);
 }
 
 function __adaptiveThresholds(bestName) {
@@ -2510,6 +2534,9 @@ function stitchChatMessages(lines) {
 
   async function poll() {
     if (!running || !chatReader) return;
+    // Barrows chest UI detection test (template match)
+    try { __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
+
     if (!isSetupReady()) return;
 
     if (chatReader.pos === null) {
@@ -2824,6 +2851,8 @@ function stitchChatMessages(lines) {
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   await loadAllowlistFile();
+  try { await ensureBarrowsTopbarTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
+
 
   loadBingosAndPopulate();
 
