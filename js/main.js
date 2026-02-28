@@ -501,7 +501,7 @@ const BARROWS_CHEST_SLOTS = {
   max: 10,
   // relative to chest top-left:
   rowY: 40,          // y of icon row (top-left of icon)
-  startX: 66,        // x of first icon (top-left of icon)
+  startX: 55,        // x of first icon (top-left of icon)
   spacing: 44,       // horizontal spacing between icons
 };
 
