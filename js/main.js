@@ -7,19 +7,19 @@ function __getImgProps(img) {
   return null;
 }
 
-/* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
+/* IRB v2026-02-28-barrows-iconmatch3-chestlocate (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-27-barrows-iconmatch2";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chestlocate";
 
-  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
+  console.log("IRB v2026-02-28-barrows-iconmatch3-chestlocate ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-iconmatch3-chestlocate`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -80,6 +80,9 @@ function __getImgProps(img) {
     btnLockChat: $("btnLockChat"),
     btnHighlightChat: $("btnHighlightChat"),
     btnRecalibrate: $("btnRecalibrate"),
+    btnLocateBarrowsChest: $("btnLocateBarrowsChest"),
+    btnClearBarrowsChest: $("btnClearBarrowsChest"),
+    barrowsChestHint: $("barrowsChestHint"),
     optAutoDetect: $("optAutoDetect"),
     optHighlight: $("optHighlight"),
     optStrictDrops: $("optStrictDrops"),
@@ -377,7 +380,7 @@ function __getImgProps(img) {
 // -------- Barrows Chest UI detection (TEST TOOL) --------
 // Uses UI template matching (no OCR) against a cropped top-bar image.
 const CHEST_TEST = {
-  enabled: true,              // keep as a separate automated testing tool
+  enabled: false,              // keep as a separate automated testing tool
   captureSize: 760,           // square capture around mouse for detection
   cooldownMs: 1200,           // throttle to avoid freezes
   coarseStepX: 12,
@@ -699,6 +702,101 @@ function __chestTestTick() {
     __drawChestRect(found, true);
   }
   showEvent("Chest test", `Barrows chest detected (score ${found.score.toFixed(3)})`, "ok", true, true);
+}
+
+
+// ---------------- Barrows Chest locate (user-assisted) ----------------
+let __barrowsLocateArmed = false;
+
+function __updateBarrowsChestHint() {
+  try {
+    if (!ui.barrowsChestHint) return;
+    const cached = __loadChestCacheFromLocalStorage();
+    if (!cached) {
+      ui.barrowsChestHint.textContent = "Status: not configured";
+      return;
+    }
+    ui.barrowsChestHint.textContent = `Status: locked at (${cached.x}, ${cached.y})`;
+  } catch (e) {}
+}
+
+function __armLocateBarrowsChest() {
+  __barrowsLocateArmed = true;
+  CHEST_TEST.enabled = true; // enable validation/scanning loop for testing
+  showEvent("Barrows Chest", "Right-click the Barrows Chest window to lock its position.", "warn", true, true);
+  addFeed("Barrows Chest locate armed: right-click the chest window.", "warn");
+}
+
+function __clearLocateBarrowsChest() {
+  __barrowsLocateArmed = false;
+  __barrowsChestCache = null;
+  __saveChestCacheToLocalStorage(null);
+  __updateBarrowsChestHint();
+  showEvent("Barrows Chest", "Cleared saved chest location.", "ok", true, true);
+}
+
+function __captureAroundPoint(px, py, w, h) {
+  if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+  if (!window.alt1 || !alt1.permissionPixel) return null;
+
+  const rx = ((px | 0) - ((w | 0) >> 1)) | 0;
+  const ry = ((py | 0) - ((h | 0) >> 1)) | 0;
+
+  const cap = A1lib.capture(rx, ry, w | 0, h | 0);
+  if (!cap) return null;
+  return { rx, ry, width: cap.width | 0, height: cap.height | 0, data: cap.data };
+}
+
+function __detectChestNearPoint(px, py) {
+  // Local scan around the user click for robustness and speed.
+  const cap = __captureAroundPoint(px, py, 900, 240);
+  if (!cap) return null;
+
+  const hit = __detectBarrowsChestTopbarInCapture(cap, __barrowsTopbarT);
+  if (!hit) return null;
+
+  // Accept slightly lower here because the user click may be near edges; we refine after lock.
+  const need = Math.min(CHEST_TEST.acceptScore, 0.74);
+  if (!(hit.score >= need)) return null;
+
+  const chestLeft = (cap.rx + hit.x - (CHEST_TEST.topbarInsetX | 0)) | 0;
+  const chestTop  = (cap.ry + hit.y - (CHEST_TEST.topbarInsetY | 0)) | 0;
+  const chestW    = (CHEST_TEST.chestWidth | 0);
+  const chestH    = (CHEST_TEST.chestHeight | 0);
+
+  return { x: chestLeft, y: chestTop, w: chestW, h: chestH, score: hit.score, lastSeenMs: Date.now() };
+}
+
+function __handleLocateBarrowsChestClick(obj) {
+  try {
+    const mx = (obj && obj.mouseAbs && typeof obj.mouseAbs.x === "number") ? obj.mouseAbs.x : (obj && typeof obj.x === "number" ? obj.x : null);
+    const my = (obj && obj.mouseAbs && typeof obj.mouseAbs.y === "number") ? obj.mouseAbs.y : (obj && typeof obj.y === "number" ? obj.y : null);
+    if (mx == null || my == null) {
+      showEvent("Barrows Chest", "Could not read click coordinates.", "bad", true, true);
+      return false;
+    }
+
+    const found = __detectChestNearPoint(mx, my);
+    if (!found) {
+      showEvent("Barrows Chest", "Could not lock chest. Try right-clicking directly on the top bar.", "bad", true, true);
+      return true; // consumed
+    }
+
+    __barrowsChestCache = found;
+    __saveChestCacheToLocalStorage(found);
+    __updateBarrowsChestHint();
+
+    __barrowsLocateArmed = false;
+    showEvent("Barrows Chest", `Locked ✓ (score ${found.score.toFixed(3)})`, "ok", true, true);
+    if (CHEST_TEST.debug) {
+      console.log("[BARROWS CHEST] locked by user click:", found);
+      __drawChestRect(found, true);
+    }
+    return true; // consumed
+  } catch (e) {
+    console.warn("[BARROWS CHEST] locate error", e);
+    return true;
+  }
 }
 
 function __adaptiveThresholds(bestName) {
@@ -1373,6 +1471,8 @@ function updateSetupPanelWrapVisibility() {
     setVisible(ui.setupSummary, locked);
     initHistoryPanel();
     refreshSummary();
+    __updateBarrowsChestHint();
+
     refreshSetupState();
   }
 
@@ -2743,6 +2843,21 @@ function stitchChatMessages(lines) {
     locateChatboxAndStore();
   });
 
+
+  ui.btnLocateBarrowsChest && ui.btnLocateBarrowsChest.addEventListener("click", () => {
+    // Ensure template is loaded so the first click can lock immediately.
+    ensureBarrowsTopbarTemplateLoaded().then(() => {
+      __armLocateBarrowsChest();
+    }).catch((e) => {
+      console.warn("[BARROWS CHEST] template load failed", e);
+      showEvent("Barrows Chest", "Failed to load topbar template. Ensure assets/ui/barrows_topbar.png exists.", "bad", true, true);
+    });
+  });
+
+  ui.btnClearBarrowsChest && ui.btnClearBarrowsChest.addEventListener("click", () => {
+    __clearLocateBarrowsChest();
+  });
+
   ui.btnScanChats && ui.btnScanChats.addEventListener("click", () => {
     if (!chatReader) initChatReader();
     scanChatboxes();
@@ -2905,6 +3020,12 @@ function stitchChatMessages(lines) {
     // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
     window.alt1onrightclick = (obj) => {
       try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
+      try {
+        if (__barrowsLocateArmed) {
+          const consumed = __handleLocateBarrowsChestClick(obj);
+          if (consumed) return;
+        }
+      } catch (e) {}
       manualSubmitFlow();
     };
   }
