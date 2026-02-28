@@ -16,6 +16,29 @@ function __getImgProps(img) {
 
   const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
 
+
+  // ---------------------------------------------------------------------------
+  // Icon match configuration (used by both manual icon matching and chest scan)
+  // NOTE: Keeping acceptScore low (0.20) per your request for manual acceptance.
+  // Chest UI detection has its own separate threshold.
+  // ---------------------------------------------------------------------------
+  const ICON_MATCH = {
+    // Downsample size for template matching (higher = slower but more accurate)
+    sampleSize: 16,
+    // Edge-assisted matching (helps discriminate similar icons)
+    useEdges: true,
+    edgeWeight: 0.65,
+
+    // Base acceptance for icon matches (manual/chest). Adaptive rules may tighten.
+    acceptScore: 0.20,
+
+    // Ambiguity guards
+    minGap: 0.04,
+    minRatio: 1.08,
+
+    // For hover-snap/manual selection searches
+    searchRadius: 18
+  };
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
