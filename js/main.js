@@ -7,7 +7,7 @@ function __getImgProps(img) {
   return null;
 }
 
-/* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
+/* IRB v2026-02-28-barrows-iconmatch2-chestscan-v5p2 (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
@@ -500,8 +500,8 @@ const BARROWS_CHEST_SLOTS = {
   iconSz: 32,
   max: 10,
   // relative to chest top-left:
-  rowY: 44,          // y of icon row (top-left of icon)
-  startX: 18,        // x of first icon (top-left of icon)
+  rowY: 40,          // y of icon row (top-left of icon)
+  startX: 22,        // x of first icon (top-left of icon)
   spacing: 44,       // horizontal spacing between icons
 };
 
@@ -509,6 +509,15 @@ const BARROWS_CHEST_SLOTS = {
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
+
+// Chest-specific matching thresholds (stricter than manual to avoid false positives)
+const CHEST_ICON_MATCH_OVERRIDES = {
+  accept: 0.70,     // require strong match for auto chest scan
+  minGap: 0.04,
+  minRatio: 1.08,
+  snapRadius: 12,   // allow local snap to the real icon center
+  snapStep: 1,
+};
 
 function __mixColorSafe(r, g, b) {
   if (window.A1lib && typeof A1lib.mixColor === "function") return A1lib.mixColor(r, g, b);
@@ -670,6 +679,16 @@ function __scanBarrowsChestForDrops(lock) {
   const cap = __captureRect(lock.x, lock.y, lock.w, lock.h);
   if (!cap) return [];
 
+  // Temporarily tighten thresholds for chest scanning (do not affect manual mode)
+  const __savedIconMatch = { ...ICON_MATCH };
+  try {
+    ICON_MATCH.accept = CHEST_ICON_MATCH_OVERRIDES.accept;
+    ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
+    ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
+    ICON_MATCH.snapRadius = CHEST_ICON_MATCH_OVERRIDES.snapRadius;
+    ICON_MATCH.snapStep = CHEST_ICON_MATCH_OVERRIDES.snapStep;
+  } catch (e) {}
+
   const hits = [];
   const rows = [];
   const iconSz = BARROWS_CHEST_SLOTS.iconSz|0;
@@ -684,12 +703,6 @@ function __scanBarrowsChestForDrops(lock) {
       continue;
     }
 
-    // Visual proof: draw slot boxes in absolute coordinates
-    if (CHEST_SCAN_DEBUG_OVERLAY) {
-      const ax = (lock.x + x)|0;
-      const ay = (lock.y + y)|0;
-      __overlayRectAbs(ax, ay, iconSz, iconSz, [0, 160, 255], 450);
-    }
 
     const selection = {
       capProps: cap,
@@ -697,6 +710,15 @@ function __scanBarrowsChestForDrops(lock) {
     };
 
     const best = matchIconFromSelection(selection, __iconTemplates);
+
+    // Visual proof: draw slot boxes at the snapped position actually evaluated
+    if (CHEST_SCAN_DEBUG_OVERLAY) {
+      const dx = (best && typeof best.dx === "number") ? best.dx : 0;
+      const dy = (best && typeof best.dy === "number") ? best.dy : 0;
+      const ax = (lock.x + x + dx)|0;
+      const ay = (lock.y + y + dy)|0;
+      __overlayRectAbs(ax, ay, iconSz, iconSz, [0, 160, 255], 450);
+    }
 
     // Record per-slot debug even if not accepted
     if (CHEST_SCAN_DEBUG_TABLE) {
@@ -707,6 +729,8 @@ function __scanBarrowsChestForDrops(lock) {
         accepted: !!(best && best.accepted),
         gap: best ? Number((best.gap ?? 0).toFixed(4)) : 0,
         ratio: best ? Number((best.ratio ?? 0).toFixed(4)) : 0,
+        dx: best ? (best.dx|0) : 0,
+        dy: best ? (best.dy|0) : 0,
       });
     }
 
@@ -738,6 +762,9 @@ function __scanBarrowsChestForDrops(lock) {
     seen.add(h.name);
     uniq.push(h);
   }
+  // Restore ICON_MATCH to avoid affecting manual submit
+  try { Object.assign(ICON_MATCH, __savedIconMatch); } catch (e) {}
+
   return uniq;
 }
 
