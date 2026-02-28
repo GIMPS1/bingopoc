@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -188,9 +188,6 @@ btnCloseSettings: $("btnCloseSettings"),
   // ---------- UI helpers ----------
   const FEED_MAX = 3;
   const feedItems = [];
-
-  let __lastNonIdleEventAt = Date.now();
-  let __idleModeOn = false;
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -242,6 +239,12 @@ btnCloseSettings: $("btnCloseSettings"),
     ui.eventSub.textContent = subtitle;
 
 
+
+    // Leaving idle mode
+    __idleModeOn = false;
+    __lastNonIdleEventAt = Date.now();
+    __stopIdleDots();
+    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
 // Idle mode styling
 if (ui.eventLine) {
   if (isIdle) ui.eventLine.classList.add("idle");
@@ -296,26 +299,47 @@ if (!isIdle) {
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
+let __idleModeOn = false;
+let __lastNonIdleEventAt = Date.now();
+let __idleDotsTimer = null;
+let __idleDotsPhase = 0;
+
+function __stopIdleDots() {
+  if (__idleDotsTimer) { try { clearInterval(__idleDotsTimer); } catch (e) {} }
+  __idleDotsTimer = null;
+  __idleDotsPhase = 0;
+}
+
+function __startIdleDots() {
+  __stopIdleDots();
+  __idleDotsTimer = setInterval(() => {
+    try {
+      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
+      __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
+      const dots = ".".repeat(__idleDotsPhase);
+      ui.eventSub.textContent = "Waiting for drops" + dots;
+    } catch (e) {}
+  }, 650);
+}
 
 function showIdleRunning() {
-  if (!ui.eventLine) return;
   // Only show idle when setup is ready (otherwise setup hints should stay visible)
   try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
   if (__idleModeOn) return;
   __idleModeOn = true;
-  showEvent("Running", "Waiting for drops", "ok", false, false, true);
+  if (ui.eventLine) ui.eventLine.classList.add("idle");
+  if (ui.eventTitle) ui.eventTitle.textContent = "Running";
+  if (ui.eventSub) ui.eventSub.textContent = "Waiting for drops";
+  __startIdleDots();
 }
 
 function startIdleTicker() {
-  // If nothing has updated the event line recently, revert to idle status.
   const idleMs = 12000;
   setInterval(() => {
     try {
       const now = Date.now();
       if (__idleModeOn) return;
-      if ((now - __lastNonIdleEventAt) >= idleMs) {
-        showIdleRunning();
-      }
+      if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
     } catch (e) {}
   }, 700);
 }
@@ -3314,15 +3338,14 @@ function stitchChatMessages(lines) {
   }
 
   // ---------- events ----------
-
-// User guide
-
+// User guide popup (themed)
 ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
   try {
     const base = location.href.split("#")[0].split("?")[0];
-    const url = `${base}?guide=1`;
-    const w = 420;
-    const h = 620;
+    const root = base.replace(/\/[^\/]*$/, ""); // folder
+    const url = root + "/userguide.html";
+    const w = 440;
+    const h = 660;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
@@ -3331,7 +3354,6 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
     console.warn("Guide popup failed:", e);
   }
 });
-
 ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
   try { window.close(); } catch (e) {}
 });

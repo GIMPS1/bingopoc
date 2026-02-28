@@ -1,0 +1,74 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>IRB User Guide</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <script src="https://runeapps.org/runeappslib.js"></script>
+  <script src="https://www.unpkg.com/alt1/dist/base/index.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brandIcon" src="./assets/icon.png" alt="" />
+        <div class="brandText">
+          <div class="title">Iron Rivals Bingo</div>
+          <div class="subtitle">User guide</div>
+        </div>
+      </div>
+
+      <div class="statusRow">
+        <button class="iconBtn" id="btnCloseGuide" title="Close">
+          <span class="icon">✕</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="panel guidePanel">
+      <div class="section">
+        <div class="sectionTitle">Setup order (important)</div>
+        <div class="hint">
+          You must do <b>Auto-locate Chat</b> <b>before</b> locking IGN.
+        </div>
+        <ol class="guideList">
+          <li><b>Auto-locate Chat</b> (Setup panel) → locks chatbox.</li>
+          <li>Enter <b>IGN</b> and lock it.</li>
+          <li>Select <b>Bingo</b> + <b>Team</b> and lock setup (plugin refreshes).</li>
+        </ol>
+      </div>
+
+      <div class="section">
+        <div class="sectionTitle">Barrows chest setup</div>
+        <ol class="guideList">
+          <li>Open the Barrows chest.</li>
+          <li>First time: hover near the chest top bar and press <b>Alt+1</b> to locate it.</li>
+          <li>After that, opening the chest will auto-scan and submit Barrows uniques.</li>
+          <li>If needed: press <b>Alt+1</b> while the chest is open to force an immediate scan.</li>
+        </ol>
+        <div class="hint">
+          Tip: if the chest is not detected, re-open it and press Alt+1 again near the top bar to re-locate.
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="sectionTitle">Troubleshooting</div>
+        <ul class="guideList">
+          <li><b>Nothing submits:</b> confirm Chat locked → IGN locked → Bingo/Team locked.</li>
+          <li><b>Chat not found:</b> make sure chat is visible (not minimized), then use Auto-locate Chat again.</li>
+          <li><b>Chest not detected:</b> open chest and press Alt+1 near the top bar.</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    (function(){
+      const btn = document.getElementById("btnCloseGuide");
+      if (btn) btn.addEventListener("click", () => { try { window.close(); } catch(e) {} });
+      // Alt1 popup windows sometimes ignore close; provide fallback message
+      try { if (window.alt1 && typeof alt1.setTooltip === "function") alt1.setTooltip("IRB Guide"); } catch(e) {}
+    })();
+  </script>
+</body>
+</html>
