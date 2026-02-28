@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v3`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -143,7 +143,7 @@ btnCloseSettings: $("btnCloseSettings"),
   function openSettingsPopup() {
   const url = buildSettingsUrl();
   const w = 356;
-  const h = 633;
+  const h = 560;
 
   if (window.alt1 && typeof alt1.openPopup === "function") {
     try { alt1.openPopup(url, w, h); return; } catch (e) {}
@@ -617,9 +617,6 @@ let __barrowsChestLastScanMs = 0;
 let __barrowsChestScanStartMs = 0;
 let __barrowsChestScanDone = false;
 
-// Lock validation failures (auto-reset invalid cached position)
-let __barrowsChestInvalidCount = 0;
-let __barrowsChestLastInvalidMs = 0;
 function __loadBarrowsChestLock() {
   if (__barrowsChestLock) return __barrowsChestLock;
   try {
@@ -1274,24 +1271,10 @@ if (!__barrowsChestLock) return;
 // Validate cached lock
 const v = __validateBarrowsChestLock(__barrowsChestLock);
 if (!v.ok) {
-  // Track consecutive invalidations; only auto-clear after a few to avoid flicker.
-  const last = __barrowsChestLastInvalidMs || 0;
-  if (now - last > 1500) __barrowsChestInvalidCount = 0; // too long since last failure; reset streak
-  __barrowsChestInvalidCount = (__barrowsChestInvalidCount || 0) + 1;
-  __barrowsChestLastInvalidMs = now;
-
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
     __barrowsChestLastScanKey = "";
     __barrowsChestScanDone = false;
-  }
-
-  // After N consecutive failed validations, clear the cached lock and prompt user to re-locate.
-  if (__barrowsChestInvalidCount >= 5) {
-    __barrowsChestInvalidCount = 0;
-    __saveBarrowsChestLock(null);
-    __statusChest("Chest position invalidated. Re-locate with Alt+1.", "warn");
-  } else {
     __statusChest("Chest not present.", "info");
   }
   return;
@@ -3362,7 +3345,7 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
     const root = base.replace(/\/[^\/]*$/, ""); // folder
     const url = root + "/userguide.html";
     const w = 440;
-    const h = 789;
+    const h = 660;
     if (window.alt1 && typeof alt1.openPopup === "function") {
       try { alt1.openPopup(url, w, h); return; } catch (e) {}
     }
@@ -3798,29 +3781,3 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-
-// --- Alt+R = Force reset Barrows chest lock ---
-document.addEventListener("keydown", function (e) {
-  if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "r") {
-    try {
-      // Clear saved lock
-      __saveBarrowsChestLock(null);
-
-      // Reset runtime state
-      __barrowsChestSeen = false;
-      __barrowsChestLastScanKey = "";
-      __barrowsChestScanDone = false;
-      __barrowsChestScanStartMs = 0;
-      __barrowsChestLastScanMs = 0;
-
-      __statusChest(
-        "Chest lock reset. Hover chest and press Alt+1 to re-locate.",
-        "warn"
-      );
-
-      console.log("[BARROWS CHEST] Lock manually reset via Alt+R");
-    } catch (err) {
-      console.warn("[BARROWS CHEST] Alt+R reset failed:", err);
-    }
-  }
-});
