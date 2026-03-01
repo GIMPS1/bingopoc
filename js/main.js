@@ -563,9 +563,9 @@ const CHEST_TEST = {
   featH: 16,                  // downsampled feature height
   acceptScore: 0.78,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
-  chestWidth: 560,
-  chestHeight: 312,
-  topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
+  chestWidth: 486,
+  chestHeight: 316,
+  topbarInsetX: 1,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
   debug: true,
 };
@@ -577,16 +577,24 @@ const BARROWS_ANCHOR_TITLE_URL = assetUrl("assets/ui/barrows_anchor_title.png");
 const BARROWS_ANCHOR_LEFT_URL  = assetUrl("assets/ui/barrows_anchor_left.png");  // left small square icon
 const BARROWS_ANCHOR_CLOSE_URL = assetUrl("assets/ui/barrows_anchor_close.png"); // red close X
 
-// Offsets are relative to the Barrows chest window top-left at 100% UI scale (560x312 reference).
-// These were measured against the provided 560x312 Barrows chest reference image.
+// Offsets are relative to the Barrows chest window top-left at 100% UI scale (486x316 reference).
+// These were measured against the provided Barrows chest reference image (486x316).
 const BARROWS_ANCHORS = [
   { id: "title", url: BARROWS_ANCHOR_TITLE_URL, ox: 180, oy: 0,   min: 0.64 },
   { id: "left",  url: BARROWS_ANCHOR_LEFT_URL,  ox: 11,  oy: 238, min: 0.70 },
   { id: "close", url: BARROWS_ANCHOR_CLOSE_URL, ox: 461, oy: 8,   min: 0.70 },
 ];
 
-// Anchor matching feature resolution (small anchors -> use square features)
-const BARROWS_ANCHOR_FEAT = { w: 48, h: 48 };
+// Anchor matching feature resolution (per-anchor to preserve aspect)
+// Wide title strip uses a wide feature grid; square icons use square grid.
+function __anchorFeatFor(imgW, imgH) {
+  const w = imgW|0, h = imgH|0;
+  if (w <= 0 || h <= 0) return { fw: 48, fh: 48 };
+  const ar = w / h;
+  if (ar >= 2.2) return { fw: 128, fh: 32 }; // title strip
+  return { fw: 40, fh: 40 }; // square-ish anchors
+}
+
 
 let __barrowsAnchorTs = null;          // [{ id,url,ox,oy,min,w,h,feat }]
 let __barrowsAnchorTsLoading = null;
@@ -603,9 +611,10 @@ async function ensureBarrowsAnchorTemplatesLoaded() {
         console.warn("[barrows-anchor] failed to load", a.url);
         continue;
       }
-      const gray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const { fw, fh } = __anchorFeatFor(img.width, img.height);
+      const gray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, fw, fh);
       const feat = __centerAndInvStd(gray);
-      out.push({ ...a, w: img.width|0, h: img.height|0, feat });
+      out.push({ ...a, w: img.width|0, h: img.height|0, fw, fh, feat });
     }
     __barrowsAnchorTs = out;
     console.log("[barrows-anchor] templates loaded:", out.map(o=>`${o.id}(${o.w}x${o.h})`).join(", "));
@@ -628,7 +637,7 @@ function __matchAnchorInCap(capProps, anchorT, coarseStep=4, refineRadius=8) {
 
   for (let y = 0; y <= maxY; y += coarseStep) {
     for (let x = 0; x <= maxX; x += coarseStep) {
-      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, anchorT.fw|0, anchorT.fh|0);
       const feat = __centerAndInvStd(gray);
       const score = __znccScore(anchorT.feat, feat);
       if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
@@ -642,7 +651,7 @@ function __matchAnchorInCap(capProps, anchorT, coarseStep=4, refineRadius=8) {
   let ref = best;
   for (let y = Math.max(0, best.y - refineRadius); y <= Math.min(maxY, best.y + refineRadius); y++) {
     for (let x = Math.max(0, best.x - refineRadius); x <= Math.min(maxX, best.x + refineRadius); x++) {
-      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, anchorT.fw|0, anchorT.fh|0);
       const feat = __centerAndInvStd(gray);
       const score = __znccScore(anchorT.feat, feat);
       if (score > ref.score + eps || (Math.abs(score - ref.score) <= eps && (x < ref.x || (x === ref.x && y < ref.y)))) {
@@ -936,7 +945,7 @@ function __validateBarrowsChestLock(lock) {
       const ry = (lock.y + closeT.oy) | 0;
       const cap = __captureRect(rx, ry, closeT.w, closeT.h);
       if (cap) {
-        const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+        const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, anchorT.fw|0, anchorT.fh|0);
         const feat = __centerAndInvStd(gray);
         const score = __znccScore(closeT.feat, feat);
         const ok = score >= Math.max(0.72, closeT.min || 0.70);
