@@ -571,175 +571,12 @@ const CHEST_TEST = {
 };
 
 const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png");
-
-const BARROWS_CLOSE_URL = assetUrl("assets/ui/offsets.png"); // close button anchor
-const BARROWS_CLOSE_OX = 459; // close template top-left relative to chest top-left (100% UI scaling)
-const BARROWS_CLOSE_OY = 4;
-const BARROWS_CHEST_W = 486;
-const BARROWS_CHEST_H = 316;
-
-// Signature pixels (relative to close template top-left) sampled from a reference Barrows chest.
-// These are in the title text area and are used to reject false "close button" matches.
-const BARROWS_CLOSE_SIGNATURE = [
-  // Offsets are relative to the matched close button template top-left (capture-local).
-  // We classify points as "gold" (title bar / lettering area) or "dark" (trim/panel near close).
-  // Verification uses luma thresholds + contrast, not exact RGB equality (more robust across capture/gamma).
-  { dx: -208, dy: 15, kind: 'gold' },
-  { dx: -176, dy:  9, kind: 'gold' },
-  { dx: -188, dy: 13, kind: 'gold' },
-  { dx: -225, dy: 12, kind: 'gold' },
-  { dx: -247, dy:  9, kind: 'gold' },
-  { dx: -159, dy: 10, kind: 'gold' },
-
-  { dx:   -3, dy:  5, kind: 'dark' },
-  { dx:  -10, dy: 10, kind: 'dark' },
-  { dx:  -30, dy: 20, kind: 'dark' },
-  { dx:  -60, dy: 30, kind: 'dark' },
-  { dx:   -5, dy: 20, kind: 'dark' },
-];
-
-
-let __barrowsCloseT = null;          // { w,h, feat, img }
-let __barrowsCloseTLoading = null;
-
-async function ensureBarrowsCloseTemplateLoaded() {
-  if (__barrowsCloseT) return __barrowsCloseT;
-  if (__barrowsCloseTLoading) return __barrowsCloseTLoading;
-
-  __barrowsCloseTLoading = (async () => {
-    const img = await __loadImageToCanvasImageData(BARROWS_CLOSE_URL);
-    if (!img) throw new Error("Failed to load offsets.png (close anchor)");
-    // Use a square-ish feature grid for a small anchor.
-    const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, 40, 40);
-    const feat = __centerAndInvStd(featGray);
-    __barrowsCloseT = { w: img.width, h: img.height, feat, img };
-    return __barrowsCloseT;
-  })().finally(() => { __barrowsCloseTLoading = null; });
-
-  return __barrowsCloseTLoading;
-}
-
-function __capRGB(cap, x, y) {
-  if (!cap || !cap.data) return null;
-  if (x < 0 || y < 0 || x >= cap.width || y >= cap.height) return null;
-  const i = ((y * cap.width + x) << 2);
-  const d = cap.data;
-  return [d[i], d[i + 1], d[i + 2]];
-}
-
-
-function __barrowsLuma(rgb) {
-  return (rgb[0] * 3 + rgb[1] * 6 + rgb[2]) / 10; // 0..255
-}
-
-function __debugBarrowsSignatureFailure(ctx) {
-  // ctx: { cap, closeLocalX, closeLocalY, absScanX, absScanY, score }
-  try {
-    const cap = ctx.cap;
-    const closeX = ctx.closeLocalX | 0;
-    const closeY = ctx.closeLocalY | 0;
-    const sx = ctx.absScanX | 0;
-    const sy = ctx.absScanY | 0;
-
-    const absCloseX = (sx + closeX) | 0;
-    const absCloseY = (sy + closeY) | 0;
-    const chestX = (absCloseX - BARROWS_CLOSE_OX) | 0;
-    const chestY = (absCloseY - BARROWS_CLOSE_OY) | 0;
-
-    console.groupCollapsed(`[BARROWS CHEST] signature debug (close score ${(+(ctx.score || 0)).toFixed(3)})`);
-    console.log("close abs:", { x: absCloseX, y: absCloseY });
-    console.log("chest guess:", { x: chestX, y: chestY, w: BARROWS_CHEST_W, h: BARROWS_CHEST_H });
-
-    const rows = [];
-    for (const p of BARROWS_CLOSE_SIGNATURE) {
-      const rx = (closeX + (p.dx | 0)) | 0;
-      const ry = (closeY + (p.dy | 0)) | 0;
-      const absX = (sx + rx) | 0;
-      const absY = (sy + ry) | 0;
-
-      const got = __capRGB(cap, rx, ry);
-
-      let pass = false;
-      let lum = null;
-      let rule = "";
-      if (got) {
-        lum = __barrowsLuma(got);
-        if (p.kind === "gold") {
-          pass = lum >= 130;
-          rule = "luma>=130";
-        } else {
-          pass = lum <= 70;
-          rule = "luma<=70";
-        }
-      }
-
-      rows.push({
-        kind: p.kind,
-        dx: p.dx | 0,
-        dy: p.dy | 0,
-        absX,
-        absY,
-        rgb: got ? `${got[0]},${got[1]},${got[2]}` : "OOB",
-        luma: lum == null ? "" : +lum.toFixed(1),
-        rule,
-        pass
-      });
-
-      if (got) {
-        const col = pass ? [0, 220, 0] : [220, 0, 0];
-        __overlayRectAbs(absX - 2, absY - 2, 5, 5, col, 1400);
-      }
-    }
-
-    try { console.table(rows); } catch (e) { console.log(rows); }
-    console.groupEnd();
-  } catch (e) {
-    try { console.warn("[BARROWS CHEST] signature debug failed:", e); } catch (e2) {}
-  }
-}
-
-
-function __verifyBarrowsBySignature(cap, closeX, closeY) {
-  // closeX/closeY are capture-local coords of the matched close template top-left.
-  // Robust verification using luma thresholds + contrast:
-  // - "gold" points should be bright (title bar / lettering)
-  // - "dark" points should be dark (trim/panel near close)
-  // This avoids brittle exact RGB matching.
-  const GOLD_MIN = 130; // luma threshold for "gold" samples
-  const DARK_MAX = 70;  // luma threshold for "dark" samples
-  const NEED_GOLD = 3;  // minimum gold samples that must pass
-  const NEED_DARK = 3;  // minimum dark samples that must pass
-  const NEED_CONTRAST = 60; // avg(gold) - avg(dark)
-
-  let goldOk = 0, darkOk = 0;
-  const goldLum = [];
-  const darkLum = [];
-
-  for (const p of BARROWS_CLOSE_SIGNATURE) {
-    const rx = (closeX + (p.dx|0)) | 0;
-    const ry = (closeY + (p.dy|0)) | 0;
-    const got = __capRGB(cap, rx, ry);
-    if (!got) continue;
-
-    const lum = __barrowsLuma(got);
-    if (p.kind === "gold") {
-      if (lum >= GOLD_MIN) { goldOk++; goldLum.push(lum); }
-    } else {
-      if (lum <= DARK_MAX) { darkOk++; darkLum.push(lum); }
-    }
-  }
-
-  if (goldOk < NEED_GOLD || darkOk < NEED_DARK) return false;
-
-  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
-  const g = avg(goldLum);
-  const d = avg(darkLum);
-
-  return (g - d) >= NEED_CONTRAST;
-}
-
-
-
+const BARROWS_CLOSE_URL = assetUrl("assets/ui/offsets.png"); // close button crop (anchor)
+const BARROWS_CLOSE_PAD_R = 3;  // px from chest right edge to close template right edge
+const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top edge
+const BARROWS_CLOSE_ACCEPT = 0.90;
+const BARROWS_CLOSE_FEAT_W = 48;
+const BARROWS_CLOSE_FEAT_H = 52;
  // user-provided crop
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
@@ -863,153 +700,103 @@ function __captureRect(x, y, w, h) {
 
 
 function __locateBarrowsChestFromMouse() {
-  // User-triggered: hover/cursor near the Barrows chest window and press Alt+1.
-  // We lock using the close button anchor, then verify a few signature pixels so it is Barrows-specific.
+  // Ultra-simple deterministic lock:
+  // 1) Match the close button (offsets.png) around the mouse.
+  // 2) Compute chest top-left from fixed chest geometry (100% UI scaling).
   const mp = getMousePos && getMousePos();
   if (!mp) { __statusChest("Mouse position unavailable. Try again.", "warn"); return null; }
 
-  const scanW = 900, scanH = 520;
+  const scanW = 900, scanH = 420;
   const sx = Math.max(0, (mp.x - (scanW>>1))|0);
   const sy = Math.max(0, (mp.y - (scanH>>1))|0);
   const cap = __captureRect(sx, sy, scanW, scanH);
   if (!cap) { __statusChest("Capture failed. Try again.", "warn"); return null; }
 
-  if (!__barrowsCloseT) { __statusChest("Close-anchor template not loaded yet.", "warn"); return null; }
+  if (!__barrowsCloseT) { __statusChest("Close template not loaded yet.", "warn"); return null; }
 
   const tw = __barrowsCloseT.w|0;
   const th = __barrowsCloseT.h|0;
-  if (tw >= cap.width || th >= cap.height) { __statusChest("Capture area too small.", "warn"); return null; }
+  if (tw >= cap.width || th >= cap.height) { __statusChest("Capture too small for close template.", "warn"); return null; }
 
-  // Coarse scan: small anchor, so we can scan tighter.
-  const step = 4;
+  // Coarse scan
+  const step = 6;
   let best = null;
-
   for (let y = 0; y <= cap.height - th; y += step) {
     for (let x = 0; x <= cap.width - tw; x += step) {
-      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, 40, 40);
+      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
       const feat = __centerAndInvStd(gray);
       const score = __znccScore(__barrowsCloseT.feat, feat);
-      if (!best || score > best.score) best = { x, y, score };
+      const eps = 0.002;
+      if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
+        best = { x, y, score };
+      }
     }
   }
-
   if (!best) { __statusChest("Unable to search capture area.", "warn"); return null; }
 
   // Refine locally around best for 1px accuracy
+  const rx0 = Math.max(0, best.x - 10), ry0 = Math.max(0, best.y - 10);
+  const rx1 = Math.min(cap.width - tw, best.x + 10);
+  const ry1 = Math.min(cap.height - th, best.y + 10);
   let refined = best;
-  for (let y = Math.max(0, best.y - 10); y <= Math.min(cap.height - th, best.y + 10); y++) {
-    for (let x = Math.max(0, best.x - 10); x <= Math.min(cap.width - tw, best.x + 10); x++) {
-      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, 40, 40);
+  for (let y = ry0; y <= ry1; y++) {
+    for (let x = rx0; x <= rx1; x++) {
+      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
       const feat = __centerAndInvStd(gray);
       const score = __znccScore(__barrowsCloseT.feat, feat);
       if (score > refined.score) refined = { x, y, score };
     }
   }
 
-  // Require a strong close match
-  if (refined.score < 0.82) {
-    __statusChest(`Close anchor too weak (${refined.score.toFixed(3)}). Try hovering the chest topbar.`, "warn");
+  if (refined.score < BARROWS_CLOSE_ACCEPT) {
+    __statusChest(`Not confident enough (close score ${refined.score.toFixed(3)}). Hover the close button and try again.`, "warn");
     if (CHEST_TEST.debug) console.log("[BARROWS CHEST] close match failed best:", { ...refined, tw, th });
-    return null;
-  }
-
-  // Verify Barrows-specific signature pixels (relative to the close match)
-  if (!__verifyBarrowsBySignature(cap, refined.x, refined.y)) {
-    __statusChest(`Close matched (${refined.score.toFixed(3)}) but signature failed. (Not Barrows?)`, "warn");
-    if (CHEST_TEST.debug) console.log("[BARROWS CHEST] close matched but signature failed:", { ...refined, tw, th });
-    // Detailed debug: print the signature samples + draw tiny overlay squares.
-    __debugBarrowsSignatureFailure({
-      cap,
-      closeLocalX: refined.x,
-      closeLocalY: refined.y,
-      absScanX: sx,
-      absScanY: sy,
-      score: refined.score
-    });
     return null;
   }
 
   const absCloseX = (sx + refined.x) | 0;
   const absCloseY = (sy + refined.y) | 0;
 
-  const chestX = (absCloseX - BARROWS_CLOSE_OX) | 0;
-  const chestY = (absCloseY - BARROWS_CLOSE_OY) | 0;
+  // Close template top-left is at (chestX + (W - tw - padR), chestY + padT)
+  const chestX = (absCloseX - (CHEST_TEST.chestWidth - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  const chestY = (absCloseY - BARROWS_CLOSE_PAD_T) | 0;
 
   const lock = {
-    x: chestX,
-    y: chestY,
-    w: BARROWS_CHEST_W,
-    h: BARROWS_CHEST_H,
+    x: Math.max(0, chestX),
+    y: Math.max(0, chestY),
+    w: CHEST_TEST.chestWidth|0,
+    h: CHEST_TEST.chestHeight|0,
     scale: 1.0,
     savedAt: Date.now(),
-    score: refined.score,
   };
 
   __saveBarrowsChestLock(lock);
-  __statusChest(`Locked (close ${refined.score.toFixed(3)} + signature)`, "ok");
-
-  if (CHEST_SCAN_DEBUG_OVERLAY) {
-    __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [0, 200, 255], 800);
-  }
+  __statusChest(`Saved chest position at (${lock.x}, ${lock.y}) close score ${refined.score.toFixed(3)}`, "ok");
+  if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locked (close-only):", lock, "refined:", { ...refined, tw, th, absCloseX, absCloseY });
 
   return lock;
 }
 
 
-
 function __validateBarrowsChestLock(lock) {
   if (!lock || !__barrowsCloseT) return { ok:false, score:0 };
-
-  // Expected close position from the stored lock
-  const expCloseX = (lock.x + BARROWS_CLOSE_OX) | 0;
-  const expCloseY = (lock.y + BARROWS_CLOSE_OY) | 0;
-
-  // Capture a small region around the expected close, including signature pixels to the left.
-  const padL = 330, padT = 16, padR = 40, padB = 50;
-  const rx = Math.max(0, (expCloseX - padL) | 0);
-  const ry = Math.max(0, (expCloseY - padT) | 0);
-  const rw = (padL + (__barrowsCloseT.w|0) + padR) | 0;
-  const rh = (padT + (__barrowsCloseT.h|0) + padB) | 0;
-
-  const cap = __captureRect(rx, ry, rw, rh);
-  if (!cap) return { ok:false, score:0 };
 
   const tw = __barrowsCloseT.w|0;
   const th = __barrowsCloseT.h|0;
 
-  // Search only locally (±18px) around expected close location inside the capture.
-  const cx0 = Math.max(0, (expCloseX - rx - 18) | 0);
-  const cy0 = Math.max(0, (expCloseY - ry - 18) | 0);
-  const cx1 = Math.min(cap.width - tw, (expCloseX - rx + 18) | 0);
-  const cy1 = Math.min(cap.height - th, (expCloseY - ry + 18) | 0);
+  const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
 
-  let best = null;
-  for (let y = cy0; y <= cy1; y++) {
-    for (let x = cx0; x <= cx1; x++) {
-      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, 40, 40);
-      const feat = __centerAndInvStd(gray);
-      const score = __znccScore(__barrowsCloseT.feat, feat);
-      if (!best || score > best.score) best = { x, y, score };
-    }
-  }
+  const cap = __captureRect(expCloseX, expCloseY, tw, th);
+  if (!cap) return { ok:false, score:0 };
 
-  if (!best) return { ok:false, score:0 };
+  const gray = __downsampleCapToGrayRect(cap, 0, 0, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+  const feat = __centerAndInvStd(gray);
+  const score = __znccScore(__barrowsCloseT.feat, feat);
 
-  if (best.score < 0.80) return { ok:false, score:best.score };
-
-  // Signature check (Barrows-specific)
-  if (!__verifyBarrowsBySignature(cap, best.x, best.y)) return { ok:false, score:best.score };
-
-  // Also ensure the matched close is near the expected position (guards against drift)
-  const absCloseX = (rx + best.x) | 0;
-  const absCloseY = (ry + best.y) | 0;
-  const dx = Math.abs(absCloseX - expCloseX);
-  const dy = Math.abs(absCloseY - expCloseY);
-  if (dx > 6 || dy > 6) return { ok:false, score:best.score };
-
-  return { ok:true, score:best.score };
+  // Slightly softer threshold for validation than for initial lock
+  return { ok: score >= (BARROWS_CLOSE_ACCEPT - 0.04), score };
 }
-
 
 // Chest scan slot occupancy + color logic
 const CHEST_SLOT_OCCUPANCY = {
@@ -1175,6 +962,9 @@ function __formatBarrowsHits(hits) {
 
 let __barrowsTopbarT = null;          // { w,h, feat }
 let __barrowsTopbarTLoading = null;
+
+let __barrowsCloseT = null;          // { w,h, feat }
+let __barrowsCloseTLoading = null;
 let __lastChestTestMs = 0;
 let __lastChestSeenMs = 0;
 let __lastChestRect = null;
@@ -1198,6 +988,24 @@ async function ensureBarrowsTopbarTemplateLoaded() {
   })().finally(() => { __barrowsTopbarTLoading = null; });
 
   return __barrowsTopbarTLoading;
+}
+
+
+async function ensureBarrowsCloseTemplateLoaded() {
+  if (__barrowsCloseT) return __barrowsCloseT;
+  if (__barrowsCloseTLoading) return __barrowsCloseTLoading;
+
+  __barrowsCloseTLoading = (async () => {
+    const img = await __loadImageToCanvasImageData(BARROWS_CLOSE_URL);
+    if (!img) throw new Error("Failed to load offsets.png");
+    const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+    const feat = __centerAndInvStd(featGray);
+    __barrowsCloseT = { w: img.width, h: img.height, feat };
+    console.log(`[barrows-close] template loaded: ${img.width}x${img.height} ${BARROWS_CLOSE_URL}`);
+    return __barrowsCloseT;
+  })().finally(() => { __barrowsCloseTLoading = null; });
+
+  return __barrowsCloseTLoading;
 }
 
 async function __loadImageToCanvasImageData(url) {
@@ -1532,7 +1340,7 @@ function __forceBarrowsChestScanNow() {
 
 async function __chestTestTick() {
 if (!CHEST_TEST.enabled) return;
-if (!__barrowsCloseT) return; // not loaded yet
+if (!__barrowsTopbarT) return; // not loaded yet
 
 // Load cached lock once per session
 __loadBarrowsChestLock();
@@ -3965,7 +3773,8 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   await loadAllowlistFile();
-  try { await ensureBarrowsTopbarTemplateLoaded(); await ensureBarrowsCloseTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
+  try { await ensureBarrowsCloseTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] close template not loaded:", e.message); }
+  try { await ensureBarrowsTopbarTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
 
 
   loadBingosAndPopulate();
