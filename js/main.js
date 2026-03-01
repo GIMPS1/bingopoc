@@ -565,7 +565,7 @@ const CHEST_TEST = {
   // Chest geometry relative to the matched topbar crop
   chestWidth: 560,
   chestHeight: 312,
-  topbarInsetX: 33,,           // (560 - 486) / 2
+  topbarInsetX: 33,           // (560 - 486) / 2
   topbarInsetY: 0,
   debug: true,
 };
