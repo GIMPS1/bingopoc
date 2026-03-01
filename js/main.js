@@ -581,14 +581,19 @@ const BARROWS_CHEST_H = 316;
 // Signature pixels (relative to close template top-left) sampled from a reference Barrows chest.
 // These are in the title text area and are used to reject false "close button" matches.
 const BARROWS_CLOSE_SIGNATURE = [
-  { dx: -158, dy: 10, rgb: [54, 43, 27] },
-  { dx: -255, dy: 10, rgb: [102, 82, 53] },
-  { dx: -225, dy:  9, rgb: [215, 172, 110] },
-  { dx: -175, dy: 10, rgb: [35, 28, 18] },
-  { dx: -242, dy: 12, rgb: [115, 92, 58] },
-  { dx: -208, dy: 13, rgb: [143, 115, 77] },
-  { dx: -274, dy: 15, rgb: [94, 77, 54] },
-  { dx: -193, dy: 10, rgb: [57, 46, 30] },
+  { dx: -273, dy: 16, rgb: [237, 188, 119], kind: 'gold' },
+  { dx: -225, dy: 12, rgb: [236, 187, 119], kind: 'gold' },
+  { dx: -258, dy: 15, rgb: [236, 187, 119], kind: 'gold' },
+  { dx: -208, dy: 15, rgb: [236, 187, 119], kind: 'gold' },
+  { dx: -159, dy: 10, rgb: [235, 186, 118], kind: 'gold' },
+  { dx: -176, dy:  9, rgb: [234, 185, 118], kind: 'gold' },
+  { dx: -247, dy:  9, rgb: [234, 185, 118], kind: 'gold' },
+  { dx: -188, dy: 13, rgb: [227, 180, 114], kind: 'gold' },
+  { dx:   -3, dy:  5, rgb: [35, 31, 28], kind: 'dark' },
+  { dx:  -10, dy: 10, rgb: [38, 35, 30], kind: 'dark' },
+  { dx:  -30, dy: 20, rgb: [42, 39, 34], kind: 'dark' },
+  { dx:  -60, dy: 30, rgb: [26, 22, 19], kind: 'dark' },
+  { dx:   -5, dy: 20, rgb: [43, 40, 35], kind: 'dark' },
 ];
 
 let __barrowsCloseT = null;          // { w,h, feat, img }
@@ -619,11 +624,16 @@ function __capRGB(cap, x, y) {
   return [d[i], d[i + 1], d[i + 2]];
 }
 
+
 function __verifyBarrowsBySignature(cap, closeX, closeY) {
   // closeX/closeY are capture-local coords of the matched close template top-left.
-  const tol = 32;        // per-channel tolerance
-  const need = 6;        // require at least this many pixels match
-  let ok = 0;
+  // We validate *two things*:
+  //  1) a handful of gold title-letter pixels exist at the expected offsets (BARROWS text)
+  //  2) a handful of dark/trim pixels near the close exist
+  // Plus: require a strong contrast gap between the gold group and dark group.
+  let goldOk = 0, darkOk = 0;
+  const goldLum = [];
+  const darkLum = [];
 
   for (const p of BARROWS_CLOSE_SIGNATURE) {
     const rx = (closeX + p.dx) | 0;
@@ -632,15 +642,38 @@ function __verifyBarrowsBySignature(cap, closeX, closeY) {
     if (!got) continue;
 
     const [er, eg, eb] = p.rgb;
+
+    // Looser per-channel tolerance for "gold" (can shift w/ capture/gamma), tighter for dark/trim.
+    const tol = (p.kind === "gold") ? 50 : 28;
+
     const dr = Math.abs(got[0] - er);
     const dg = Math.abs(got[1] - eg);
     const db = Math.abs(got[2] - eb);
 
-    if (dr <= tol && dg <= tol && db <= tol) ok++;
+    const pass = (dr <= tol && dg <= tol && db <= tol);
+    if (!pass) continue;
+
+    const lum = (got[0] * 3 + got[1] * 6 + got[2]) / 10; // 0..255
+    if (p.kind === "gold") {
+      goldOk++;
+      goldLum.push(lum);
+    } else {
+      darkOk++;
+      darkLum.push(lum);
+    }
   }
 
-  return ok >= need;
+  // Minimum hits per group
+  if (goldOk < 5 || darkOk < 3) return false;
+
+  // Contrast check (title text must be MUCH brighter than trim near close)
+  const avg = (arr) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
+  const g = avg(goldLum);
+  const d = avg(darkLum);
+
+  return (g - d) >= 55;
 }
+
 
  // user-provided crop
 
