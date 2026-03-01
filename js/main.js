@@ -1093,32 +1093,9 @@ function __locateBarrowsChestAuto() {
 
 
 
-function __validateBarrowsChestLock(lock) {
-  if (!lock || !__barrowsCloseT) return { ok:false, score:0 };
 
-  const tw = __barrowsCloseT.w|0;
-  const th = __barrowsCloseT.h|0;
 
-  const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
-  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
-    try {
-      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
-      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 400); // yellow chest
-    } catch (e) {}
-  }
 
-  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
-
-  const cap = __captureRect(expCloseX, expCloseY, tw, th);
-  if (!cap) return { ok:false, score:0 };
-
-  const gray = __downsampleCapToGrayRect(cap, 0, 0, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
-  const feat = __centerAndInvStd(gray);
-  const score = __znccScore(__barrowsCloseT.feat, feat);
-
-  // Slightly softer threshold for validation than for initial lock
-  return { ok: score >= (BARROWS_CLOSE_ACCEPT - 0.04), score };
-}
 
 // Chest scan slot occupancy + color logic
 const CHEST_SLOT_OCCUPANCY = {
@@ -1314,58 +1291,7 @@ function __scanBarrowsChestForDrops(lock) {
 }
 
 
-    // Record per-slot debug even if not accepted
-    if (CHEST_SCAN_DEBUG_TABLE) {
-      rows.push({
-        slot: i,
-        occupied: !!occ.occupied,
-        var: Number((occ.varr ?? 0).toFixed(1)),
-        edge: Number((occ.edge ?? 0).toFixed(0)),
-        best: best ? best.name : "",
-        score: best ? Number(best.score.toFixed(4)) : 0,
-        accepted: !!(best && best.accepted),
-        isBarrows: !!(best && best.accepted && validateDropName(best.name)),
-        nearMiss: !!(occ.occupied && best && !(best.accepted && validateDropName(best.name)) && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore),
-        gap: best ? Number((best.gap ?? 0).toFixed(4)) : 0,
-        ratio: best ? Number((best.ratio ?? 0).toFixed(4)) : 0,
-        dx: best ? (best.dx|0) : 0,
-        dy: best ? (best.dy|0) : 0,
-      });
-    }
-
-    if (!best || !best.accepted) continue;
-
-    // Only include actual Barrows list drops (validateDropName handles allowlist)
-    if (!validateDropName(best.name)) continue;
-    hits.push({ name: best.name, score: best.score });
-  }
-
-  // Console proof: print one table per ~1s to avoid spam
-  if (CHEST_SCAN_DEBUG_TABLE) {
-    const now = Date.now();
-    if ((now - __lastChestScanDebugAt) > 900) {
-      __lastChestScanDebugAt = now;
-      try {
-        console.group("[CHEST SCAN] slot results");
-        console.table(rows);
-        console.groupEnd();
-      } catch (e) {}
-    }
-  }
-
-  // De-dupe same icon detected multiple slots (rare but possible with noise)
-  const seen = new Set();
-  const uniq = [];
-  for (const h of hits) {
-    if (seen.has(h.name)) continue;
-    seen.add(h.name);
-    uniq.push(h);
-  }
-  // Restore ICON_MATCH to avoid affecting manual submit
-  try { Object.assign(ICON_MATCH, __savedIconMatch); } catch (e) {}
-
-  return uniq;
-}
+    
 
 function __formatBarrowsHits(hits) {
   if (!hits || !hits.length) return "No valid Barrows drops detected!";
@@ -1375,8 +1301,7 @@ function __formatBarrowsHits(hits) {
 
 let __barrowsTopbarT = null;          // { w,h, feat }
 let __barrowsTopbarTLoading = null;
-
-__validateBarrowsChestLock(lock) {
+function __validateBarrowsChestLock(lock) {
   if (!lock) return { ok:false, score:0, topbar:0 };
   const s = __chestScale(lock);
 
