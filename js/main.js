@@ -579,10 +579,12 @@ const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
 const BARROWS_CHEST_SLOTS = {
   iconSz: 32,
   max: 8,
-  // relative to chest top-left:
+  // relative to chest top-left (at scale=1.0):
+  // These values are derived from the actual Barrows chest layout and then
+  // scaled from the topbar match scale to keep placement exact.
   rowY: 40,          // y of icon row (top-left of icon)
-  startX: 55,        // x of first icon (top-left of icon)
-  spacing: 55,       // horizontal spacing between icons
+  startX: 27,        // x of first icon (top-left of icon)
+  spacing: 52,       // horizontal step between icons
 };
 // --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
 function __chestScale(lock) {
