@@ -969,6 +969,11 @@ async function ensureBarrowsTopbarTemplateLoaded() {
 
   __barrowsTopbarTLoading = (async () => {
     const img = await __loadImageToCanvasImageData(BARROWS_TOPBAR_URL);
+    console.log("[topbar] loaded template:",
+  img ? img.width : null,
+  img ? img.height : null,
+  BARROWS_TOPBAR_URL
+);
     if (!img) throw new Error("Failed to load barrows_topbar.png");
     const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, CHEST_TEST.featW, CHEST_TEST.featH);
     const feat = __centerAndInvStd(featGray);
