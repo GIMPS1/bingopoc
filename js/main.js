@@ -1,4 +1,5 @@
 
+
 function __getImgProps(img) {
   // In this project we treat Alt1 captures and loaded templates as ImageData-like objects.
   // They already expose { width, height, data (RGBA) }.
@@ -1025,42 +1026,23 @@ function __validateBarrowsChestLock(lock) {
   const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
   const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
 
-  // --- Close button validation ---
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
+      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 400); // yellow chest
+    } catch (e) {}
+  }
+
+
   const cap = __captureRect(expCloseX, expCloseY, tw, th);
   if (!cap) return { ok:false, score:0 };
 
-  const gray = __downsampleCapToGrayRect(
-    cap, 0, 0, tw, th,
-    BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H
-  );
-
+  const gray = __downsampleCapToGrayRect(cap, 0, 0, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
   const feat = __centerAndInvStd(gray);
-  const closeScore = __znccScore(__barrowsCloseT.feat, feat);
-  const closeOk = closeScore >= (BARROWS_CLOSE_ACCEPT - 0.04);
+  const score = __znccScore(__barrowsCloseT.feat, feat);
 
-  // --- Barrows topbar validation (prevents false positives) ---
-  let topOk = true;
-  try {
-    if (__barrowsTopbarT && typeof __validateChestCache === "function") {
-      const v2 = __validateChestCache(lock, __barrowsTopbarT);
-      topOk = !!v2.ok;
-    }
-  } catch (e) {
-    topOk = false;
-  }
-
-  // Debug overlay (optional)
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
-    try {
-      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0,200,255], 250);
-      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255,200,0], 250);
-    } catch(e){}
-  }
-
-  return {
-    ok: closeOk && topOk,
-    score: closeScore
-  };
+  // Slightly softer threshold for validation than for initial lock
+  return { ok: score >= (BARROWS_CLOSE_ACCEPT - 0.04), score };
 }
 
 // Chest scan slot occupancy + color logic
