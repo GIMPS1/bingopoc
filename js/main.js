@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
+  const BUILD_VERSION = "v2026-02-28--v2";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27--v2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
