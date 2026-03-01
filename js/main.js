@@ -600,6 +600,110 @@ function __chestScale(lock) {
   if (lock && typeof lock.w === "number" && lock.w > 0) return lock.w / CHEST_TEST.chestWidth;
   return 1.0;
 }
+
+
+// === Deterministic Slot Anchor (grid from pixels) ===
+function __irb_clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+function __irb_luma(data, idx) {
+  const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+  return (r * 3 + g * 6 + b) / 10;
+}
+
+// Score how “slot-like” a slot box looks at (x,y) within an ImageData-like {data,width,height}.
+function __irb_scoreSlotAt(img, x, y, side) {
+  const { data, width, height } = img;
+  if (x < 2 || y < 2 || x + side + 2 >= width || y + side + 2 >= height) return -1e9;
+
+  const s = side | 0;
+  const borderPts = [
+    [x + 2, y + 2], [x + s - 3, y + 2], [x + 2, y + s - 3], [x + s - 3, y + s - 3],
+    [x + (s >> 1), y + 1], [x + (s >> 1), y + s - 2], [x + 1, y + (s >> 1)], [x + s - 2, y + (s >> 1)],
+  ];
+  const innerPts = [
+    [x + (s >> 1), y + (s >> 1)],
+    [x + (s / 3), y + (s / 3)], [x + (2 * s / 3), y + (s / 3)],
+    [x + (s / 3), y + (2 * s / 3)], [x + (2 * s / 3), y + (2 * s / 3)],
+  ];
+
+  let bSum = 0, iSum = 0;
+  for (const [px, py] of borderPts) {
+    const idx = ((py | 0) * width + (px | 0)) * 4;
+    bSum += __irb_luma(data, idx);
+  }
+  for (const [px, py] of innerPts) {
+    const idx = ((py | 0) * width + (px | 0)) * 4;
+    iSum += __irb_luma(data, idx);
+  }
+
+  const bAvg = bSum / borderPts.length;
+  const iAvg = iSum / innerPts.length;
+  const contrast = bAvg - iAvg;
+
+  // Penalise if inside is too bright (usually means it's not a slot background)
+  const insidePenalty = (iAvg > 140 ? (iAvg - 140) : 0);
+
+  return contrast * 4 - insidePenalty;
+}
+
+function __irb_scoreGridRow(img, ox, oy, side, spacing, count) {
+  let score = 0;
+  for (let i = 0; i < count; i++) {
+    const sx = ox + i * spacing;
+    const sy = oy;
+    score += __irb_scoreSlotAt(img, sx, sy, side);
+  }
+  return score;
+}
+
+// Find the *actual* first loot slot (grid origin) inside the locked chest rect.
+// Returns absolute screen coords {x,y,score} or null.
+function __irb_findBarrowsSlotGrid(lockRect) {
+  try {
+    const cap = __captureRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h);
+    if (!cap || !cap.data || !cap.width) return null;
+
+    const img = { data: cap.data, width: cap.width, height: cap.height };
+
+    const side = BARROWS_CHEST_SLOTS.iconSz | 0;
+    const spacing = BARROWS_CHEST_SLOTS.spacing | 0;
+    const count = BARROWS_CHEST_SLOTS.max | 0;
+
+    const xMin = 0;
+    const xMax = img.width - (side + (count - 1) * spacing) - 2;
+
+    // Barrows icon row is near the top portion of the window.
+    const yMin = __irb_clamp(Math.floor(img.height * 0.06), 6, img.height - 64);
+    const yMax = __irb_clamp(Math.floor(img.height * 0.35), yMin + 16, img.height - 40);
+
+    let best = { score: -1e18, x: 0, y: 0 };
+
+    for (let y = yMin; y <= yMax; y += 2) {
+      // Coarse x scan
+      let coarse = { score: -1e18, x: 0 };
+      for (let x = xMin; x <= xMax; x += 4) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+        if (s > coarse.score) coarse = { score: s, x };
+      }
+      // Fine around coarse best
+      const fx0 = __irb_clamp(coarse.x - 8, xMin, xMax);
+      const fx1 = __irb_clamp(coarse.x + 8, xMin, xMax);
+      for (let x = fx0; x <= fx1; x += 1) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+        if (s > best.score) best = { score: s, x, y };
+      }
+    }
+
+    // Threshold depends on count; be conservative to avoid false anchors.
+    const minScore = 8 * count; // heuristic
+    if (best.score < minScore) return null;
+
+    return { x: (lockRect.x + best.x) | 0, y: (lockRect.y + best.y) | 0, score: best.score };
+  } catch (e) {
+    console.warn("[IRB] grid anchor failed:", e);
+    return null;
+  }
+}
 function __scaledChestInsets(scale) {
   return {
     insetX: Math.round(CHEST_TEST.topbarInsetX * scale),
@@ -615,15 +719,22 @@ function __scaledChestSize(scale) {
 function __barrowsSlotRects(lock) {
   const s = __chestScale(lock);
   const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
-  const y0   = Math.round(BARROWS_CHEST_SLOTS.rowY   * s);
-  const x0   = Math.round(BARROWS_CHEST_SLOTS.startX * s);
-  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing* s);
+  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing * s);
+
+  // Prefer pixel-detected grid origin if present (absolute coords), else fall back to constants.
+  let x0, y0;
+  if (lock && lock.grid && typeof lock.grid.x === "number" && typeof lock.grid.y === "number") {
+    x0 = Math.round((lock.grid.x - lock.x) * 1); // already in lock space at 100% scaling
+    y0 = Math.round((lock.grid.y - lock.y) * 1);
+  } else {
+    x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
+    y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
+  }
+
   const rects = [];
   for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
   return rects;
 }
-
-
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
@@ -776,18 +887,23 @@ function __locateBarrowsChestFromMouse() {
     scale: 1.0,
     savedAt: Date.now()
   };
+  // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
+  lock.grid = __irb_findBarrowsSlotGrid(lock);
+
 
 
   if (BARROWS_LOCK_DEBUG_OVERLAY) {
     try {
       __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
-      // Also draw expected icon slots so you can visually confirm alignment.
-      const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
-      const y0 = BARROWS_CHEST_SLOTS.rowY | 0;
-      for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
-        const x0 = (BARROWS_CHEST_SLOTS.startX + i * BARROWS_CHEST_SLOTS.spacing) | 0;
-        __overlayRectAbs((lock.x + x0) | 0, (lock.y + y0) | 0, icon, icon, [255, 80, 80], 1200); // red = slot boxes
-      }
+// Also draw expected icon slots so you can visually confirm alignment.
+const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
+const absGX = (lock.grid && typeof lock.grid.x === "number") ? (lock.grid.x | 0) : ((lock.x + BARROWS_CHEST_SLOTS.startX) | 0);
+const absGY = (lock.grid && typeof lock.grid.y === "number") ? (lock.grid.y | 0) : ((lock.y + BARROWS_CHEST_SLOTS.rowY) | 0);
+for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
+  const sx = (absGX + i * (BARROWS_CHEST_SLOTS.spacing | 0)) | 0;
+  const sy = absGY;
+  __overlayRectAbs(sx, sy, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+}
     } catch (e) {}
   }
 
