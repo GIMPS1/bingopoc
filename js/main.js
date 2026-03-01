@@ -578,7 +578,7 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
- const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
+ const BARROWS_LOCK_DEBUG_OVERLAY = false; // draw anchor + chest rect on lock/validate (debug)
 
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
@@ -820,7 +820,7 @@ function __barrowsSlotRects(lock) {
 }
 
 // Barrows chest scan debug
-const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_OVERLAY = false;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
 
