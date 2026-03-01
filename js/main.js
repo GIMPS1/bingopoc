@@ -559,13 +559,13 @@ const CHEST_TEST = {
   coarseStepY: 4,
   refineRadius: 14,
   refineStep: 2,
-  featW: 96,                  // downsampled feature width
-  featH: 10,                  // downsampled feature height
-  acceptScore: 0.86,          // UI match threshold
+  featW: 128,                  // downsampled feature width
+  featH: 16,                  // downsampled feature height
+  acceptScore: 0.78,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
   chestWidth: 560,
   chestHeight: 312,
-  topbarInsetX: 33,           // (560 - 486) / 2
+  topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
   debug: true,
 };
@@ -723,11 +723,7 @@ function __locateBarrowsChestFromMouse() {
         const feat = __centerAndInvStd(gray);
         const score = __znccScore(__barrowsTopbarT.feat, feat);
         const eps = 0.002;
-        if (
-          !best ||
-          score > best.score + eps ||
-          (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))
-        ) {
+        if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
           best = { x, y, tw, th, score, scale: sc };
         }
       }
@@ -750,7 +746,7 @@ function __locateBarrowsChestFromMouse() {
     }
   }
 
-  if (refined.score < 0.86) {
+  if (refined.score < CHEST_TEST.acceptScore) {
     __statusChest(`Not confident enough (score ${refined.score.toFixed(3)}). Hover the top bar and try again.`, "warn");
     if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locate failed best:", refined);
     return null;
