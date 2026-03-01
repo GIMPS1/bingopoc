@@ -820,7 +820,7 @@ function __barrowsSlotRects(lock) {
 }
 
 // Barrows chest scan debug
-const CHEST_SCAN_DEBUG_OVERLAY = false;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
 
