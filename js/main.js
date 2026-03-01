@@ -590,9 +590,9 @@ const BARROWS_CHEST_SLOTS = {
   // relative to chest top-left (at scale=1.0):
   // These values are derived from the actual Barrows chest layout and then
   // scaled from the topbar match scale to keep placement exact.
-  rowY: 40,          // y of icon row (top-left of icon)
-  startX: 27,        // x of first icon (top-left of icon)
-  spacing: 52,       // horizontal step between icons
+  rowY: 43,          // y of icon row (top-left of icon)
+  startX: 15,        // x of first icon (top-left of icon)
+  spacing: 56,       // horizontal step between icons
 };
 // --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
 function __chestScale(lock) {
