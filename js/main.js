@@ -581,20 +581,23 @@ const BARROWS_CHEST_H = 316;
 // Signature pixels (relative to close template top-left) sampled from a reference Barrows chest.
 // These are in the title text area and are used to reject false "close button" matches.
 const BARROWS_CLOSE_SIGNATURE = [
-  { dx: -273, dy: 16, rgb: [237, 188, 119], kind: 'gold' },
-  { dx: -225, dy: 12, rgb: [236, 187, 119], kind: 'gold' },
-  { dx: -258, dy: 15, rgb: [236, 187, 119], kind: 'gold' },
-  { dx: -208, dy: 15, rgb: [236, 187, 119], kind: 'gold' },
-  { dx: -159, dy: 10, rgb: [235, 186, 118], kind: 'gold' },
-  { dx: -176, dy:  9, rgb: [234, 185, 118], kind: 'gold' },
-  { dx: -247, dy:  9, rgb: [234, 185, 118], kind: 'gold' },
-  { dx: -188, dy: 13, rgb: [227, 180, 114], kind: 'gold' },
-  { dx:   -3, dy:  5, rgb: [35, 31, 28], kind: 'dark' },
-  { dx:  -10, dy: 10, rgb: [38, 35, 30], kind: 'dark' },
-  { dx:  -30, dy: 20, rgb: [42, 39, 34], kind: 'dark' },
-  { dx:  -60, dy: 30, rgb: [26, 22, 19], kind: 'dark' },
-  { dx:   -5, dy: 20, rgb: [43, 40, 35], kind: 'dark' },
+  // Offsets are relative to the matched close button template top-left (capture-local).
+  // We classify points as "gold" (title bar / lettering area) or "dark" (trim/panel near close).
+  // Verification uses luma thresholds + contrast, not exact RGB equality (more robust across capture/gamma).
+  { dx: -208, dy: 15, kind: 'gold' },
+  { dx: -176, dy:  9, kind: 'gold' },
+  { dx: -188, dy: 13, kind: 'gold' },
+  { dx: -225, dy: 12, kind: 'gold' },
+  { dx: -247, dy:  9, kind: 'gold' },
+  { dx: -159, dy: 10, kind: 'gold' },
+
+  { dx:   -3, dy:  5, kind: 'dark' },
+  { dx:  -10, dy: 10, kind: 'dark' },
+  { dx:  -30, dy: 20, kind: 'dark' },
+  { dx:  -60, dy: 30, kind: 'dark' },
+  { dx:   -5, dy: 20, kind: 'dark' },
 ];
+
 
 let __barrowsCloseT = null;          // { w,h, feat, img }
 let __barrowsCloseTLoading = null;
@@ -655,18 +658,19 @@ function __debugBarrowsSignatureFailure(ctx) {
       const absY = (sy + ry) | 0;
 
       const got = __capRGB(cap, rx, ry);
-      const exp = p.rgb;
-      const tol = (p.kind === "gold") ? 50 : 28;
 
       let pass = false;
       let lum = null;
-      let dr = null, dg = null, db = null;
+      let rule = "";
       if (got) {
-        dr = Math.abs(got[0] - exp[0]);
-        dg = Math.abs(got[1] - exp[1]);
-        db = Math.abs(got[2] - exp[2]);
-        pass = (dr <= tol && dg <= tol && db <= tol);
         lum = __barrowsLuma(got);
+        if (p.kind === "gold") {
+          pass = lum >= 130;
+          rule = "luma>=130";
+        } else {
+          pass = lum <= 70;
+          rule = "luma<=70";
+        }
       }
 
       rows.push({
@@ -677,9 +681,7 @@ function __debugBarrowsSignatureFailure(ctx) {
         absY,
         rgb: got ? `${got[0]},${got[1]},${got[2]}` : "OOB",
         luma: lum == null ? "" : +lum.toFixed(1),
-        exp: `${exp[0]},${exp[1]},${exp[2]}`,
-        tol,
-        delta: got ? `${dr},${dg},${db}` : "",
+        rule,
         pass
       });
 
@@ -699,52 +701,43 @@ function __debugBarrowsSignatureFailure(ctx) {
 
 function __verifyBarrowsBySignature(cap, closeX, closeY) {
   // closeX/closeY are capture-local coords of the matched close template top-left.
-  // We validate *two things*:
-  //  1) a handful of gold title-letter pixels exist at the expected offsets (BARROWS text)
-  //  2) a handful of dark/trim pixels near the close exist
-  // Plus: require a strong contrast gap between the gold group and dark group.
+  // Robust verification using luma thresholds + contrast:
+  // - "gold" points should be bright (title bar / lettering)
+  // - "dark" points should be dark (trim/panel near close)
+  // This avoids brittle exact RGB matching.
+  const GOLD_MIN = 130; // luma threshold for "gold" samples
+  const DARK_MAX = 70;  // luma threshold for "dark" samples
+  const NEED_GOLD = 3;  // minimum gold samples that must pass
+  const NEED_DARK = 3;  // minimum dark samples that must pass
+  const NEED_CONTRAST = 60; // avg(gold) - avg(dark)
+
   let goldOk = 0, darkOk = 0;
   const goldLum = [];
   const darkLum = [];
 
   for (const p of BARROWS_CLOSE_SIGNATURE) {
-    const rx = (closeX + p.dx) | 0;
-    const ry = (closeY + p.dy) | 0;
+    const rx = (closeX + (p.dx|0)) | 0;
+    const ry = (closeY + (p.dy|0)) | 0;
     const got = __capRGB(cap, rx, ry);
     if (!got) continue;
 
-    const [er, eg, eb] = p.rgb;
-
-    // Looser per-channel tolerance for "gold" (can shift w/ capture/gamma), tighter for dark/trim.
-    const tol = (p.kind === "gold") ? 50 : 28;
-
-    const dr = Math.abs(got[0] - er);
-    const dg = Math.abs(got[1] - eg);
-    const db = Math.abs(got[2] - eb);
-
-    const pass = (dr <= tol && dg <= tol && db <= tol);
-    if (!pass) continue;
-
-    const lum = (got[0] * 3 + got[1] * 6 + got[2]) / 10; // 0..255
+    const lum = __barrowsLuma(got);
     if (p.kind === "gold") {
-      goldOk++;
-      goldLum.push(lum);
+      if (lum >= GOLD_MIN) { goldOk++; goldLum.push(lum); }
     } else {
-      darkOk++;
-      darkLum.push(lum);
+      if (lum <= DARK_MAX) { darkOk++; darkLum.push(lum); }
     }
   }
 
-  // Minimum hits per group
-  if (goldOk < 5 || darkOk < 3) return false;
+  if (goldOk < NEED_GOLD || darkOk < NEED_DARK) return false;
 
-  // Contrast check (title text must be MUCH brighter than trim near close)
   const avg = (arr) => arr.reduce((a, b) => a + b, 0) / (arr.length || 1);
   const g = avg(goldLum);
   const d = avg(darkLum);
 
-  return (g - d) >= 55;
+  return (g - d) >= NEED_CONTRAST;
 }
+
 
 
  // user-provided crop
