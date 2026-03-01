@@ -825,7 +825,7 @@ const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
 
 // Best UX: scan once per chest open, with a short timeout.
-const CHEST_SCAN_TIMEOUT_MS = 2000;
+const CHEST_SCAN_TIMEOUT_MS = 1200;
 const CHEST_SCAN_INTERVAL_MS = 250;
 
 // Chest-specific matching thresholds (stricter than manual to avoid false positives)
