@@ -577,7 +577,8 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
- // user-provided crop
+ // user-provided cropconst BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate
+
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
 const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
@@ -756,6 +757,12 @@ function __locateBarrowsChestFromMouse() {
 
   const absCloseX = (sx + refined.x) | 0;
   const absCloseY = (sy + refined.y) | 0;
+  // Debug: show what we anchored to (close match) and the resulting chest rect
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(absCloseX, absCloseY, tw, th, [0, 200, 255], 1200); // cyan = close anchor
+    } catch (e) {}
+  }
 
   // Close template top-left is at (chestX + (W - tw - padR), chestY + padT)
   const chestX = (absCloseX - (CHEST_TEST.chestWidth - tw - BARROWS_CLOSE_PAD_R)) | 0;
@@ -768,6 +775,32 @@ function __locateBarrowsChestFromMouse() {
     h: CHEST_TEST.chestHeight|0,
     scale: 1.0,
     savedAt: Date.now(),
+
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
+      // Also draw expected icon slots so you can visually confirm alignment.
+      const icon = BARROWS_CHEST_SLOTS.iconSz|0;
+      const y = BARROWS_CHEST_SLOTS.rowY|0;
+      for (let i=0; i<BARROWS_CHEST_SLOTS.max; i++) {
+        const x = (BARROWS_CHEST_SLOTS.startX + i*BARROWS_CHEST_SLOTS.spacing)|0;
+        __overlayRectAbs((lock.x + x)|0, (lock.y + y)|0, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+      }
+    } catch (e) {}
+  }
+
+  try {
+    console.groupCollapsed(`[BARROWS CHEST] lock debug (close-only) score ${refined.score.toFixed(3)}`);
+    console.log("close match abs:", { x: absCloseX, y: absCloseY, tw, th });
+    console.log("pads:", { padR: BARROWS_CLOSE_PAD_R, padT: BARROWS_CLOSE_PAD_T, chestW: CHEST_TEST.chestWidth, chestH: CHEST_TEST.chestHeight });
+    console.log("computed chest top-left:", { x: lock.x, y: lock.y });
+    console.log("expected close (from chest):", {
+      x: (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R))|0,
+      y: (lock.y + BARROWS_CLOSE_PAD_T)|0
+    });
+    console.groupEnd();
+  } catch (e) {}
+
   };
 
   __saveBarrowsChestLock(lock);
@@ -785,6 +818,13 @@ function __validateBarrowsChestLock(lock) {
   const th = __barrowsCloseT.h|0;
 
   const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
+      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 400); // yellow chest
+    } catch (e) {}
+  }
+
   const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
 
   const cap = __captureRect(expCloseX, expCloseY, tw, th);
