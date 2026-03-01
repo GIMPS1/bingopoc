@@ -577,7 +577,7 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
-const BARROWS_CLOSE_FEAT_H = 52;
+
 
 // Auto-detect: full-screen search uses a smaller feature map for coarse scanning, then refines.
 const BARROWS_CLOSE_COARSE_FEAT_W = 24;
@@ -599,6 +599,17 @@ const BARROWS_AUTOLOCATE = {
 
 
  const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
+
+let __debugChestOverlayEnabled = false;
+
+function __setDebugChestOverlayEnabled(v) {
+  __debugChestOverlayEnabled = !!v;
+  try {
+    const btn = document.getElementById("btnToggleBarrowsDebug");
+    if (btn) btn.textContent = `Debug chest overlay: ${__debugChestOverlayEnabled ? "ON" : "OFF"}`;
+  } catch (e) {}
+}
+
 
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
@@ -890,7 +901,7 @@ function __locateBarrowsChestFromMouse() {
   const absCloseX = (sx + refined.x) | 0;
   const absCloseY = (sy + refined.y) | 0;
   // Debug: show what we anchored to (close match) and the resulting chest rect
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
     try {
       __overlayRectAbs(absCloseX, absCloseY, tw, th, [0, 200, 255], 1200); // cyan = close anchor
     } catch (e) {}
@@ -913,7 +924,7 @@ function __locateBarrowsChestFromMouse() {
 
 
 
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
     try {
       __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
 // Also draw expected icon slots so you can visually confirm alignment.
@@ -1070,7 +1081,7 @@ function __locateBarrowsChestAuto() {
 
   lock.grid = __irb_findBarrowsSlotGrid(lock);
 
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
     try {
       __overlayRectAbs(absCloseX, absCloseY, tw, th, [0, 200, 255], 900);
       __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 900);
@@ -1089,7 +1100,7 @@ function __validateBarrowsChestLock(lock) {
   const th = __barrowsCloseT.h|0;
 
   const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
     try {
       __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
       __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 400); // yellow chest
@@ -1239,7 +1250,7 @@ function __scanBarrowsChestForDrops_Box(lock, cap) {
   }
   const final = [...byName.values()].sort((a, b) => b.score - a.score);
 
-  if (CHEST_BOX_SCAN.debugOverlay && final.length) {
+  if (__debugChestOverlayEnabled && final.length) {
     for (const m of final) {
       __overlayRectAbs((lock.x + m.ax) | 0, (lock.y + m.ay) | 0, m.iconSz, m.iconSz, [0, 220, 0], CHEST_BOX_SCAN.debugOverlayMs);
     }
@@ -1381,7 +1392,7 @@ __validateBarrowsChestLock(lock) {
   const expCloseX = (lock.x + (lock.w - tw - padR)) | 0;
   const expCloseY = (lock.y + padT) | 0;
 
-  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+  if (BARROWS_LOCK_DEBUG_OVERLAY || __debugChestOverlayEnabled) {
     try {
       __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 220); // cyan expected close
       __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 220); // yellow chest
@@ -4074,6 +4085,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
 
   // Ensure Barrows chest lock reset button exists (if settings HTML doesn't include it)
   try { __ensureBarrowsResetButton(); } catch (e) {}
+  try { __ensureBarrowsDebugButton(); } catch (e) {}
   // Barrows chest lock reset (Settings)
 // Use delegated click handling so it works even if the settings drawer DOM is rebuilt.
 (function () {
@@ -4125,6 +4137,35 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
       return btn;
     } catch (e) { return null; }
   }
+
+// Ensure Barrows chest debug toggle button exists in the Settings drawer (create if missing)
+function __ensureBarrowsDebugButton() {
+  try {
+    let btn = document.getElementById("btnToggleBarrowsDebug");
+    if (btn) return btn;
+
+    const anchor = document.getElementById("btnResetBarrowsLock") || document.getElementById("btnResetIgn") || document.getElementById("btnUnlockSetup");
+    if (!anchor || !anchor.parentNode) return null;
+
+    btn = document.createElement("button");
+    btn.id = "btnToggleBarrowsDebug";
+    btn.type = "button";
+    btn.className = anchor.className || "btn";
+    btn.style.marginTop = "6px";
+    btn.title = "Toggles live overlay for detected chest bounds and matched loot icons.";
+    btn.textContent = `Debug chest overlay: ${__debugChestOverlayEnabled ? "ON" : "OFF"}`;
+
+    btn.addEventListener("click", () => {
+      __setDebugChestOverlayEnabled(!__debugChestOverlayEnabled);
+      try { addFeed(`Barrows debug overlay ${__debugChestOverlayEnabled ? "enabled" : "disabled"}.`, __debugChestOverlayEnabled ? "ok" : "warn"); } catch (e) {}
+    });
+
+    anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+    return btn;
+  } catch (e) { return null; }
+}
+
+
 
 
 
