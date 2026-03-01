@@ -786,12 +786,16 @@ function __barrowsSlotRects(lock) {
   // Prefer pixel-detected grid origin if present (absolute coords), else fall back to constants.
   let x0, y0;
   if (lock && lock.grid && typeof lock.grid.x === "number" && typeof lock.grid.y === "number") {
-    x0 = Math.round((lock.grid.x - lock.x) * 1); // already in lock space at 100% scaling
-    y0 = Math.round((lock.grid.y - lock.y) * 1);
-  } else {
-    x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
-    y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
-  }
+  x0 = Math.round((lock.grid.x - lock.x));
+  y0 = Math.round((lock.grid.y - lock.y));
+} else {
+  // shift from window frame → inner loot panel
+  const CONTENT_OFFSET_X = 13;
+  const CONTENT_OFFSET_Y = 36;
+
+  x0 = Math.round((BARROWS_CHEST_SLOTS.startX + CONTENT_OFFSET_X) * s);
+  y0 = Math.round((BARROWS_CHEST_SLOTS.rowY + CONTENT_OFFSET_Y) * s);
+}
 
   const rects = [];
   for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
