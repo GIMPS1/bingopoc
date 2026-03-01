@@ -625,6 +625,78 @@ function __capRGB(cap, x, y) {
 }
 
 
+function __barrowsLuma(rgb) {
+  return (rgb[0] * 3 + rgb[1] * 6 + rgb[2]) / 10; // 0..255
+}
+
+function __debugBarrowsSignatureFailure(ctx) {
+  // ctx: { cap, closeLocalX, closeLocalY, absScanX, absScanY, score }
+  try {
+    const cap = ctx.cap;
+    const closeX = ctx.closeLocalX | 0;
+    const closeY = ctx.closeLocalY | 0;
+    const sx = ctx.absScanX | 0;
+    const sy = ctx.absScanY | 0;
+
+    const absCloseX = (sx + closeX) | 0;
+    const absCloseY = (sy + closeY) | 0;
+    const chestX = (absCloseX - BARROWS_CLOSE_OX) | 0;
+    const chestY = (absCloseY - BARROWS_CLOSE_OY) | 0;
+
+    console.groupCollapsed(`[BARROWS CHEST] signature debug (close score ${(+(ctx.score || 0)).toFixed(3)})`);
+    console.log("close abs:", { x: absCloseX, y: absCloseY });
+    console.log("chest guess:", { x: chestX, y: chestY, w: BARROWS_CHEST_W, h: BARROWS_CHEST_H });
+
+    const rows = [];
+    for (const p of BARROWS_CLOSE_SIGNATURE) {
+      const rx = (closeX + (p.dx | 0)) | 0;
+      const ry = (closeY + (p.dy | 0)) | 0;
+      const absX = (sx + rx) | 0;
+      const absY = (sy + ry) | 0;
+
+      const got = __capRGB(cap, rx, ry);
+      const exp = p.rgb;
+      const tol = (p.kind === "gold") ? 50 : 28;
+
+      let pass = false;
+      let lum = null;
+      let dr = null, dg = null, db = null;
+      if (got) {
+        dr = Math.abs(got[0] - exp[0]);
+        dg = Math.abs(got[1] - exp[1]);
+        db = Math.abs(got[2] - exp[2]);
+        pass = (dr <= tol && dg <= tol && db <= tol);
+        lum = __barrowsLuma(got);
+      }
+
+      rows.push({
+        kind: p.kind,
+        dx: p.dx | 0,
+        dy: p.dy | 0,
+        absX,
+        absY,
+        rgb: got ? `${got[0]},${got[1]},${got[2]}` : "OOB",
+        luma: lum == null ? "" : +lum.toFixed(1),
+        exp: `${exp[0]},${exp[1]},${exp[2]}`,
+        tol,
+        delta: got ? `${dr},${dg},${db}` : "",
+        pass
+      });
+
+      if (got) {
+        const col = pass ? [0, 220, 0] : [220, 0, 0];
+        __overlayRectAbs(absX - 2, absY - 2, 5, 5, col, 1400);
+      }
+    }
+
+    try { console.table(rows); } catch (e) { console.log(rows); }
+    console.groupEnd();
+  } catch (e) {
+    try { console.warn("[BARROWS CHEST] signature debug failed:", e); } catch (e2) {}
+  }
+}
+
+
 function __verifyBarrowsBySignature(cap, closeX, closeY) {
   // closeX/closeY are capture-local coords of the matched close template top-left.
   // We validate *two things*:
@@ -852,6 +924,15 @@ function __locateBarrowsChestFromMouse() {
   if (!__verifyBarrowsBySignature(cap, refined.x, refined.y)) {
     __statusChest(`Close matched (${refined.score.toFixed(3)}) but signature failed. (Not Barrows?)`, "warn");
     if (CHEST_TEST.debug) console.log("[BARROWS CHEST] close matched but signature failed:", { ...refined, tw, th });
+    // Detailed debug: print the signature samples + draw tiny overlay squares.
+    __debugBarrowsSignatureFailure({
+      cap,
+      closeLocalX: refined.x,
+      closeLocalY: refined.y,
+      absScanX: sx,
+      absScanY: sy,
+      score: refined.score
+    });
     return null;
   }
 
