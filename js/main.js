@@ -832,7 +832,7 @@ const CHEST_ICON_MATCH_OVERRIDES = {
   acceptScore: 0.70,     // require strong match for auto chest scan
   minGap: 0.04,
   minRatio: 1.08,
-  searchRadius: 30,   // allow local snap to the real icon center
+  searchRadius: 5,   // allow local snap to the real icon center
 };
 
 function __mixColorSafe(r, g, b) {
@@ -1132,20 +1132,14 @@ const selection = {
 // Only attempt template match on occupied slots (saves CPU + reduces noise)
 const best = occ.occupied ? matchIconFromSelection(selection, __iconTemplates) : null;
 
-// Visual proof: draw slot boxes at the snapped position actually evaluated
+// Draw slot boxes at the FIXED GRID position (no snapping)
 if (CHEST_SCAN_DEBUG_OVERLAY) {
-  const dx = (best && typeof best.dx === "number") ? best.dx : 0;
-  const dy = (best && typeof best.dy === "number") ? best.dy : 0;
-  const ax = (lock.x + x + dx)|0;
-  const ay = (lock.y + y + dy)|0;
+  const ax = (lock.x + x)|0;
+  const ay = (lock.y + y)|0;
 
   const isBarrows = !!(best && best.accepted && validateDropName(best.name));
   const nearMiss = !!(occ.occupied && best && !isBarrows && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore);
 
-  // Color scheme:
-  // - Green: accepted Barrows unique
-  // - Red: near-miss (looked close but failed)
-  // - Gray: empty slot or junk / low-confidence
   const col = isBarrows ? [0, 220, 0] : (nearMiss ? [220, 0, 0] : [140, 140, 140]);
   __overlayRectAbs(ax, ay, iconSz, iconSz, col, 280);
 }
