@@ -826,7 +826,7 @@ let __lastChestScanDebugAt = 0;
 
 // Best UX: scan once per chest open, with a short timeout.
 const CHEST_SCAN_TIMEOUT_MS = 3000;
-const CHEST_SCAN_INTERVAL_MS = 800;
+const CHEST_SCAN_INTERVAL_MS = 250;
 
 // Chest-specific matching thresholds (stricter than manual to avoid false positives)
 const CHEST_ICON_MATCH_OVERRIDES = {
