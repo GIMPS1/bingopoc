@@ -571,6 +571,115 @@ const CHEST_TEST = {
 };
 
 const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png"); // user-provided crop
+// --- Barrows chest multi-anchor templates (pixel-perfect lock) ---
+// Place these PNGs in ./assets/ui/ with EXACT names:
+const BARROWS_ANCHOR_TITLE_URL = assetUrl("assets/ui/barrows_anchor_title.png"); // "BARROWS CHEST" title strip
+const BARROWS_ANCHOR_LEFT_URL  = assetUrl("assets/ui/barrows_anchor_left.png");  // left small square icon
+const BARROWS_ANCHOR_CLOSE_URL = assetUrl("assets/ui/barrows_anchor_close.png"); // red close X
+
+// Offsets are relative to the Barrows chest window top-left at 100% UI scale (560x312 reference).
+// These were measured against the provided 560x312 Barrows chest reference image.
+const BARROWS_ANCHORS = [
+  { id: "title", url: BARROWS_ANCHOR_TITLE_URL, ox: 180, oy: 0,   min: 0.64 },
+  { id: "left",  url: BARROWS_ANCHOR_LEFT_URL,  ox: 11,  oy: 238, min: 0.70 },
+  { id: "close", url: BARROWS_ANCHOR_CLOSE_URL, ox: 461, oy: 8,   min: 0.70 },
+];
+
+// Anchor matching feature resolution (small anchors -> use square features)
+const BARROWS_ANCHOR_FEAT = { w: 48, h: 48 };
+
+let __barrowsAnchorTs = null;          // [{ id,url,ox,oy,min,w,h,feat }]
+let __barrowsAnchorTsLoading = null;
+
+async function ensureBarrowsAnchorTemplatesLoaded() {
+  if (__barrowsAnchorTs) return __barrowsAnchorTs;
+  if (__barrowsAnchorTsLoading) return __barrowsAnchorTsLoading;
+
+  __barrowsAnchorTsLoading = (async () => {
+    const out = [];
+    for (const a of BARROWS_ANCHORS) {
+      const img = await __loadImageToCanvasImageData(a.url);
+      if (!img) {
+        console.warn("[barrows-anchor] failed to load", a.url);
+        continue;
+      }
+      const gray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const feat = __centerAndInvStd(gray);
+      out.push({ ...a, w: img.width|0, h: img.height|0, feat });
+    }
+    __barrowsAnchorTs = out;
+    console.log("[barrows-anchor] templates loaded:", out.map(o=>`${o.id}(${o.w}x${o.h})`).join(", "));
+    return __barrowsAnchorTs;
+  })().finally(() => { __barrowsAnchorTsLoading = null; });
+
+  return __barrowsAnchorTsLoading;
+}
+
+function __matchAnchorInCap(capProps, anchorT, coarseStep=4, refineRadius=8) {
+  const tw = anchorT.w|0, th = anchorT.h|0;
+  if (tw <= 0 || th <= 0) return null;
+  if (tw >= capProps.width || th >= capProps.height) return null;
+
+  const maxX = (capProps.width - tw)|0;
+  const maxY = (capProps.height - th)|0;
+
+  let best = null;
+  const eps = 0.0005;
+
+  for (let y = 0; y <= maxY; y += coarseStep) {
+    for (let x = 0; x <= maxX; x += coarseStep) {
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(anchorT.feat, feat);
+      if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
+        best = { x, y, score };
+      }
+    }
+  }
+  if (!best) return null;
+
+  // 1px refinement around best
+  let ref = best;
+  for (let y = Math.max(0, best.y - refineRadius); y <= Math.min(maxY, best.y + refineRadius); y++) {
+    for (let x = Math.max(0, best.x - refineRadius); x <= Math.min(maxX, best.x + refineRadius); x++) {
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(anchorT.feat, feat);
+      if (score > ref.score + eps || (Math.abs(score - ref.score) <= eps && (x < ref.x || (x === ref.x && y < ref.y)))) {
+        ref = { x, y, score };
+      }
+    }
+  }
+  return { ...ref, tw, th };
+}
+
+function __chooseConsensusChestOrigin(anchorHits, maxDisagreePx=2) {
+  // anchorHits: [{id, score, cx, cy}]
+  if (!anchorHits || anchorHits.length < 2) return null;
+
+  let bestPair = null;
+  for (let i = 0; i < anchorHits.length; i++) {
+    for (let j = i + 1; j < anchorHits.length; j++) {
+      const a = anchorHits[i], b = anchorHits[j];
+      const dx = Math.abs(a.cx - b.cx);
+      const dy = Math.abs(a.cy - b.cy);
+      const disagree = Math.max(dx, dy);
+      if (disagree > maxDisagreePx) continue;
+      const pairScore = (a.score || 0) + (b.score || 0);
+      if (!bestPair || pairScore > bestPair.pairScore) {
+        bestPair = { i, j, pairScore, disagree };
+      }
+    }
+  }
+  if (!bestPair) return null;
+
+  const a = anchorHits[bestPair.i], b = anchorHits[bestPair.j];
+  return {
+    x: Math.round((a.cx + b.cx) / 2),
+    y: Math.round((a.cy + b.cy) / 2),
+    via: `${a.id}+${b.id}`,
+  };
+}
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
 const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
@@ -693,20 +802,67 @@ function __captureRect(x, y, w, h) {
 
 function __locateBarrowsChestFromMouse() {
   // User-triggered: hover/cursor near the chest window and press Alt+1.
-  // We search around the mouse for the topbar template (multi-scale) and then lock the chest rect.
+  // We use MULTIPLE anchors (title + close + left icon) to compute the chest origin.
+  // This removes drift because each anchor maps to a fixed (ox,oy) relative to chest top-left.
   const mp = getMousePos && getMousePos();
   if (!mp) { __statusChest("Mouse position unavailable. Try again.", "warn"); return null; }
 
-  const scanW = 900, scanH = 420;
-  const sx = Math.max(0, (mp.x - (scanW>>1))|0);
-  const sy = Math.max(0, (mp.y - (scanH>>1))|0);
+  const scanW = 980, scanH = 520;
+  const sx = Math.max(0, (mp.x - (scanW >> 1)) | 0);
+  const sy = Math.max(0, (mp.y - (scanH >> 1)) | 0);
   const cap = __captureRect(sx, sy, scanW, scanH);
   if (!cap) { __statusChest("Capture failed. Try again.", "warn"); return null; }
+  // 1) Try anchor-based lock first (most stable / pixel-perfect)
+  const anchors = __barrowsAnchorTs || [];
+  const hits = [];
 
-  // Ensure template loaded
+  if (anchors && anchors.length) {
+    for (const a of anchors) {
+      const hit = __matchAnchorInCap(cap, a, 4, 10);
+      if (!hit) continue;
+      // Convert anchor position -> implied chest origin in capture-local coords
+      const cx = (hit.x - a.ox) | 0;
+      const cy = (hit.y - a.oy) | 0;
+      hits.push({ id: a.id, score: hit.score, cx, cy, ax: hit.x, ay: hit.y, tw: hit.tw, th: hit.th, min: a.min });
+    }
+
+    // Filter by per-anchor minimum confidence first
+    const good = hits.filter(h => (h.score || 0) >= (h.min || 0.70));
+    const consensus = __chooseConsensusChestOrigin(good, 2);
+
+    if (consensus) {
+      const chestX = (sx + consensus.x) | 0;
+      const chestY = (sy + consensus.y) | 0;
+
+      // Determine scale from the close anchor width (best scaling proxy), fall back to 1.0.
+      let scale = 1.0;
+      try {
+        const closeHit = good.find(h => h.id === "close");
+        const closeT = anchors.find(t => t.id === "close");
+        if (closeHit && closeT && closeT.w > 0) {
+          // closeHit.tw is the template render width in capture (no scaling), closeT.w is source width
+          // We don't resize templates during matching, so tw==closeT.w. Scale inference must come from RS UI.
+          // Keep at 1.0 and allow future multi-scale matching if you add non-100% scaling.
+          scale = 1.0;
+        }
+      } catch (e) {}
+
+      const sz = __scaledChestSize(scale);
+
+      const lock = { x: chestX, y: chestY, w: sz.w, h: sz.h, scale, savedAt: Date.now(), via: consensus.via };
+      __saveBarrowsChestLock(lock);
+
+      __statusChest(`Saved chest position via ${consensus.via} (score ${(good.reduce((s,h)=>s+h.score,0)/Math.max(1,good.length)).toFixed(3)})`, "ok");
+      if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locked (anchors):", lock, { hits: good });
+      return lock;
+    }
+
+    if (CHEST_TEST.debug) console.log("[BARROWS CHEST] anchors found but no consensus:", { hits, good });
+  }
+
+  // 2) Fallback: topbar template scan (works if anchor images are missing)
   if (!__barrowsTopbarT) { __statusChest("Topbar template not loaded yet.", "warn"); return null; }
 
-  // Try a small scale set to handle interface scaling differences
   const scales = [1.00];
   let best = null;
 
@@ -715,30 +871,26 @@ function __locateBarrowsChestFromMouse() {
     const th = Math.max(10, Math.round(__barrowsTopbarT.h * sc));
     if (tw >= cap.width || th >= cap.height) continue;
 
-    // Coarse scan step (fast)
     const step = 6;
-    for (let y=0; y<=cap.height - th; y+=step) {
-      for (let x=0; x<=cap.width - tw; x+=step) {
+    for (let y = 0; y <= cap.height - th; y += step) {
+      for (let x = 0; x <= cap.width - tw; x += step) {
         const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, CHEST_TEST.featW, CHEST_TEST.featH);
         const feat = __centerAndInvStd(gray);
         const score = __znccScore(__barrowsTopbarT.feat, feat);
-        const eps = 0.002;
-        if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
-          best = { x, y, tw, th, score, scale: sc };
-        }
+        if (!best || score > best.score) best = { x, y, tw, th, score, scale: sc };
       }
     }
   }
 
   if (!best) { __statusChest("Unable to search capture area.", "warn"); return null; }
 
-  // Refine locally around best for 1px accuracy at its scale
+  // Refine locally around best for 1px accuracy
   const rx0 = Math.max(0, best.x - 12), ry0 = Math.max(0, best.y - 12);
   const rx1 = Math.min(cap.width - best.tw, best.x + 12);
   const ry1 = Math.min(cap.height - best.th, best.y + 12);
   let refined = best;
-  for (let y=ry0; y<=ry1; y+=1) {
-    for (let x=rx0; x<=rx1; x+=1) {
+  for (let y = ry0; y <= ry1; y += 1) {
+    for (let x = rx0; x <= rx1; x += 1) {
       const gray = __downsampleCapToGrayRect(cap, x, y, best.tw, best.th, CHEST_TEST.featW, CHEST_TEST.featH);
       const feat = __centerAndInvStd(gray);
       const score = __znccScore(__barrowsTopbarT.feat, feat);
@@ -752,7 +904,6 @@ function __locateBarrowsChestFromMouse() {
     return null;
   }
 
-  // Convert to absolute chest rect based on known inset geometry (scale-correct).
   const absTopbarX = sx + refined.x;
   const absTopbarY = sy + refined.y;
 
@@ -763,14 +914,7 @@ function __locateBarrowsChestFromMouse() {
   const chestX = (absTopbarX - ins.insetX) | 0;
   const chestY = (absTopbarY - ins.insetY) | 0;
 
-  const lock = {
-    x: chestX,
-    y: chestY,
-    w: sz.w,
-    h: sz.h,
-    scale,
-    savedAt: Date.now(),
-  };
+  const lock = { x: chestX, y: chestY, w: sz.w, h: sz.h, scale, savedAt: Date.now(), via: "topbar" };
 
   __saveBarrowsChestLock(lock);
   __statusChest(`Saved chest position at (${lock.x}, ${lock.y}) score ${refined.score.toFixed(3)}`, "ok");
@@ -780,32 +924,41 @@ function __locateBarrowsChestFromMouse() {
 }
 
 function __validateBarrowsChestLock(lock) {
-  if (!lock || !__barrowsTopbarT) return { ok:false, score:0 };
-  // Capture just the topbar area where we expect it.
+  if (!lock) return { ok: false, score: 0 };
+
+  // Prefer anchor validation if anchor templates are loaded.
+  const anchors = __barrowsAnchorTs || [];
+  if (anchors && anchors.length) {
+    // Validate using CLOSE anchor (most distinctive) then optionally TITLE.
+    const closeT = anchors.find(a => a.id === "close");
+    if (closeT) {
+      const rx = (lock.x + closeT.ox) | 0;
+      const ry = (lock.y + closeT.oy) | 0;
+      const cap = __captureRect(rx, ry, closeT.w, closeT.h);
+      if (cap) {
+        const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, BARROWS_ANCHOR_FEAT.w, BARROWS_ANCHOR_FEAT.h);
+        const feat = __centerAndInvStd(gray);
+        const score = __znccScore(closeT.feat, feat);
+        const ok = score >= Math.max(0.72, closeT.min || 0.70);
+        if (ok) return { ok: true, score };
+      }
+    }
+  }
+
+  // Fallback: topbar validation
+  if (!__barrowsTopbarT) return { ok: false, score: 0 };
   const s = __chestScale(lock);
   const tw = Math.max(40, Math.round(__barrowsTopbarT.w * s));
   const th = Math.max(10, Math.round(__barrowsTopbarT.h * s));
   const ins = __scaledChestInsets(s);
   const cap = __captureRect(lock.x + ins.insetX, lock.y + ins.insetY, tw, th);
-  if (!cap) return { ok:false, score:0 };
+  if (!cap) return { ok: false, score: 0 };
 
   const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
   const feat = __centerAndInvStd(gray);
   const score = __znccScore(__barrowsTopbarT.feat, feat);
   return { ok: score >= CHEST_TEST.acceptScore, score };
 }
-
-// Chest scan slot occupancy + color logic
-const CHEST_SLOT_OCCUPANCY = {
-  featW: 16,
-  featH: 16,
-  // variance threshold for "icon present" (tuned for Barrows chest dark background)
-  minVar: 55,
-  // edge energy threshold (backup)
-  minEdge: 1200,
-  // score at/above which we consider a near-miss worthy of red highlight
-  nearMissScore: 0.55,
-};
 
 function __isChestSlotOccupied(capProps, x, y, w, h) {
   try {
@@ -3750,6 +3903,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   await loadAllowlistFile();
   try { await ensureBarrowsTopbarTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
+  try { await ensureBarrowsAnchorTemplatesLoaded(); } catch (e) { console.warn("[BARROWS CHEST] anchor template load failed", e); }
 
 
   loadBingosAndPopulate();
