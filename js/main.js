@@ -577,7 +577,7 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
- // user-provided cropconst BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate
+ const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
 
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
@@ -774,43 +774,35 @@ function __locateBarrowsChestFromMouse() {
     w: CHEST_TEST.chestWidth|0,
     h: CHEST_TEST.chestHeight|0,
     scale: 1.0,
-    savedAt: Date.now(),
+    savedAt: Date.now()
+  };
 
- if (BARROWS_LOCK_DEBUG_OVERLAY) {
-  try {
-    __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
 
-    // Also draw expected icon slots so you can visually confirm alignment.
-    const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
-    const y0 = BARROWS_CHEST_SLOTS.rowY | 0;
-
-    for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
-      const x0 = (BARROWS_CHEST_SLOTS.startX + i * BARROWS_CHEST_SLOTS.spacing) | 0;
-      __overlayRectAbs((lock.x + x0) | 0, (lock.y + y0) | 0, icon, icon, [255, 80, 80], 1200); // red
-    }
-  } catch (e) {
-    // ignore overlay errors
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
+      // Also draw expected icon slots so you can visually confirm alignment.
+      const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
+      const y0 = BARROWS_CHEST_SLOTS.rowY | 0;
+      for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
+        const x0 = (BARROWS_CHEST_SLOTS.startX + i * BARROWS_CHEST_SLOTS.spacing) | 0;
+        __overlayRectAbs((lock.x + x0) | 0, (lock.y + y0) | 0, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+      }
+    } catch (e) {}
   }
-}
 
-try {
-  console.groupCollapsed(`[BARROWS CHEST] lock debug (close-only) score ${refined.score.toFixed(3)}`);
-  console.log("close match abs:", { x: absCloseX, y: absCloseY, tw, th });
-  console.log("pads:", {
-    padR: BARROWS_CLOSE_PAD_R,
-    padT: BARROWS_CLOSE_PAD_T,
-    chestW: lock.w,
-    chestH: lock.h,
-  });
-  console.log("computed chest top-left:", { x: lock.x, y: lock.y });
-  console.log("expected close (from chest):", {
-    x: (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0,
-    y: (lock.y + BARROWS_CLOSE_PAD_T) | 0,
-  });
-  console.groupEnd();
-} catch (e) {
-  // ignore logging errors
-}
+  try {
+    console.groupCollapsed(`[BARROWS CHEST] lock debug (close-only) score ${refined.score.toFixed(3)}`);
+    console.log("close match abs:", { x: absCloseX, y: absCloseY, tw, th });
+    console.log("pads:", { padR: BARROWS_CLOSE_PAD_R, padT: BARROWS_CLOSE_PAD_T, chestW: lock.w, chestH: lock.h });
+    console.log("computed chest top-left:", { x: lock.x, y: lock.y });
+    console.log("expected close (from chest):", {
+      x: (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0,
+      y: (lock.y + BARROWS_CLOSE_PAD_T) | 0
+    });
+    console.groupEnd();
+  } catch (e) {}
+
 
   __saveBarrowsChestLock(lock);
   __statusChest(`Saved chest position at (${lock.x}, ${lock.y}) close score ${refined.score.toFixed(3)}`, "ok");
