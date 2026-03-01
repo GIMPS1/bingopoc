@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28--v2";
+  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27--v2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -659,46 +659,108 @@ function __irb_scoreGridRow(img, ox, oy, side, spacing, count) {
 // Find the *actual* first loot slot (grid origin) inside the locked chest rect.
 // Returns absolute screen coords {x,y,score} or null.
 function __irb_findBarrowsSlotGrid(lockRect) {
+  // Deterministic slot-grid anchor:
+  // Use the close-only lock as a rough bounding box, then *refine* by finding the actual slot border pattern
+  // in a tight search window near the expected row. This avoids false "slot-like" matches elsewhere.
   try {
-    const cap = __captureRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h);
+    if (!window.alt1 || !alt1.capture) return null;
+
+    const cap = alt1.capture(lockRect.x|0, lockRect.y|0, lockRect.w|0, lockRect.h|0);
     if (!cap || !cap.data || !cap.width) return null;
 
-    const img = { data: cap.data, width: cap.width, height: cap.height };
+    const img = { data: cap.data, width: cap.width|0, height: cap.height|0 };
 
-    const side = BARROWS_CHEST_SLOTS.iconSz | 0;
-    const spacing = BARROWS_CHEST_SLOTS.spacing | 0;
-    const count = BARROWS_CHEST_SLOTS.max | 0;
+    // Use your current slot geometry as the *prior* (we only search around it).
+    const slotSide = (BARROWS_CHEST_SLOTS.iconSz|0) || 32;
+    const spacing  = (BARROWS_CHEST_SLOTS.spacing|0) || 52;
+    const maxSlots = (BARROWS_CHEST_SLOTS.max|0) || 8;
 
-    const xMin = 0;
-    const xMax = img.width - (side + (count - 1) * spacing) - 2;
+    // Expected origin in local coords (top-left of slot 0)
+    const expX = (BARROWS_CHEST_SLOTS.startX|0) || 0;
+    const expY = (BARROWS_CHEST_SLOTS.rowY|0) || 0;
 
-    // Barrows icon row is near the top portion of the window.
-    const yMin = __irb_clamp(Math.floor(img.height * 0.06), 6, img.height - 64);
-    const yMax = __irb_clamp(Math.floor(img.height * 0.35), yMin + 16, img.height - 40);
+    // Tight search window around expected (tuneable)
+    const xMin = __irb_clamp(expX - 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
+    const xMax = __irb_clamp(expX + 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
+    const yMin = __irb_clamp(expY - 40, 0, img.height - slotSide - 2);
+    const yMax = __irb_clamp(expY + 40, 0, img.height - slotSide - 2);
 
-    let best = { score: -1e18, x: 0, y: 0 };
+    function lumaAt(px, py) {
+      const idx = ((py|0) * img.width + (px|0)) * 4;
+      return __irb_luma(img.data, idx);
+    }
 
-    for (let y = yMin; y <= yMax; y += 2) {
-      // Coarse x scan
-      let coarse = { score: -1e18, x: 0 };
-      for (let x = xMin; x <= xMax; x += 4) {
-        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
-        if (s > coarse.score) coarse = { score: s, x };
+    // Score a single slot by checking that the 1px border is brighter than both inside & outside.
+    function scoreSlotAt(x, y) {
+      if (x < 2 || y < 2 || x + slotSide + 2 >= img.width || y + slotSide + 2 >= img.height) return -1e9;
+      const s = slotSide;
+
+      // sample 12 border locations
+      const pts = [
+        [x+1, y+1,  1,  1, -1, -1],
+        [x+s-2, y+1, -1,  1,  1, -1],
+        [x+1, y+s-2,  1, -1, -1,  1],
+        [x+s-2, y+s-2, -1, -1,  1,  1],
+
+        [x+(s>>1), y+0, 0,  1, 0, -1],
+        [x+(s>>1), y+s-1, 0, -1, 0,  1],
+        [x+0, y+(s>>1), 1, 0, -1, 0],
+        [x+s-1, y+(s>>1), -1, 0,  1, 0],
+
+        [x+Math.floor(s/3), y+0, 0,  1, 0, -1],
+        [x+Math.floor(2*s/3), y+0, 0,  1, 0, -1],
+        [x+0, y+Math.floor(s/3), 1, 0, -1, 0],
+        [x+0, y+Math.floor(2*s/3), 1, 0, -1, 0],
+      ];
+
+      let score = 0;
+      for (const [bx, by, inDx, inDy, outDx, outDy] of pts) {
+        const b = lumaAt(bx, by);
+        const inside = lumaAt(bx + inDx, by + inDy);
+        const outside = lumaAt(bx + outDx, by + outDy);
+        const ref = Math.max(inside, outside);
+        score += (b - ref);
       }
-      // Fine around coarse best
-      const fx0 = __irb_clamp(coarse.x - 8, xMin, xMax);
-      const fx1 = __irb_clamp(coarse.x + 8, xMin, xMax);
-      for (let x = fx0; x <= fx1; x += 1) {
-        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+      return score;
+    }
+
+    function scoreRow(ox, oy) {
+      let s = 0;
+      for (let i = 0; i < maxSlots; i++) {
+        s += scoreSlotAt(ox + i*spacing, oy);
+      }
+      return s;
+    }
+
+    let best = { score: -1e18, x: expX, y: expY };
+
+    // coarse scan
+    for (let y = yMin; y <= yMax; y += 2) {
+      for (let x = xMin; x <= xMax; x += 3) {
+        const s = scoreRow(x, y);
         if (s > best.score) best = { score: s, x, y };
       }
     }
 
-    // Threshold depends on count; be conservative to avoid false anchors.
-    const minScore = 8 * count; // heuristic
-    if (best.score < minScore) return null;
+    // refine around best at 1px
+    const fx0 = __irb_clamp(best.x - 6, xMin, xMax);
+    const fx1 = __irb_clamp(best.x + 6, xMin, xMax);
+    const fy0 = __irb_clamp(best.y - 6, yMin, yMax);
+    const fy1 = __irb_clamp(best.y + 6, yMin, yMax);
 
-    return { x: (lockRect.x + best.x) | 0, y: (lockRect.y + best.y) | 0, score: best.score };
+    let refined = best;
+    for (let y = fy0; y <= fy1; y++) {
+      for (let x = fx0; x <= fx1; x++) {
+        const s = scoreRow(x, y);
+        if (s > refined.score) refined = { score: s, x, y };
+      }
+    }
+
+    // If we didn't find a convincing row, return null and fall back to offsets.
+    // Threshold is relative to the number of points (12*maxSlots); keep conservative.
+    if (refined.score < (maxSlots * 12 * 6)) return null;
+
+    return { x: (lockRect.x + refined.x)|0, y: (lockRect.y + refined.y)|0, score: refined.score };
   } catch (e) {
     console.warn("[IRB] grid anchor failed:", e);
     return null;
@@ -887,6 +949,9 @@ function __locateBarrowsChestFromMouse() {
     scale: 1.0,
     savedAt: Date.now()
   };
+  // Keep close anchor info for downstream debugging / grid refinement.
+  lock.close = { x: absCloseX, y: absCloseY, tw: tw, th: th, score: refined.score };
+
   // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
   lock.grid = __irb_findBarrowsSlotGrid(lock);
 
