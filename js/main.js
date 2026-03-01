@@ -314,8 +314,6 @@ btnCloseSettings: $("btnCloseSettings"),
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
 
-let __idleDotsTimer = null;
-let __idleDotsPhase = 0;
 
 function __stopIdleDots() {
   if (__idleDotsTimer) { try { clearInterval(__idleDotsTimer); } catch (e) {} }
