@@ -3560,22 +3560,37 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     refreshSetupState();
     stop();
   });
+
+  // Ensure Barrows chest lock reset button exists (if settings HTML doesn't include it)
+  try { __ensureBarrowsResetButton(); } catch (e) {}
   // Barrows chest lock reset (Settings)
-  (function () {
-    const btn = ui.btnResetBarrowsLock || __ensureBarrowsResetButton();
-    ui.btnResetBarrowsLock = btn;
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-      try { __saveBarrowsChestLock(null); } catch (e) {}
-      try { localStorage.removeItem("irb_barrowsChestRect"); } catch (e) {} // legacy cache key
-      __barrowsChestSeen = false;
-      __barrowsChestLastScanKey = "";
-      __barrowsChestLastScanMs = 0;
-      __barrowsChestScanDone = false;
-      addFeed("Barrows chest lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn");
-      playBeep("warn");
-    });
-  })();
+// Use delegated click handling so it works even if the settings drawer DOM is rebuilt.
+(function () {
+  const handler = (ev) => {
+    const t = ev && ev.target;
+    if (!t || t.id !== "btnResetBarrowsLock") return;
+    ev.preventDefault && ev.preventDefault();
+
+    try { __saveBarrowsChestLock(null); } catch (e) {}
+    try { localStorage.removeItem("irb_barrowsChestRect"); } catch (e) {} // legacy cache key
+
+    __barrowsChestSeen = false;
+    __barrowsChestLastScanKey = "";
+    __barrowsChestLastScanMs = 0;
+    __barrowsChestScanDone = false;
+
+    try { __statusChest("Lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn"); } catch (e) {}
+    try { addFeed("Barrows chest lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn"); } catch (e) {}
+    try { playBeep("warn"); } catch (e) {}
+  };
+
+  // Attach once
+  if (!window.__irbBarrowsResetHooked) {
+    window.__irbBarrowsResetHooked = true;
+    document.addEventListener("click", handler, true);
+  }
+})();
+
 
 
   // Ensure Barrows chest lock reset button exists in the Settings drawer (create if missing)
