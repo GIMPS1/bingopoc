@@ -2258,7 +2258,10 @@ async function manualSubmitFlow() {
 
   const capSize = (ICON_MATCH.hoverCaptureSize == null ? 220 : ICON_MATCH.hoverCaptureSize) | 0;
   const cap = __captureAroundMouse(capSize);
-  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+  try {
+  if (alt1 && typeof alt1.clearTooltip === "function")
+    alt1.clearTooltip();
+} catch (e) {}
 
   if (!cap) {
     showEvent("Manual submit", "Capture failed (mouse position / capture unavailable).", "warn", true, true);
@@ -2300,6 +2303,19 @@ async function manualSubmitFlow() {
     await submitDrop({ drop_name: chosen, amount: String(qty) });
     showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
     playBeep("ok");
+    // 3-second mouse bubble
+try {
+  if (window.alt1 && typeof alt1.setTooltip === "function") {
+    alt1.setTooltip("Submitted successfully!");
+    setTimeout(() => {
+      try {
+        if (typeof alt1.clearTooltip === "function") {
+          alt1.clearTooltip();
+        }
+      } catch (e) {}
+    }, 3000);
+  }
+} catch (e) {}
   } catch (e) {
     showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
   }
