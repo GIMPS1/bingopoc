@@ -1047,8 +1047,8 @@ function __validateBarrowsChestLock(lock) {
 
 // Chest scan slot occupancy + color logic
 const CHEST_SLOT_OCCUPANCY = {
-  featW: 16,
-  featH: 16,
+  featW: 8,
+  featH: 8,
   // variance threshold for "icon present" (tuned for Barrows chest dark background)
   minVar: 55,
   // edge energy threshold (backup)
