@@ -561,11 +561,11 @@ const CHEST_TEST = {
   refineStep: 2,
   featW: 96,                  // downsampled feature width
   featH: 10,                  // downsampled feature height
-  acceptScore: 0.78,          // UI match threshold
+  acceptScore: 0.86,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
   chestWidth: 560,
   chestHeight: 312,
-  topbarInsetX: 37,           // (560 - 486) / 2
+  topbarInsetX: 33,,           // (560 - 486) / 2
   topbarInsetY: 0,
   debug: true,
 };
@@ -707,7 +707,7 @@ function __locateBarrowsChestFromMouse() {
   if (!__barrowsTopbarT) { __statusChest("Topbar template not loaded yet.", "warn"); return null; }
 
   // Try a small scale set to handle interface scaling differences
-  const scales = [0.85, 0.90, 0.95, 1.00, 1.05, 1.10, 1.15, 1.20];
+  const scales = [1.00];
   let best = null;
 
   for (const sc of scales) {
@@ -722,7 +722,14 @@ function __locateBarrowsChestFromMouse() {
         const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, CHEST_TEST.featW, CHEST_TEST.featH);
         const feat = __centerAndInvStd(gray);
         const score = __znccScore(__barrowsTopbarT.feat, feat);
-        if (!best || score > best.score) best = { x, y, tw, th, score, scale: sc };
+        const eps = 0.002;
+        if (
+          !best ||
+          score > best.score + eps ||
+          (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))
+        ) {
+          best = { x, y, tw, th, score, scale: sc };
+        }
       }
     }
   }
@@ -743,7 +750,7 @@ function __locateBarrowsChestFromMouse() {
     }
   }
 
-  if (refined.score < 0.72) {
+  if (refined.score < 0.86) {
     __statusChest(`Not confident enough (score ${refined.score.toFixed(3)}). Hover the top bar and try again.`, "warn");
     if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locate failed best:", refined);
     return null;
@@ -789,7 +796,7 @@ function __validateBarrowsChestLock(lock) {
   const gray = __downsampleCapToGrayRect(cap, 0, 0, cap.width, cap.height, CHEST_TEST.featW, CHEST_TEST.featH);
   const feat = __centerAndInvStd(gray);
   const score = __znccScore(__barrowsTopbarT.feat, feat);
-  return { ok: score >= 0.72, score };
+  return { ok: score >= CHEST_TEST.acceptScore, score };
 }
 
 // Chest scan slot occupancy + color logic
