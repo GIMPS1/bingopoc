@@ -1167,9 +1167,11 @@ if (CHEST_SCAN_DEBUG_OVERLAY) {
 
     if (!best || !best.accepted) continue;
 
-    // Only include actual Barrows list drops (validateDropName handles allowlist)
-    if (!validateDropName(best.name)) continue;
-    hits.push({ name: best.name, score: best.score });
+// Only include actual Barrows list drops (validateDropName handles allowlist)
+if (!validateDropName(best.name)) continue;
+
+// EARLY EXIT (fastest safe placement)
+return [{ name: best.name, score: best.score }];
   }
 
   // Console proof: print one table per ~1s to avoid spam
