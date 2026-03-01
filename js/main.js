@@ -3404,12 +3404,6 @@ ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
 });
 
 
-// User guide
-
-  } catch (e) {
-    console.warn("Guide popup failed:", e);
-  }
-});
 
 ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
   try { window.close(); } catch (e) {}
