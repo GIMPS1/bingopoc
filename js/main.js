@@ -941,11 +941,15 @@ function __locateBarrowsChestFromMouse() {
   const chestX = (absCloseX - (CHEST_TEST.chestWidth - tw - BARROWS_CLOSE_PAD_R)) | 0;
   const chestY = (absCloseY - BARROWS_CLOSE_PAD_T) | 0;
 
-  const lock = {
-    x: Math.max(0, chestX),
-    y: Math.max(0, chestY),
-    w: CHEST_TEST.chestWidth|0,
-    h: CHEST_TEST.chestHeight|0,
+  // shift lock to loot content origin (true grid origin)
+const CONTENT_SHIFT_X = 13;
+const CONTENT_SHIFT_Y = 36;
+
+const lock = {
+  x: Math.max(0, chestX + CONTENT_SHIFT_X),
+  y: Math.max(0, chestY + CONTENT_SHIFT_Y),
+  w: CHEST_TEST.chestWidth|0,
+  h: CHEST_TEST.chestHeight|0,
     scale: 1.0,
     savedAt: Date.now()
   };
