@@ -946,13 +946,13 @@ const CONTENT_SHIFT_X = 13;
 const CONTENT_SHIFT_Y = 36;
 
 const lock = {
-  x: Math.max(0, chestX + CONTENT_SHIFT_X),
-  y: Math.max(0, chestY + CONTENT_SHIFT_Y),
+  x: Math.max(0, chestX),
+  y: Math.max(0, chestY),
   w: CHEST_TEST.chestWidth|0,
   h: CHEST_TEST.chestHeight|0,
-    scale: 1.0,
-    savedAt: Date.now()
-  };
+  scale: 1.0,
+  savedAt: Date.now()
+};
   // Keep close anchor info for downstream debugging / grid refinement.
   lock.close = { x: absCloseX, y: absCloseY, tw: tw, th: th, score: refined.score };
 
