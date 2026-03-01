@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
