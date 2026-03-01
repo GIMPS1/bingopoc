@@ -1,12 +1,49 @@
-/* IRB v2026-02-27-barrows-iconmatch2 (BARROWS ICONS)
+
+function __getImgProps(img) {
+  // In this project we treat Alt1 captures and loaded templates as ImageData-like objects.
+  // They already expose { width, height, data (RGBA) }.
+  if (!img) return null;
+  if (img.data && (img.width != null) && (img.height != null)) return img;
+  return null;
+}
+
+/* IRB v2026-02-28-barrows-iconmatch2-chestscan-v5p2 (BARROWS ICONS)
    Fixes:
    - Manual-submit icon templates now load from /assets/barrows
    - Adds assets/barrows_icon_map.json and robust asset URL resolution
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-27-barrows-iconmatch2";
+  const BUILD_VERSION = "v2026-02-28-v2";
 
+
+  // ---------------------------------------------------------------------------
+  // Icon match configuration (used by both manual icon matching and chest scan)
+  // NOTE: Keeping acceptScore low (0.20) per your request for manual acceptance.
+  // Chest UI detection has its own separate threshold.
+  // ---------------------------------------------------------------------------
+  const ICON_MATCH = {
+    // Downsample size for template matching (higher = slower but more accurate)
+    sampleSize: 16,
+    // Edge-assisted matching (helps discriminate similar icons)
+    useEdges: true,
+    edgeWeight: 0.65,
+
+    // Base acceptance for icon matches (manual/chest). Adaptive rules may tighten.
+    acceptScore: 0.20,
+
+    // Ambiguity guards
+    minGap: 0.04,
+    minRatio: 1.08,
+
+    // For hover-snap/manual selection searches
+    searchRadius: 18
+  }
+
+  // Debug: enable icon match debug arrays (used by chest scanning + manual top-10)
+  // Set to false to disable heavy console.table output.
+  var DEBUG_ICON_MATCH = true;
+;
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
@@ -35,7 +72,11 @@
     teamMenu: $("teamSelectMenu"),
 
     ign: $("ign"),
-    ignHint: $("ignHint"),
+        btnAutoLocateChat: $("btnAutoLocateChat"),
+    autoChatWrap: $("autoChatWrap"),
+    autoChatHint: $("autoChatHint"),
+    autoChatPill: $("autoChatPill"),
+ignHint: $("ignHint"),
     btnLockIgn: $("btnLockIgn"),
 
     btnLockSetup: $("btnLockSetup"),
@@ -57,13 +98,17 @@
     // Drawer
     drawer: $("settingsDrawer"),
     backdrop: $("drawerBackdrop"),
-    btnOpenSettings: $("btnOpenSettings"),
-    btnCloseSettings: $("btnCloseSettings"),
+        guidePanel: $("guidePanel"),
+btnOpenSettings: $("btnOpenSettings"),
+        btnOpenGuide: $("btnOpenGuide"),
+btnCloseSettings: $("btnCloseSettings"),
 
-    // Settings - setup
+        btnCloseGuide: $("btnCloseGuide"),
+// Settings - setup
     setupState: $("setupState"),
     btnUnlockSetup: $("btnUnlockSetup"),
     btnResetIgn: $("btnResetIgn"),
+    btnResetBarrowsLock: $("btnResetBarrowsLock"),
 
     // Settings - chat
     btnScanChats: $("btnScanChats"),
@@ -90,21 +135,22 @@
   // ---------- settings popup mode ----------
   const __params = new URLSearchParams(location.search);
   const __settingsOnly = __params.get("settings") === "1";
+  const __guideOnly = __params.get("guide") === "1";
 
   function buildSettingsUrl() {
     const base = location.href.split("#")[0].split("?")[0];
     return `${base}?settings=1`;
   }
   function openSettingsPopup() {
-    const url = buildSettingsUrl();
-    const w = 356;
-    const h = 560;
+  const url = buildSettingsUrl();
+  const w = 356;
+  const h = 560;
 
-    if (window.alt1 && typeof alt1.openPopup === "function") {
-      try { alt1.openPopup(url, w, h); return; } catch (e) {}
-    }
-    window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
+  if (window.alt1 && typeof alt1.openPopup === "function") {
+    try { alt1.openPopup(url, w, h); return; } catch (e) {}
   }
+  window.open(url, "irb_settings", `width=${w},height=${h},resizable=yes`);
+}
 
   // ---------- storage ----------
   const LS = {
@@ -143,6 +189,11 @@
   // ---------- UI helpers ----------
   const FEED_MAX = 3;
   const feedItems = [];
+
+  let __lastNonIdleEventAt = Date.now();
+  let __idleModeOn = false;
+  let __idleDotsTimer = null;
+  let __idleDotsPhase = 0;
   function nowTs() {
     const d = new Date();
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
@@ -188,8 +239,30 @@
     } catch (e) {}
   }
 
-  function showEvent(title, subtitle, level = "ok", flash = true, sound = false) {
+  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
+
+    // Idle handling:
+    // - Any non-idle event exits idle mode and resets the idle timer.
+    // - Idle events keep idle mode on and animate the subtitle via idle dots.
+    if (isIdle) {
+      __idleModeOn = true;
+      if (ui.eventLine) ui.eventLine.classList.add("idle");
+      if (ui.eventTitle) ui.eventTitle.textContent = title;
+      if (ui.eventSub) ui.eventSub.textContent = subtitle;
+      __startIdleDots();
+      // Keep styling consistent
+      ui.eventLine.classList.remove("ok","bad","warn","flash");
+      ui.eventLine.classList.add(level);
+      return;
+    }
+
+    // Leaving idle mode
+    __idleModeOn = false;
+    __lastNonIdleEventAt = Date.now();
+    __stopIdleDots();
+    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
+
     ui.eventTitle.textContent = title;
     ui.eventSub.textContent = subtitle;
 
@@ -202,6 +275,9 @@
     }
     if (sound) playChime();
   }
+
+
+  
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;" }[c]));
@@ -237,6 +313,47 @@
     }
     if (ui.feedMeta) ui.feedMeta.textContent = `${feedItems.length} events`;
   }
+
+
+function __stopIdleDots() {
+  if (__idleDotsTimer) { try { clearInterval(__idleDotsTimer); } catch (e) {} }
+  __idleDotsTimer = null;
+  __idleDotsPhase = 0;
+}
+
+function __startIdleDots() {
+  __stopIdleDots();
+  __idleDotsTimer = setInterval(() => {
+    try {
+      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
+      __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
+      const dots = ".".repeat(__idleDotsPhase);
+      ui.eventSub.textContent = "Waiting for drops" + dots;
+    } catch (e) {}
+  }, 650);
+}
+
+function showIdleRunning() {
+  // Only show idle when setup is ready (otherwise setup hints should stay visible)
+  try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
+  if (__idleModeOn) return;
+  __idleModeOn = true;
+  if (ui.eventLine) ui.eventLine.classList.add("idle");
+  if (ui.eventTitle) ui.eventTitle.textContent = "Running";
+  if (ui.eventSub) ui.eventSub.textContent = "Waiting for drops";
+  __startIdleDots();
+}
+
+function startIdleTicker() {
+  const idleMs = 12000;
+  setInterval(() => {
+    try {
+      const now = Date.now();
+      if (__idleModeOn) return;
+      if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
+    } catch (e) {}
+  }, 700);
+}
 
   function getMousePos() {
     try {
@@ -365,6 +482,73 @@
   let __iconItems = null; // array of names
   let __iconTemplates = null; // array of { name, size, img }
   let __iconTemplatesLoading = null;
+
+  function __sanitizeIconFileName(itemName) {
+    // Keep consistent with generated icon map filenames
+    return String(itemName || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\d]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  }
+
+  function __localIconUrl(itemName, size) {
+    const base = assetUrl("assets/barrows");
+    const base2 = String(base).replace(/\/$/, "");
+    const plain = `${__sanitizeIconFileName(itemName)}.png`;
+    // Allow optional size-suffixed future naming, fall back to plain
+    const sized = size ? `${__sanitizeIconFileName(itemName)}_${size}.png` : null;
+    return sized ? `${base2}/${sized}` : `${base2}/${plain}`;
+  }
+
+  async function ensureIconTemplatesLoaded() {
+    if (__iconTemplates) return __iconTemplates;
+    if (__iconTemplatesLoading) return __iconTemplatesLoading;
+
+    __iconTemplatesLoading = (async () => {
+      if (!window.A1lib || !A1lib.ImageDetect || typeof A1lib.ImageDetect.imageDataFromUrl !== "function") {
+        console.warn("[icon] A1lib.ImageDetect.imageDataFromUrl not available; icon matching disabled.");
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      // Load bundled icon map (name/size/file). Icons live in ./assets/barrows/
+      let iconMap = [];
+      try {
+        const res = await fetch(WIKI_ICON_MAP_URL, { cache: "no-store" });
+        iconMap = await res.json();
+        if (!Array.isArray(iconMap)) throw new Error("barrows_icon_map.json must be an array");
+      } catch (e) {
+        console.warn("[icon] failed to load assets/barrows_icon_map.json", e);
+        __iconTemplates = [];
+        return __iconTemplates;
+      }
+
+      const templates = [];
+      for (const entry of iconMap) {
+        if (!entry || !entry.name) continue;
+        const name = String(entry.name);
+        const size = (entry.size | 0) || 32;
+        // Prefer explicit file from map, otherwise derive
+        const url = entry.file ? assetUrl(`assets/barrows/${entry.file}`) : __localIconUrl(name, size);
+
+        try {
+          const img = await A1lib.ImageDetect.imageDataFromUrl(url);
+          if (!img || !img.data || !img.width || !img.height) continue;
+          templates.push({ name, size: img.width | 0, img });
+        } catch (e) {
+          // ignore missing files; keep going
+        }
+      }
+
+      __iconTemplates = templates;
+      console.log(`[icon] templates loaded: ${templates.length}`);
+      return __iconTemplates;
+    })();
+
+    return __iconTemplatesLoading;
+  }
+
 // -------- Barrows Chest UI detection (TEST TOOL) --------
 // Uses UI template matching (no OCR) against a cropped top-bar image.
 const CHEST_TEST = {
@@ -375,21 +559,569 @@ const CHEST_TEST = {
   coarseStepY: 4,
   refineRadius: 14,
   refineStep: 2,
-  featW: 96,                  // downsampled feature width
-  featH: 10,                  // downsampled feature height
+  featW: 128,                  // downsampled feature width
+  featH: 16,                  // downsampled feature height
   acceptScore: 0.78,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
   chestWidth: 560,
   chestHeight: 312,
-  topbarInsetX: 37,           // (560 - 486) / 2
+  topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
   debug: true,
 };
 
-const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png"); // user-provided crop
+const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png");
+const BARROWS_CLOSE_URL = assetUrl("assets/ui/offsets.png"); // close button crop (anchor)
+const BARROWS_CLOSE_PAD_R = 3;  // px from chest right edge to close template right edge
+const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top edge
+const BARROWS_CLOSE_ACCEPT = 0.90;
+const BARROWS_CLOSE_FEAT_W = 48;
+const BARROWS_CLOSE_FEAT_H = 52;
+ const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
+
+
+// --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
+const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
+
+// Slot/grid assumptions inside the chest window (can be tuned later)
+const BARROWS_CHEST_SLOTS = {
+  iconSz: 32,
+  max: 8,
+  // relative to chest top-left (at scale=1.0):
+  // These values are derived from the actual Barrows chest layout and then
+  // scaled from the topbar match scale to keep placement exact.
+  rowY: 40,          // y of icon row (top-left of icon)
+  startX: 27,        // x of first icon (top-left of icon)
+  spacing: 52,       // horizontal step between icons
+};
+// --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
+function __chestScale(lock) {
+  if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
+  if (lock && typeof lock.w === "number" && lock.w > 0) return lock.w / CHEST_TEST.chestWidth;
+  return 1.0;
+}
+
+
+// === Deterministic Slot Anchor (grid from pixels) ===
+function __irb_clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+
+function __irb_luma(data, idx) {
+  const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+  return (r * 3 + g * 6 + b) / 10;
+}
+
+// Score how “slot-like” a slot box looks at (x,y) within an ImageData-like {data,width,height}.
+function __irb_scoreSlotAt(img, x, y, side) {
+  const { data, width, height } = img;
+  if (x < 2 || y < 2 || x + side + 2 >= width || y + side + 2 >= height) return -1e9;
+
+  const s = side | 0;
+  const borderPts = [
+    [x + 2, y + 2], [x + s - 3, y + 2], [x + 2, y + s - 3], [x + s - 3, y + s - 3],
+    [x + (s >> 1), y + 1], [x + (s >> 1), y + s - 2], [x + 1, y + (s >> 1)], [x + s - 2, y + (s >> 1)],
+  ];
+  const innerPts = [
+    [x + (s >> 1), y + (s >> 1)],
+    [x + (s / 3), y + (s / 3)], [x + (2 * s / 3), y + (s / 3)],
+    [x + (s / 3), y + (2 * s / 3)], [x + (2 * s / 3), y + (2 * s / 3)],
+  ];
+
+  let bSum = 0, iSum = 0;
+  for (const [px, py] of borderPts) {
+    const idx = ((py | 0) * width + (px | 0)) * 4;
+    bSum += __irb_luma(data, idx);
+  }
+  for (const [px, py] of innerPts) {
+    const idx = ((py | 0) * width + (px | 0)) * 4;
+    iSum += __irb_luma(data, idx);
+  }
+
+  const bAvg = bSum / borderPts.length;
+  const iAvg = iSum / innerPts.length;
+  const contrast = bAvg - iAvg;
+
+  // Penalise if inside is too bright (usually means it's not a slot background)
+  const insidePenalty = (iAvg > 140 ? (iAvg - 140) : 0);
+
+  return contrast * 4 - insidePenalty;
+}
+
+function __irb_scoreGridRow(img, ox, oy, side, spacing, count) {
+  let score = 0;
+  for (let i = 0; i < count; i++) {
+    const sx = ox + i * spacing;
+    const sy = oy;
+    score += __irb_scoreSlotAt(img, sx, sy, side);
+  }
+  return score;
+}
+
+// Find the *actual* first loot slot (grid origin) inside the locked chest rect.
+// Returns absolute screen coords {x,y,score} or null.
+function __irb_findBarrowsSlotGrid(lockRect) {
+  try {
+    const cap = __captureRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h);
+    if (!cap || !cap.data || !cap.width) return null;
+
+    const img = { data: cap.data, width: cap.width, height: cap.height };
+
+    const side = BARROWS_CHEST_SLOTS.iconSz | 0;
+    const spacing = BARROWS_CHEST_SLOTS.spacing | 0;
+    const count = BARROWS_CHEST_SLOTS.max | 0;
+
+    const xMin = 0;
+    const xMax = img.width - (side + (count - 1) * spacing) - 2;
+
+    // Barrows icon row is near the top portion of the window.
+    const yMin = __irb_clamp(Math.floor(img.height * 0.06), 6, img.height - 64);
+    const yMax = __irb_clamp(Math.floor(img.height * 0.35), yMin + 16, img.height - 40);
+
+    let best = { score: -1e18, x: 0, y: 0 };
+
+    for (let y = yMin; y <= yMax; y += 2) {
+      // Coarse x scan
+      let coarse = { score: -1e18, x: 0 };
+      for (let x = xMin; x <= xMax; x += 4) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+        if (s > coarse.score) coarse = { score: s, x };
+      }
+      // Fine around coarse best
+      const fx0 = __irb_clamp(coarse.x - 8, xMin, xMax);
+      const fx1 = __irb_clamp(coarse.x + 8, xMin, xMax);
+      for (let x = fx0; x <= fx1; x += 1) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+        if (s > best.score) best = { score: s, x, y };
+      }
+    }
+
+    // Threshold depends on count; be conservative to avoid false anchors.
+    const minScore = 8 * count; // heuristic
+    if (best.score < minScore) return null;
+
+    return { x: (lockRect.x + best.x) | 0, y: (lockRect.y + best.y) | 0, score: best.score };
+  } catch (e) {
+    console.warn("[IRB] grid anchor failed:", e);
+    return null;
+  }
+}
+function __scaledChestInsets(scale) {
+  return {
+    insetX: Math.round(CHEST_TEST.topbarInsetX * scale),
+    insetY: Math.round(CHEST_TEST.topbarInsetY * scale),
+  };
+}
+function __scaledChestSize(scale) {
+  return {
+    w: Math.round(CHEST_TEST.chestWidth * scale),
+    h: Math.round(CHEST_TEST.chestHeight * scale),
+  };
+}
+function __barrowsSlotRects(lock) {
+  const s = __chestScale(lock);
+  const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
+  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing * s);
+
+  // Prefer pixel-detected grid origin if present (absolute coords), else fall back to constants.
+  let x0, y0;
+  if (lock && lock.grid && typeof lock.grid.x === "number" && typeof lock.grid.y === "number") {
+    x0 = Math.round((lock.grid.x - lock.x) * 1); // already in lock space at 100% scaling
+    y0 = Math.round((lock.grid.y - lock.y) * 1);
+  } else {
+    x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
+    y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
+  }
+
+  const rects = [];
+  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
+  return rects;
+}
+// Barrows chest scan debug
+const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
+let __lastChestScanDebugAt = 0;
+
+// Best UX: scan once per chest open, with a short timeout.
+const CHEST_SCAN_TIMEOUT_MS = 3000;
+const CHEST_SCAN_INTERVAL_MS = 800;
+
+// Chest-specific matching thresholds (stricter than manual to avoid false positives)
+const CHEST_ICON_MATCH_OVERRIDES = {
+  acceptScore: 0.70,     // require strong match for auto chest scan
+  minGap: 0.04,
+  minRatio: 1.08,
+  searchRadius: 30,   // allow local snap to the real icon center
+};
+
+function __mixColorSafe(r, g, b) {
+  if (window.A1lib && typeof A1lib.mixColor === "function") return A1lib.mixColor(r, g, b);
+  // ARGB fallback (opaque)
+  return (255 << 24) | ((r & 255) << 16) | ((g & 255) << 8) | (b & 255);
+}
+
+function __overlayRectAbs(x, y, w, h, rgb, ms = 400) {
+  if (!(window.alt1 && typeof alt1.overLayRect === "function")) return;
+  const color = __mixColorSafe(rgb[0], rgb[1], rgb[2]);
+  const t = 2;
+  try {
+    alt1.overLayRect(color, x, y, w, t, ms, 2);
+    alt1.overLayRect(color, x, y + h - t, w, t, ms, 2);
+    alt1.overLayRect(color, x, y, t, h, ms, 2);
+    alt1.overLayRect(color, x + w - t, y, t, h, ms, 2);
+  } catch (e) {}
+}
+
+
+let __barrowsChestLock = null;   // { x,y,w,h, scale, savedAt }
+let __barrowsChestSeen = false;
+let __barrowsChestLastScanKey = "";
+let __barrowsChestLastScanMs = 0;
+let __barrowsChestScanStartMs = 0;
+let __barrowsChestScanDone = false;
+
+function __loadBarrowsChestLock() {
+  if (__barrowsChestLock) return __barrowsChestLock;
+  try {
+    const raw = localStorage.getItem(BARROWS_CHEST_LOCK_KEY);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj.x !== "number" || typeof obj.y !== "number") return null;
+    __barrowsChestLock = obj;
+    return __barrowsChestLock;
+  } catch (e) { return null; }
+}
+
+function __saveBarrowsChestLock(lock) {
+  __barrowsChestLock = lock || null;
+  try {
+    if (!lock) localStorage.removeItem(BARROWS_CHEST_LOCK_KEY);
+    else localStorage.setItem(BARROWS_CHEST_LOCK_KEY, JSON.stringify(lock));
+  } catch (e) {}
+}
+
+function __statusChest(msg, kind="info") {
+  try { showEvent("Barrows chest", msg, kind, true, true); } catch (e) {}
+}
+
+function __captureRect(x, y, w, h) {
+  try {
+    if (!(window.A1lib && typeof A1lib.capture === "function")) return null;
+    const img = A1lib.capture(x|0, y|0, w|0, h|0);
+    return __getImgProps(img);
+  } catch (e) { return null; }
+}
+
+
+function __locateBarrowsChestFromMouse() {
+  // Ultra-simple deterministic lock:
+  // 1) Match the close button (offsets.png) around the mouse.
+  // 2) Compute chest top-left from fixed chest geometry (100% UI scaling).
+  const mp = getMousePos && getMousePos();
+  if (!mp) { __statusChest("Mouse position unavailable. Try again.", "warn"); return null; }
+
+  const scanW = 900, scanH = 420;
+  const sx = Math.max(0, (mp.x - (scanW>>1))|0);
+  const sy = Math.max(0, (mp.y - (scanH>>1))|0);
+  const cap = __captureRect(sx, sy, scanW, scanH);
+  if (!cap) { __statusChest("Capture failed. Try again.", "warn"); return null; }
+
+  if (!__barrowsCloseT) { __statusChest("Close template not loaded yet.", "warn"); return null; }
+
+  const tw = __barrowsCloseT.w|0;
+  const th = __barrowsCloseT.h|0;
+  if (tw >= cap.width || th >= cap.height) { __statusChest("Capture too small for close template.", "warn"); return null; }
+
+  // Coarse scan
+  const step = 6;
+  let best = null;
+  for (let y = 0; y <= cap.height - th; y += step) {
+    for (let x = 0; x <= cap.width - tw; x += step) {
+      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(__barrowsCloseT.feat, feat);
+      const eps = 0.002;
+      if (!best || score > best.score + eps || (Math.abs(score - best.score) <= eps && (x < best.x || (x === best.x && y < best.y)))) {
+        best = { x, y, score };
+      }
+    }
+  }
+  if (!best) { __statusChest("Unable to search capture area.", "warn"); return null; }
+
+  // Refine locally around best for 1px accuracy
+  const rx0 = Math.max(0, best.x - 10), ry0 = Math.max(0, best.y - 10);
+  const rx1 = Math.min(cap.width - tw, best.x + 10);
+  const ry1 = Math.min(cap.height - th, best.y + 10);
+  let refined = best;
+  for (let y = ry0; y <= ry1; y++) {
+    for (let x = rx0; x <= rx1; x++) {
+      const gray = __downsampleCapToGrayRect(cap, x, y, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(__barrowsCloseT.feat, feat);
+      if (score > refined.score) refined = { x, y, score };
+    }
+  }
+
+  if (refined.score < BARROWS_CLOSE_ACCEPT) {
+    __statusChest(`Not confident enough (close score ${refined.score.toFixed(3)}). Hover the close button and try again.`, "warn");
+    if (CHEST_TEST.debug) console.log("[BARROWS CHEST] close match failed best:", { ...refined, tw, th });
+    return null;
+  }
+
+  const absCloseX = (sx + refined.x) | 0;
+  const absCloseY = (sy + refined.y) | 0;
+  // Debug: show what we anchored to (close match) and the resulting chest rect
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(absCloseX, absCloseY, tw, th, [0, 200, 255], 1200); // cyan = close anchor
+    } catch (e) {}
+  }
+
+  // Close template top-left is at (chestX + (W - tw - padR), chestY + padT)
+  const chestX = (absCloseX - (CHEST_TEST.chestWidth - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  const chestY = (absCloseY - BARROWS_CLOSE_PAD_T) | 0;
+
+  const lock = {
+    x: Math.max(0, chestX),
+    y: Math.max(0, chestY),
+    w: CHEST_TEST.chestWidth|0,
+    h: CHEST_TEST.chestHeight|0,
+    scale: 1.0,
+    savedAt: Date.now()
+  };
+  // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
+  lock.grid = __irb_findBarrowsSlotGrid(lock);
+
+
+
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
+// Also draw expected icon slots so you can visually confirm alignment.
+const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
+const absGX = (lock.grid && typeof lock.grid.x === "number") ? (lock.grid.x | 0) : ((lock.x + BARROWS_CHEST_SLOTS.startX) | 0);
+const absGY = (lock.grid && typeof lock.grid.y === "number") ? (lock.grid.y | 0) : ((lock.y + BARROWS_CHEST_SLOTS.rowY) | 0);
+for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
+  const sx = (absGX + i * (BARROWS_CHEST_SLOTS.spacing | 0)) | 0;
+  const sy = absGY;
+  __overlayRectAbs(sx, sy, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+}
+    } catch (e) {}
+  }
+
+  try {
+    console.groupCollapsed(`[BARROWS CHEST] lock debug (close-only) score ${refined.score.toFixed(3)}`);
+    console.log("close match abs:", { x: absCloseX, y: absCloseY, tw, th });
+    console.log("pads:", { padR: BARROWS_CLOSE_PAD_R, padT: BARROWS_CLOSE_PAD_T, chestW: lock.w, chestH: lock.h });
+    console.log("computed chest top-left:", { x: lock.x, y: lock.y });
+    console.log("expected close (from chest):", {
+      x: (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0,
+      y: (lock.y + BARROWS_CLOSE_PAD_T) | 0
+    });
+    console.groupEnd();
+  } catch (e) {}
+
+
+  __saveBarrowsChestLock(lock);
+  __statusChest(`Saved chest position at (${lock.x}, ${lock.y}) close score ${refined.score.toFixed(3)}`, "ok");
+  if (CHEST_TEST.debug) console.log("[BARROWS CHEST] locked (close-only):", lock, "refined:", { ...refined, tw, th, absCloseX, absCloseY });
+
+  return lock;
+}
+
+
+function __validateBarrowsChestLock(lock) {
+  if (!lock || !__barrowsCloseT) return { ok:false, score:0 };
+
+  const tw = __barrowsCloseT.w|0;
+  const th = __barrowsCloseT.h|0;
+
+  const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
+      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 400); // yellow chest
+    } catch (e) {}
+  }
+
+  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
+
+  const cap = __captureRect(expCloseX, expCloseY, tw, th);
+  if (!cap) return { ok:false, score:0 };
+
+  const gray = __downsampleCapToGrayRect(cap, 0, 0, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+  const feat = __centerAndInvStd(gray);
+  const score = __znccScore(__barrowsCloseT.feat, feat);
+
+  // Slightly softer threshold for validation than for initial lock
+  return { ok: score >= (BARROWS_CLOSE_ACCEPT - 0.04), score };
+}
+
+// Chest scan slot occupancy + color logic
+const CHEST_SLOT_OCCUPANCY = {
+  featW: 16,
+  featH: 16,
+  // variance threshold for "icon present" (tuned for Barrows chest dark background)
+  minVar: 55,
+  // edge energy threshold (backup)
+  minEdge: 1200,
+  // score at/above which we consider a near-miss worthy of red highlight
+  nearMissScore: 0.55,
+};
+
+function __isChestSlotOccupied(capProps, x, y, w, h) {
+  try {
+    const g = __downsampleCapToGrayRect(capProps, x, y, w, h, CHEST_SLOT_OCCUPANCY.featW, CHEST_SLOT_OCCUPANCY.featH);
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += g[i];
+    const mean = sum / g.length;
+    let v = 0;
+    for (let i = 0; i < g.length; i++) { const d = g[i] - mean; v += d*d; }
+    const varr = v / g.length;
+
+    // simple edge energy
+    let edge = 0;
+    const W = CHEST_SLOT_OCCUPANCY.featW|0;
+    const H = CHEST_SLOT_OCCUPANCY.featH|0;
+    for (let yy = 0; yy < H; yy++) {
+      const row = yy * W;
+      for (let xx = 0; xx < W; xx++) {
+        const p = g[row + xx];
+        if (xx+1 < W) edge += Math.abs(p - g[row + xx + 1]);
+        if (yy+1 < H) edge += Math.abs(p - g[row + xx + W]);
+      }
+    }
+    return { occupied: (varr >= CHEST_SLOT_OCCUPANCY.minVar) || (edge >= CHEST_SLOT_OCCUPANCY.minEdge), varr, edge, mean };
+  } catch (e) {
+    return { occupied: true, varr: 0, edge: 0, mean: 0 };
+  }
+}
+
+function __scanBarrowsChestForDrops(lock) {
+  if (!lock) return [];
+  if (!__iconTemplates) {
+    // Kick off async load; scan will run on next tick once templates are available.
+    try { ensureIconTemplatesLoaded(); } catch (e) {}
+    return [];
+  }
+  const cap = __captureRect(lock.x, lock.y, lock.w, lock.h);
+  if (!cap) return [];
+
+  // Temporarily tighten thresholds for chest scanning (do not affect manual mode)
+  const __savedIconMatch = { ...ICON_MATCH };
+  try {
+    ICON_MATCH.acceptScore = CHEST_ICON_MATCH_OVERRIDES.acceptScore;
+    ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
+    ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
+    ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;  } catch (e) {}
+
+  const hits = [];
+  const rows = [];
+  const slots = __barrowsSlotRects(lock);
+
+  for (let i = 0; i < slots.length; i++) {
+    const x = slots[i].x | 0;
+    const y = slots[i].y | 0;
+    const iconSz = slots[i].w | 0;
+
+    // Skip if outside bounds
+    if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) {
+      rows.push({ slot: i, skipped: true });
+      continue;
+    }
+
+
+const occ = __isChestSlotOccupied(cap, x, y, iconSz, iconSz);
+
+const selection = {
+  capProps: cap,
+  rect: { x, y, w: iconSz, h: iconSz },
+};
+
+// Only attempt template match on occupied slots (saves CPU + reduces noise)
+const best = occ.occupied ? matchIconFromSelection(selection, __iconTemplates) : null;
+
+// Visual proof: draw slot boxes at the snapped position actually evaluated
+if (CHEST_SCAN_DEBUG_OVERLAY) {
+  const dx = (best && typeof best.dx === "number") ? best.dx : 0;
+  const dy = (best && typeof best.dy === "number") ? best.dy : 0;
+  const ax = (lock.x + x + dx)|0;
+  const ay = (lock.y + y + dy)|0;
+
+  const isBarrows = !!(best && best.accepted && validateDropName(best.name));
+  const nearMiss = !!(occ.occupied && best && !isBarrows && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore);
+
+  // Color scheme:
+  // - Green: accepted Barrows unique
+  // - Red: near-miss (looked close but failed)
+  // - Gray: empty slot or junk / low-confidence
+  const col = isBarrows ? [0, 220, 0] : (nearMiss ? [220, 0, 0] : [140, 140, 140]);
+  __overlayRectAbs(ax, ay, iconSz, iconSz, col, 280);
+}
+
+
+    // Record per-slot debug even if not accepted
+    if (CHEST_SCAN_DEBUG_TABLE) {
+      rows.push({
+        slot: i,
+        occupied: !!occ.occupied,
+        var: Number((occ.varr ?? 0).toFixed(1)),
+        edge: Number((occ.edge ?? 0).toFixed(0)),
+        best: best ? best.name : "",
+        score: best ? Number(best.score.toFixed(4)) : 0,
+        accepted: !!(best && best.accepted),
+        isBarrows: !!(best && best.accepted && validateDropName(best.name)),
+        nearMiss: !!(occ.occupied && best && !(best.accepted && validateDropName(best.name)) && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore),
+        gap: best ? Number((best.gap ?? 0).toFixed(4)) : 0,
+        ratio: best ? Number((best.ratio ?? 0).toFixed(4)) : 0,
+        dx: best ? (best.dx|0) : 0,
+        dy: best ? (best.dy|0) : 0,
+      });
+    }
+
+    if (!best || !best.accepted) continue;
+
+    // Only include actual Barrows list drops (validateDropName handles allowlist)
+    if (!validateDropName(best.name)) continue;
+    hits.push({ name: best.name, score: best.score });
+  }
+
+  // Console proof: print one table per ~1s to avoid spam
+  if (CHEST_SCAN_DEBUG_TABLE) {
+    const now = Date.now();
+    if ((now - __lastChestScanDebugAt) > 900) {
+      __lastChestScanDebugAt = now;
+      try {
+        console.group("[CHEST SCAN] slot results");
+        console.table(rows);
+        console.groupEnd();
+      } catch (e) {}
+    }
+  }
+
+  // De-dupe same icon detected multiple slots (rare but possible with noise)
+  const seen = new Set();
+  const uniq = [];
+  for (const h of hits) {
+    if (seen.has(h.name)) continue;
+    seen.add(h.name);
+    uniq.push(h);
+  }
+  // Restore ICON_MATCH to avoid affecting manual submit
+  try { Object.assign(ICON_MATCH, __savedIconMatch); } catch (e) {}
+
+  return uniq;
+}
+
+function __formatBarrowsHits(hits) {
+  if (!hits || !hits.length) return "No valid Barrows drops detected!";
+  return "Found: " + hits.map(h => h.name).join(", ");
+}
+
 
 let __barrowsTopbarT = null;          // { w,h, feat }
 let __barrowsTopbarTLoading = null;
+
+let __barrowsCloseT = null;          // { w,h, feat }
+let __barrowsCloseTLoading = null;
 let __lastChestTestMs = 0;
 let __lastChestSeenMs = 0;
 let __lastChestRect = null;
@@ -400,6 +1132,11 @@ async function ensureBarrowsTopbarTemplateLoaded() {
 
   __barrowsTopbarTLoading = (async () => {
     const img = await __loadImageToCanvasImageData(BARROWS_TOPBAR_URL);
+    console.log("[topbar] loaded template:",
+  img ? img.width : null,
+  img ? img.height : null,
+  BARROWS_TOPBAR_URL
+);
     if (!img) throw new Error("Failed to load barrows_topbar.png");
     const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, CHEST_TEST.featW, CHEST_TEST.featH);
     const feat = __centerAndInvStd(featGray);
@@ -408,6 +1145,24 @@ async function ensureBarrowsTopbarTemplateLoaded() {
   })().finally(() => { __barrowsTopbarTLoading = null; });
 
   return __barrowsTopbarTLoading;
+}
+
+
+async function ensureBarrowsCloseTemplateLoaded() {
+  if (__barrowsCloseT) return __barrowsCloseT;
+  if (__barrowsCloseTLoading) return __barrowsCloseTLoading;
+
+  __barrowsCloseTLoading = (async () => {
+    const img = await __loadImageToCanvasImageData(BARROWS_CLOSE_URL);
+    if (!img) throw new Error("Failed to load offsets.png");
+    const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+    const feat = __centerAndInvStd(featGray);
+    __barrowsCloseT = { w: img.width, h: img.height, feat };
+    console.log(`[barrows-close] template loaded: ${img.width}x${img.height} ${BARROWS_CLOSE_URL}`);
+    return __barrowsCloseT;
+  })().finally(() => { __barrowsCloseTLoading = null; });
+
+  return __barrowsCloseTLoading;
 }
 
 async function __loadImageToCanvasImageData(url) {
@@ -477,6 +1232,90 @@ function __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outW, outH) {
   }
   return out;
 }
+
+// --- compat shim: some modules expect __downsampleToGray16(...) ---
+function __downsampleToGray16(capProps, sx, sy, sw, sh, outSz) {
+  // Wrapper around __downsampleCapToGrayRect; returns Uint8Array(outSz*outSz)
+  return __downsampleCapToGrayRect(capProps, sx, sy, sw, sh, outSz, outSz);
+}
+
+
+function __whitenGray(gray, size) {
+  // Simple local-contrast whitening to reduce UI background influence.
+  // Returns a Uint8Array of same length as input (size*size).
+  const n = gray.length | 0;
+  const out = new Uint8Array(n);
+  const w = size | 0;
+
+  // 3x3 box blur high-pass: out = clamp(gray - blur + 128)
+  for (let y = 0; y < w; y++) {
+    const y0 = (y - 1 < 0 ? 0 : y - 1);
+    const y1 = y;
+    const y2 = (y + 1 >= w ? w - 1 : y + 1);
+    for (let x = 0; x < w; x++) {
+      const x0 = (x - 1 < 0 ? 0 : x - 1);
+      const x1 = x;
+      const x2 = (x + 1 >= w ? w - 1 : x + 1);
+
+      let sum = 0;
+      sum += gray[y0 * w + x0]; sum += gray[y0 * w + x1]; sum += gray[y0 * w + x2];
+      sum += gray[y1 * w + x0]; sum += gray[y1 * w + x1]; sum += gray[y1 * w + x2];
+      sum += gray[y2 * w + x0]; sum += gray[y2 * w + x1]; sum += gray[y2 * w + x2];
+
+      const blur = (sum / 9) | 0;
+      const v = (gray[y * w + x] | 0) - blur + 128;
+      out[y * w + x] = (v < 0 ? 0 : (v > 255 ? 255 : v));
+    }
+  }
+  return out;
+}
+
+
+function __edgeMag(gray, size) {
+  // Sobel magnitude on grayscale Uint8Array(size*size). Returns Uint8Array(size*size).
+  const w = size | 0;
+  const n = gray.length | 0;
+  const out = new Uint8Array(n);
+
+  for (let y = 0; y < w; y++) {
+    const y0 = (y - 1 < 0 ? 0 : y - 1);
+    const y2 = (y + 1 >= w ? w - 1 : y + 1);
+    for (let x = 0; x < w; x++) {
+      const x0 = (x - 1 < 0 ? 0 : x - 1);
+      const x2 = (x + 1 >= w ? w - 1 : x + 1);
+
+      const a00 = gray[y0 * w + x0] | 0, a01 = gray[y0 * w + x] | 0, a02 = gray[y0 * w + x2] | 0;
+      const a10 = gray[y  * w + x0] | 0, /*a11*/             a12 = gray[y  * w + x2] | 0;
+      const a20 = gray[y2 * w + x0] | 0, a21 = gray[y2 * w + x] | 0, a22 = gray[y2 * w + x2] | 0;
+
+      const gx = (-a00 + a02) + (-2 * a10 + 2 * a12) + (-a20 + a22);
+      const gy = (-a00 - 2 * a01 - a02) + (a20 + 2 * a21 + a22);
+      const mag = Math.min(255, (Math.abs(gx) + Math.abs(gy)) >> 1);
+      out[y * w + x] = mag;
+    }
+  }
+  return out;
+}
+
+function __computeTemplateAmbiguity(templates) {
+  // Compute nearest-neighbor similarity for each template. Used by adaptive thresholds.
+  if (!templates || templates.length < 2) return;
+  for (let i = 0; i < templates.length; i++) {
+    const ti = templates[i];
+    let best = -1;
+    if (!ti || !ti._feat) { ti._nnScore = null; continue; }
+    for (let j = 0; j < templates.length; j++) {
+      if (i === j) continue;
+      const tj = templates[j];
+      if (!tj || !tj._feat) continue;
+      const s = __znccScore(ti._feat, tj._feat);
+      if (s > best) best = s;
+    }
+    ti._nnScore = (best >= 0 ? best : null);
+  }
+}
+
+
 
 function __detectBarrowsChestTopbarInCapture(cap, topT) {
   // Returns { score, x, y } in capture-local coords, or null.
@@ -634,66 +1473,129 @@ function __drawChestRect(cache, good) {
   } catch (e) {}
 }
 
-function __chestTestTick() {
-  if (!CHEST_TEST.enabled) return;
-  if (!__barrowsTopbarT) return; // not loaded yet
 
-  const now = Date.now();
-
-  // Lazy-load cached rect from localStorage once per session (optional).
-  if (!__barrowsChestCache) {
-    const saved = __loadChestCacheFromLocalStorage();
-    if (saved) __barrowsChestCache = saved;
+function __forceBarrowsChestScanNow() {
+  // Alt+1 when chest is already located: run a single scan immediately and report results.
+  __loadBarrowsChestLock();
+  if (!__barrowsChestLock) {
+    __statusChest("No chest position saved. Hover the chest window and press Alt+1 to locate.", "warn");
+    return;
   }
+  const v = __validateBarrowsChestLock(__barrowsChestLock);
+  if (!v.ok) {
+    __statusChest("Saved chest not present. Open the Barrows chest and press Alt+1 to re-locate.", "warn");
+    return;
+  }
+  const hits = __scanBarrowsChestForDrops(__barrowsChestLock);
+  __barrowsChestLastScanKey = hits.map(h=>h.name).sort().join("|");
+  const msg = __formatBarrowsHits(hits);
+  __statusChest(msg, hits.length ? "ok" : "warn");
+  if (CHEST_TEST.debug) {
+    try { console.log("[BARROWS CHEST] manual scan hits:", hits); } catch (e) {}
+  }
+}
 
-  // If we have a cached rect, validate it cheaply and avoid full scanning.
-  if (__barrowsChestCache) {
-    if (now - __lastChestValidateMs < 350) return;
-    __lastChestValidateMs = now;
+async function __chestTestTick() {
+if (!CHEST_TEST.enabled) return;
+if (!__barrowsTopbarT) return; // not loaded yet
 
-    const v = __validateChestCache(__barrowsChestCache, __barrowsTopbarT);
-    if (v.ok) {
-      __barrowsChestCache.lastSeenMs = now;
-      if (CHEST_TEST.debug) {
-        __drawChestRect(__barrowsChestCache, true);
-      }
+// Load cached lock once per session
+__loadBarrowsChestLock();
+
+const now = Date.now();
+
+// If no lock yet, do nothing (user must press Alt+1 to locate)
+if (!__barrowsChestLock) return;
+
+// Validate cached lock
+const v = __validateBarrowsChestLock(__barrowsChestLock);
+if (!v.ok) {
+  if (__barrowsChestSeen) {
+    __barrowsChestSeen = false;
+    __barrowsChestLastScanKey = "";
+    __barrowsChestScanDone = false;
+    __statusChest("Chest not present.", "info");
+  }
+  return;
+}
+
+// Chest present
+if (!__barrowsChestSeen) {
+  __barrowsChestSeen = true;
+  __barrowsChestScanStartMs = now;
+  __barrowsChestScanDone = false;
+  __barrowsChestLastScanKey = "";
+  __statusChest(`Chest detected (score ${v.score.toFixed(3)}). Scanning...`, "ok");
+}
+
+// If we already finished scanning this chest-open (either found drops or timed out), do nothing until chest closes.
+if (__barrowsChestScanDone) return;
+
+// Throttle scans to avoid spam / heavy CPU
+if (now - __barrowsChestLastScanMs < CHEST_SCAN_INTERVAL_MS) return;
+__barrowsChestLastScanMs = now;
+
+const hits = __scanBarrowsChestForDrops(__barrowsChestLock);
+const key = hits.map(h=>h.name).sort().join("|");
+
+// If we found any valid Barrows items, report once and stop scanning until chest closes.
+if (hits.length) {
+  __barrowsChestLastScanKey = key;
+
+  // Always show what we found
+  __statusChest(__formatBarrowsHits(hits), "ok");
+  if (CHEST_TEST.debug) console.log("[BARROWS CHEST] hits:", hits);
+
+  // Only submit if setup is ready (IGN + Bingo/Team locked)
+  try {
+    if (!isSetupReady || !isSetupReady()) {
+      __statusChest("Setup not ready — detected but not submitted.", "warn");
+      __barrowsChestScanDone = true;
       return;
     }
-
-    // Validation failed → clear cache and re-detect.
-    if (CHEST_TEST.debug) {
-      console.log("[BARROWS CHEST] cache invalid (score:", v.score.toFixed(3), ") → re-scan");
-      __drawChestRect(__barrowsChestCache, false);
-    }
-    __barrowsChestCache = null;
-    __saveChestCacheToLocalStorage(null);
-  }
-
-  // No cache: do a throttled global scan.
-  if (now - __lastChestScanMs < CHEST_TEST.cooldownMs) return;
-  __lastChestScanMs = now;
-
-  const found = __detectChestGlobalOnce();
-  if (!found) {
-    if (CHEST_TEST.debug && now - __lastChestSeenMs > 2000) {
-      console.log("[BARROWS CHEST] not found (global scan)");
-    }
+  } catch (e) {
+    __statusChest("Setup check failed — detected but not submitted.", "warn");
+    __barrowsChestScanDone = true;
     return;
   }
 
-  __barrowsChestCache = found;
-  __saveChestCacheToLocalStorage(found);
-  __lastChestSeenMs = now;
+  // Submit each detected Barrows item (qty 1)
+  for (const h of hits) {
+    const vName = validateDropName(h.name);
+    const canonical = (vName && vName.valid && vName.canonical) ? vName.canonical : h.name;
 
-  if (CHEST_TEST.debug) {
-    console.log("[BARROWS CHEST] detected score:", found.score.toFixed(3), "rect:", found);
-    __drawChestRect(found, true);
+    // De-dupe with the same recent-key mechanism used elsewhere, when available
+    try {
+      const k = String(canonical).toLowerCase().trim() + "||1";
+      if (typeof seenRecently === "function" && seenRecently(k, 8000)) continue;
+    } catch (e) {}
+
+    try {
+      await submitDrop({ drop_name: canonical, amount: "1" });
+      addFeed(`Submitted ✅ ${canonical} x1`, "ok");
+    } catch (e) {
+      addFeed(`Submit failed ❌ (${canonical}): ${e.message}`, "bad");
+    }
   }
-  showEvent("Chest test", `Barrows chest detected (score ${found.score.toFixed(3)})`, "ok", true, true);
+
+  __barrowsChestScanDone = true;
+  return;
+}
+
+// No hits yet — if timeout reached, report once and stop scanning until chest closes.
+if ((now - __barrowsChestScanStartMs) >= CHEST_SCAN_TIMEOUT_MS) {
+  __barrowsChestLastScanKey = "";
+  __statusChest("No valid Barrows drops detected!", "warn");
+  __barrowsChestScanDone = true;
+  return;
+}
+
+// Otherwise: keep scanning quietly (but update status text occasionally if desired)
+
 }
 
 function __adaptiveThresholds(bestName) {
-  const baseAcc = (ICON_MATCH.acceptScore == null ? 0.78 : ICON_MATCH.acceptScore);
+  const baseAcc = (ICON_MATCH.acceptScore == null ? 0.20 : ICON_MATCH.acceptScore);
   const baseGap = (ICON_MATCH.minGap == null ? 0.0 : ICON_MATCH.minGap);
   const baseRatio = (ICON_MATCH.minRatio == null ? 1.0 : ICON_MATCH.minRatio);
 
@@ -1356,7 +2258,9 @@ function updateSetupPanelWrapVisibility() {
   const sl = (localStorage.getItem(LS.setupLocked) || "") === "1";
   const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
 
-  wrap.style.display = (sl && il) ? "none" : "";
+    const cl = !!localStorage.getItem(LS.chatPos);
+
+  wrap.style.display = (sl && il && cl) ? "none" : "";
 }
 // ---------- UI render (no storage writes) + cross-window sync ----------
   function renderSetupLockedUI(locked) {
@@ -1365,9 +2269,47 @@ function updateSetupPanelWrapVisibility() {
     initHistoryPanel();
     refreshSummary();
     refreshSetupState();
+
+    try { updateAutoChatUI(); } catch (e) {}
+    try { updateSetupGating(); } catch (e) {}
   }
 
-  function renderIgnLockedUI(locked) {
+  function isChatLocked() {
+  return !!localStorage.getItem(LS.chatPos);
+}
+
+function updateAutoChatUI() {
+  const locked = isChatLocked();
+  if (ui.autoChatPill) {
+    ui.autoChatPill.textContent = locked ? "Chat: locked" : "Chat: not set";
+    ui.autoChatPill.className = "pill mini " + (locked ? "ok" : "warn");
+  }
+  if (ui.btnAutoLocateChat) ui.btnAutoLocateChat.disabled = locked || !isAlt1;
+  if (ui.autoChatWrap) ui.autoChatWrap.style.display = locked ? "none" : "";
+}
+
+function updateSetupGating() {
+  // Enforce order:
+  // 1) Chat must be locked before IGN
+  // 2) IGN must be locked before Bingo/Team lock
+  const cl = isChatLocked();
+  const il = (localStorage.getItem(LS.ignLocked) || "") === "1";
+
+  if (ui.ign) ui.ign.disabled = !cl || il;
+  if (ui.btnLockIgn) ui.btnLockIgn.disabled = !cl || il;
+
+  // Bingo/team controls live in the main setup panel; disable until IGN locked.
+  const lockSetupBtn = ui.btnLockSetup;
+  if (lockSetupBtn) lockSetupBtn.disabled = !il || lockSetupBtn.disabled; // keep existing disabled if selections missing
+
+  // Disable dropdown buttons until IGN locked
+  try {
+    if (ui.bingoBtn) ui.bingoBtn.disabled = !il;
+    if (ui.teamBtn) ui.teamBtn.disabled = !il;
+  } catch (e) {}
+}
+
+function renderIgnLockedUI(locked) {
     const field = ui.ign ? ui.ign.closest(".field") : null;
     if (!ui.ign || !ui.btnLockIgn) return;
 
@@ -2535,7 +3477,7 @@ function stitchChatMessages(lines) {
   async function poll() {
     if (!running || !chatReader) return;
     // Barrows chest UI detection test (template match)
-    try { __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
+    try { await __chestTestTick(); } catch (e) { console.warn("[BARROWS CHEST] tick error:", e.message); }
 
     if (!isSetupReady()) return;
 
@@ -2635,6 +3577,29 @@ function stitchChatMessages(lines) {
   }
 
   // ---------- events ----------
+// User guide popup (themed)
+ui.btnOpenGuide && ui.btnOpenGuide.addEventListener("click", () => {
+  try {
+    const base = location.href.split("#")[0].split("?")[0];
+    const root = base.replace(/\/[^\/]*$/, ""); // folder
+    const url = root + "/userguide.html";
+    const w = 440;
+    const h = 660;
+    if (window.alt1 && typeof alt1.openPopup === "function") {
+      try { alt1.openPopup(url, w, h); return; } catch (e) {}
+    }
+    window.open(url, "irb_guide", `width=${w},height=${h},resizable=yes`);
+  } catch (e) {
+    console.warn("Guide popup failed:", e);
+  }
+});
+
+
+
+ui.btnCloseGuide && ui.btnCloseGuide.addEventListener("click", () => {
+  try { window.close(); } catch (e) {}
+});
+
   if (!__settingsOnly) {
     ui.btnOpenSettings && ui.btnOpenSettings.addEventListener("click", openSettingsPopup);
     ui.btnOpenSettings2 && ui.btnOpenSettings2.addEventListener("click", openSettingsPopup);
@@ -2644,8 +3609,30 @@ function stitchChatMessages(lines) {
   }
 
   ui.btnCloseSettings && ui.btnCloseSettings.addEventListener("click", () => {
-    if (__settingsOnly) {
-      try { window.close(); } catch (e) {}
+    if (__guideOnly) {
+    try {
+      // Guide-only popup: hide main UI and show the guide panel
+      const topbar = document.querySelector(".topbar");
+      const panel = document.querySelector(".panel");
+      const setupBlock = document.getElementById("setupBlock");
+      const setupSummary = document.getElementById("setupSummary");
+      const statusPanel = document.getElementById("statusPanel");
+
+      if (topbar) topbar.style.display = "none";
+      if (panel) panel.style.display = "none";
+      if (setupBlock) setupBlock.style.display = "none";
+      if (setupSummary) setupSummary.style.display = "none";
+      if (statusPanel) statusPanel.style.display = "none";
+
+      if (ui.drawer) ui.drawer.style.display = "none";
+      if (ui.backdrop) ui.backdrop.style.display = "none";
+
+      if (ui.guidePanel) ui.guidePanel.style.display = "";
+    } catch (e) {}
+  }
+
+  if (__settingsOnly) {
+    try { window.close(); } catch (e) {}
       return;
     }
     closeDrawer();
@@ -2698,6 +3685,10 @@ function stitchChatMessages(lines) {
     playBeep("ok");
     pingApi();
     if (isSetupReady()) start();
+
+    // Force-refresh after locking Bingo/Team so runtime state is clean
+    try { setTimeout(() => location.reload(), 80); } catch (e) {}
+
   });
 
   ui.btnUnlockSetup && ui.btnUnlockSetup.addEventListener("click", () => {
@@ -2707,7 +3698,38 @@ function stitchChatMessages(lines) {
     stop();
   });
 
-  ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
+  
+ui.btnAutoLocateChat && ui.btnAutoLocateChat.addEventListener("click", () => {
+  if (!isAlt1) { addFeed("Alt1 not detected.", "bad"); return; }
+  const ok = initChatReader();
+  if (!ok) { addFeed("Chat reader unavailable.", "bad"); return; }
+
+  // Use chatReader.find() then lock/save immediately
+  try {
+    chatReader.find();
+    if (chatReader.pos === null) {
+      addFeed("Auto-locate failed: chatbox not found. Make sure chat is visible.", "bad");
+      if (ui.autoChatHint) ui.autoChatHint.textContent = "Chat not found — open chatbox and try again.";
+      return;
+    }
+    saveChatPos(chatReader.pos);
+    chatState.locked = true;
+    chatState.usingFallback = false;
+    chatState.confPct = 95;
+    setChatPillLocked();
+    tryOverlayRect(chatReader.pos, true);
+    addFeed("Chatbox auto-located & locked ✅", "ok");
+    playBeep("ok");
+    updateAutoChatUI();
+    updateSetupGating();
+    refreshSetupState();
+    updateSetupPanelWrapVisibility();
+  } catch (e) {
+    addFeed("Auto-locate failed: " + e.message, "bad");
+  }
+});
+
+ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     const ign = (ui.ign?.value || "").trim();
     if (!ign) { addFeed("Enter your IGN first.", "bad"); return; }
     localStorage.setItem(LS.ign, ign);
@@ -2729,6 +3751,62 @@ function stitchChatMessages(lines) {
     refreshSetupState();
     stop();
   });
+
+  // Ensure Barrows chest lock reset button exists (if settings HTML doesn't include it)
+  try { __ensureBarrowsResetButton(); } catch (e) {}
+  // Barrows chest lock reset (Settings)
+// Use delegated click handling so it works even if the settings drawer DOM is rebuilt.
+(function () {
+  const handler = (ev) => {
+    const t = ev && ev.target;
+    if (!t || t.id !== "btnResetBarrowsLock") return;
+    ev.preventDefault && ev.preventDefault();
+
+    try { __saveBarrowsChestLock(null); } catch (e) {}
+    try { localStorage.removeItem("irb_barrowsChestRect"); } catch (e) {} // legacy cache key
+
+    __barrowsChestSeen = false;
+    __barrowsChestLastScanKey = "";
+    __barrowsChestLastScanMs = 0;
+    __barrowsChestScanDone = false;
+
+    try { __statusChest("Lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn"); } catch (e) {}
+    try { addFeed("Barrows chest lock cleared. Hover the chest and press Alt+1 to re-lock.", "warn"); } catch (e) {}
+    try { playBeep("warn"); } catch (e) {}
+  };
+
+  // Attach once
+  if (!window.__irbBarrowsResetHooked) {
+    window.__irbBarrowsResetHooked = true;
+    document.addEventListener("click", handler, true);
+  }
+})();
+
+
+
+  // Ensure Barrows chest lock reset button exists in the Settings drawer (create if missing)
+  function __ensureBarrowsResetButton() {
+    try {
+      let btn = document.getElementById("btnResetBarrowsLock");
+      if (btn) return btn;
+
+      const anchor = document.getElementById("btnResetIgn") || document.getElementById("btnUnlockSetup");
+      if (!anchor || !anchor.parentNode) return null;
+
+      btn = document.createElement("button");
+      btn.id = "btnResetBarrowsLock";
+      btn.type = "button";
+      // match styling of the IGN reset button when possible
+      btn.className = anchor.className || "btn";
+      btn.textContent = "Reset Barrows chest lock";
+      btn.title = "Clears the saved Barrows chest position (press Alt+1 to re-lock).";
+
+      anchor.parentNode.insertBefore(btn, anchor.nextSibling);
+      return btn;
+    } catch (e) { return null; }
+  }
+
+
 
   ui.btnRecalibrate && ui.btnRecalibrate.addEventListener("click", () => {
     locateChatboxAndStore();
@@ -2847,10 +3925,12 @@ function stitchChatMessages(lines) {
   }
 
   addFeed("Plugin loaded.", "ok");
+  try { startIdleTicker(); } catch (e) {}
   pingApi();
 
   // NOTE: removed setupPremiumSelectUI(); it was undefined and crashed boot.
   await loadAllowlistFile();
+  try { await ensureBarrowsCloseTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] close template not loaded:", e.message); }
   try { await ensureBarrowsTopbarTemplateLoaded(); } catch (e) { console.warn("[BARROWS CHEST] topbar template not loaded:", e.message); }
 
 
@@ -2888,7 +3968,7 @@ function stitchChatMessages(lines) {
     if (Array.isArray(rc) && typeof rc.push === "function") {
       rc.push((obj) => {
         try { console.log("[Alt1] rightclick event", obj); } catch (e) {}
-        manualSubmitFlow();
+        if (!__loadBarrowsChestLock()) { __locateBarrowsChestFromMouse(); } else { __forceBarrowsChestScanNow(); }
       });
       return;
     }
@@ -2896,7 +3976,7 @@ function stitchChatMessages(lines) {
     // Legacy callback (works on older/mid Alt1 builds; may show a deprecation warning in console)
     window.alt1onrightclick = (obj) => {
       try { console.log("[Alt1] alt1onrightclick (legacy)", obj); } catch (e) {}
-      manualSubmitFlow();
+      if (!__loadBarrowsChestLock()) { __locateBarrowsChestFromMouse(); } else { __forceBarrowsChestScanNow(); }
     };
   }
 
