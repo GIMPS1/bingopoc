@@ -72,12 +72,23 @@
 </div>
 
   <script>
-    (function(){
-      const btn = document.getElementById("btnCloseGuide");
-      if (btn) btn.addEventListener("click", () => { try { window.close(); } catch(e) {} });
-      // Alt1 popup windows sometimes ignore close; provide fallback message
-      try { if (window.alt1 && typeof alt1.setTooltip === "function")  } catch(e) {}
-    })();
-  </script>
+  (function(){
+    function clearTip() {
+      try { if (window.alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch(e) {}
+    }
+
+    // Clear any stale tooltip when the guide opens
+    clearTip();
+
+    const btn = document.getElementById("btnCloseGuide");
+    if (btn) btn.addEventListener("click", () => {
+      clearTip();
+      try { window.close(); } catch(e) {}
+    });
+
+    // Also clear if closed by other means
+    window.addEventListener("beforeunload", clearTip);
+  })();
+</script>
 </body>
 </html>
