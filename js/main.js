@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-barrows-iconmatch3-chesthotkey-debugscan-v2";
+  const BUILD_VERSION = "v2026-02-28--v2";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-barrows-iconmatch2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27--v2`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -577,6 +577,27 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
+const BARROWS_CLOSE_FEAT_H = 52;
+
+// Auto-detect: full-screen search uses a smaller feature map for coarse scanning, then refines.
+const BARROWS_CLOSE_COARSE_FEAT_W = 24;
+const BARROWS_CLOSE_COARSE_FEAT_H = 26;
+
+// Multi-scale support (UI scaling)
+const BARROWS_CHEST_SCALES = [0.85, 0.92, 1.0, 1.08, 1.15, 1.25, 1.35];
+
+// Auto-locate throttling
+const BARROWS_AUTOLOCATE = {
+  enabled: true,
+  cooldownMs: 1400,
+  maxMsPerTick: 18,
+  coarseStrideFrac: 0.33, // stride = max(8, tw*frac)
+  accept: 0.90,
+  refineAccept: 0.92,
+  validateTopbarAccept: 0.78,
+};
+
+
  const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
 
 
@@ -659,108 +680,46 @@ function __irb_scoreGridRow(img, ox, oy, side, spacing, count) {
 // Find the *actual* first loot slot (grid origin) inside the locked chest rect.
 // Returns absolute screen coords {x,y,score} or null.
 function __irb_findBarrowsSlotGrid(lockRect) {
-  // Deterministic slot-grid anchor:
-  // Use the close-only lock as a rough bounding box, then *refine* by finding the actual slot border pattern
-  // in a tight search window near the expected row. This avoids false "slot-like" matches elsewhere.
   try {
-    if (!window.alt1 || !alt1.capture) return null;
-
-    const cap = alt1.capture(lockRect.x|0, lockRect.y|0, lockRect.w|0, lockRect.h|0);
+    const cap = __captureRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h);
     if (!cap || !cap.data || !cap.width) return null;
 
-    const img = { data: cap.data, width: cap.width|0, height: cap.height|0 };
+    const img = { data: cap.data, width: cap.width, height: cap.height };
 
-    // Use your current slot geometry as the *prior* (we only search around it).
-    const slotSide = (BARROWS_CHEST_SLOTS.iconSz|0) || 32;
-    const spacing  = (BARROWS_CHEST_SLOTS.spacing|0) || 52;
-    const maxSlots = (BARROWS_CHEST_SLOTS.max|0) || 8;
+    const side = BARROWS_CHEST_SLOTS.iconSz | 0;
+    const spacing = BARROWS_CHEST_SLOTS.spacing | 0;
+    const count = BARROWS_CHEST_SLOTS.max | 0;
 
-    // Expected origin in local coords (top-left of slot 0)
-    const expX = (BARROWS_CHEST_SLOTS.startX|0) || 0;
-    const expY = (BARROWS_CHEST_SLOTS.rowY|0) || 0;
+    const xMin = 0;
+    const xMax = img.width - (side + (count - 1) * spacing) - 2;
 
-    // Tight search window around expected (tuneable)
-    const xMin = __irb_clamp(expX - 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
-    const xMax = __irb_clamp(expX + 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
-    const yMin = __irb_clamp(expY - 40, 0, img.height - slotSide - 2);
-    const yMax = __irb_clamp(expY + 40, 0, img.height - slotSide - 2);
+    // Barrows icon row is near the top portion of the window.
+    const yMin = __irb_clamp(Math.floor(img.height * 0.06), 6, img.height - 64);
+    const yMax = __irb_clamp(Math.floor(img.height * 0.35), yMin + 16, img.height - 40);
 
-    function lumaAt(px, py) {
-      const idx = ((py|0) * img.width + (px|0)) * 4;
-      return __irb_luma(img.data, idx);
-    }
+    let best = { score: -1e18, x: 0, y: 0 };
 
-    // Score a single slot by checking that the 1px border is brighter than both inside & outside.
-    function scoreSlotAt(x, y) {
-      if (x < 2 || y < 2 || x + slotSide + 2 >= img.width || y + slotSide + 2 >= img.height) return -1e9;
-      const s = slotSide;
-
-      // sample 12 border locations
-      const pts = [
-        [x+1, y+1,  1,  1, -1, -1],
-        [x+s-2, y+1, -1,  1,  1, -1],
-        [x+1, y+s-2,  1, -1, -1,  1],
-        [x+s-2, y+s-2, -1, -1,  1,  1],
-
-        [x+(s>>1), y+0, 0,  1, 0, -1],
-        [x+(s>>1), y+s-1, 0, -1, 0,  1],
-        [x+0, y+(s>>1), 1, 0, -1, 0],
-        [x+s-1, y+(s>>1), -1, 0,  1, 0],
-
-        [x+Math.floor(s/3), y+0, 0,  1, 0, -1],
-        [x+Math.floor(2*s/3), y+0, 0,  1, 0, -1],
-        [x+0, y+Math.floor(s/3), 1, 0, -1, 0],
-        [x+0, y+Math.floor(2*s/3), 1, 0, -1, 0],
-      ];
-
-      let score = 0;
-      for (const [bx, by, inDx, inDy, outDx, outDy] of pts) {
-        const b = lumaAt(bx, by);
-        const inside = lumaAt(bx + inDx, by + inDy);
-        const outside = lumaAt(bx + outDx, by + outDy);
-        const ref = Math.max(inside, outside);
-        score += (b - ref);
-      }
-      return score;
-    }
-
-    function scoreRow(ox, oy) {
-      let s = 0;
-      for (let i = 0; i < maxSlots; i++) {
-        s += scoreSlotAt(ox + i*spacing, oy);
-      }
-      return s;
-    }
-
-    let best = { score: -1e18, x: expX, y: expY };
-
-    // coarse scan
     for (let y = yMin; y <= yMax; y += 2) {
-      for (let x = xMin; x <= xMax; x += 3) {
-        const s = scoreRow(x, y);
+      // Coarse x scan
+      let coarse = { score: -1e18, x: 0 };
+      for (let x = xMin; x <= xMax; x += 4) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+        if (s > coarse.score) coarse = { score: s, x };
+      }
+      // Fine around coarse best
+      const fx0 = __irb_clamp(coarse.x - 8, xMin, xMax);
+      const fx1 = __irb_clamp(coarse.x + 8, xMin, xMax);
+      for (let x = fx0; x <= fx1; x += 1) {
+        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
         if (s > best.score) best = { score: s, x, y };
       }
     }
 
-    // refine around best at 1px
-    const fx0 = __irb_clamp(best.x - 6, xMin, xMax);
-    const fx1 = __irb_clamp(best.x + 6, xMin, xMax);
-    const fy0 = __irb_clamp(best.y - 6, yMin, yMax);
-    const fy1 = __irb_clamp(best.y + 6, yMin, yMax);
+    // Threshold depends on count; be conservative to avoid false anchors.
+    const minScore = 8 * count; // heuristic
+    if (best.score < minScore) return null;
 
-    let refined = best;
-    for (let y = fy0; y <= fy1; y++) {
-      for (let x = fx0; x <= fx1; x++) {
-        const s = scoreRow(x, y);
-        if (s > refined.score) refined = { score: s, x, y };
-      }
-    }
-
-    // If we didn't find a convincing row, return null and fall back to offsets.
-    // Threshold is relative to the number of points (12*maxSlots); keep conservative.
-    if (refined.score < (maxSlots * 12 * 6)) return null;
-
-    return { x: (lockRect.x + refined.x)|0, y: (lockRect.y + refined.y)|0, score: refined.score };
+    return { x: (lockRect.x + best.x) | 0, y: (lockRect.y + best.y) | 0, score: best.score };
   } catch (e) {
     console.warn("[IRB] grid anchor failed:", e);
     return null;
@@ -949,9 +908,6 @@ function __locateBarrowsChestFromMouse() {
     scale: 1.0,
     savedAt: Date.now()
   };
-  // Keep close anchor info for downstream debugging / grid refinement.
-  lock.close = { x: absCloseX, y: absCloseY, tw: tw, th: th, score: refined.score };
-
   // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
   lock.grid = __irb_findBarrowsSlotGrid(lock);
 
@@ -991,6 +947,139 @@ for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
 
   return lock;
 }
+
+
+let __barrowsAutoLocateLastMs = 0;
+
+function __validateChestTopbarAt(lock) {
+  try {
+    const s = __chestScale(lock);
+    const topbarT = __getBarrowsTopbarTemplateScaled(s);
+    if (!topbarT) return 0;
+
+    const insetX = Math.round(CHEST_TEST.topbarInsetX * s) | 0;
+    const insetY = Math.round(CHEST_TEST.topbarInsetY * s) | 0;
+    const topX = (lock.x + insetX) | 0;
+    const topY = (lock.y + insetY) | 0;
+
+    const capTop = __captureRect(topX, topY, topbarT.w|0, topbarT.h|0);
+    if (!capTop) return 0;
+
+    const gray = __downsampleCapToGrayRect(capTop, 0, 0, topbarT.w|0, topbarT.h|0, CHEST_TEST.featW, CHEST_TEST.featH);
+    const feat = __centerAndInvStd(gray);
+    return __znccScore(topbarT.feat, feat);
+  } catch (e) { return 0; }
+}
+
+function __locateBarrowsChestAuto() {
+  if (!BARROWS_AUTOLOCATE.enabled) return null;
+  const now = Date.now();
+  if (now - __barrowsAutoLocateLastMs < BARROWS_AUTOLOCATE.cooldownMs) return null;
+  __barrowsAutoLocateLastMs = now;
+
+  if (!__barrowsCloseImgData || !__barrowsTopbarImgData) return null;
+
+  const gf = __captureGameFrame();
+  if (!gf) return null;
+  const { capProps, rx, ry } = gf;
+
+  const started = performance && performance.now ? performance.now() : Date.now();
+
+  let best = null;
+
+  for (const s of BARROWS_CHEST_SCALES) {
+    const closeCoarse = __getBarrowsCloseTemplateScaled(s, BARROWS_CLOSE_COARSE_FEAT_W, BARROWS_CLOSE_COARSE_FEAT_H);
+    if (!closeCoarse) continue;
+
+    const tw = closeCoarse.w|0;
+    const th = closeCoarse.h|0;
+    if (tw <= 10 || th <= 10) continue;
+    if (tw >= capProps.width || th >= capProps.height) continue;
+
+    const stride = Math.max(8, Math.round(tw * BARROWS_AUTOLOCATE.coarseStrideFrac)) | 0;
+
+    for (let y = 0; y <= capProps.height - th; y += stride) {
+      for (let x = 0; x <= capProps.width - tw; x += stride) {
+        const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_CLOSE_COARSE_FEAT_W, BARROWS_CLOSE_COARSE_FEAT_H);
+        const feat = __centerAndInvStd(gray);
+        const score = __znccScore(closeCoarse.feat, feat);
+
+        if (!best || score > best.score) best = { x, y, score, s, tw, th };
+
+        const elapsed = (performance && performance.now ? performance.now() : Date.now()) - started;
+        if (elapsed > BARROWS_AUTOLOCATE.maxMsPerTick) break;
+      }
+      const elapsed = (performance && performance.now ? performance.now() : Date.now()) - started;
+      if (elapsed > BARROWS_AUTOLOCATE.maxMsPerTick) break;
+    }
+    const elapsed = (performance && performance.now ? performance.now() : Date.now()) - started;
+    if (elapsed > BARROWS_AUTOLOCATE.maxMsPerTick) break;
+  }
+
+  if (!best || best.score < BARROWS_AUTOLOCATE.accept) return null;
+
+  // Refine around best at higher-res features
+  const s = best.s;
+  const closeFine = __getBarrowsCloseTemplateScaled(s, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+  if (!closeFine) return null;
+
+  const tw = closeFine.w|0;
+  const th = closeFine.h|0;
+
+  const r0x = Math.max(0, best.x - 2 * Math.max(6, Math.round(tw*0.15)));
+  const r0y = Math.max(0, best.y - 2 * Math.max(6, Math.round(th*0.15)));
+  const r1x = Math.min(capProps.width - tw, best.x + 2 * Math.max(6, Math.round(tw*0.15)));
+  const r1y = Math.min(capProps.height - th, best.y + 2 * Math.max(6, Math.round(th*0.15)));
+
+  let refined = { ...best, score: -1 };
+
+  for (let y = r0y; y <= r1y; y += 2) {
+    for (let x = r0x; x <= r1x; x += 2) {
+      const gray = __downsampleCapToGrayRect(capProps, x, y, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+      const feat = __centerAndInvStd(gray);
+      const score = __znccScore(closeFine.feat, feat);
+      if (score > refined.score) refined = { x, y, score, s, tw, th };
+    }
+  }
+
+  if (refined.score < BARROWS_AUTOLOCATE.refineAccept) return null;
+
+  const absCloseX = (rx + refined.x) | 0;
+  const absCloseY = (ry + refined.y) | 0;
+
+  const padR = Math.round(BARROWS_CLOSE_PAD_R * s) | 0;
+  const padT = Math.round(BARROWS_CLOSE_PAD_T * s) | 0;
+
+  const chestW = Math.round(CHEST_TEST.chestWidth * s) | 0;
+  const chestH = Math.round(CHEST_TEST.chestHeight * s) | 0;
+
+  const chestX = (absCloseX - (chestW - tw - padR)) | 0;
+  const chestY = (absCloseY - padT) | 0;
+
+  const lock = {
+    x: Math.max(0, chestX),
+    y: Math.max(0, chestY),
+    w: chestW,
+    h: chestH,
+    scale: s,
+    savedAt: Date.now(),
+  };
+
+  const topbarScore = __validateChestTopbarAt(lock);
+  if (topbarScore < BARROWS_AUTOLOCATE.validateTopbarAccept) return null;
+
+  lock.grid = __irb_findBarrowsSlotGrid(lock);
+
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(absCloseX, absCloseY, tw, th, [0, 200, 255], 900);
+      __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 900);
+    } catch (e) {}
+  }
+
+  return lock;
+}
+
 
 
 function __validateBarrowsChestLock(lock) {
@@ -1060,6 +1149,105 @@ function __isChestSlotOccupied(capProps, x, y, w, h) {
   }
 }
 
+
+// --- Barrows Chest: box-scan (gridless) ---
+// Slides an icon-sized window across the loot band and matches against the iconset.
+// This avoids relying on fixed grid geometry when the chest is moved or UI scale changes.
+const CHEST_BOX_SCAN = {
+  enabled: true,
+  // Band inside the chest window that contains loot icons (relative to chest, scale=1)
+  band: { x: 8, y: 24, w: 544, h: 92 },
+  step: 4,
+  sizes: [32, 48],
+  maxMatchAttempts: 900,
+  nmsDist: 20,
+  debugOverlay: false,
+  debugOverlayMs: 260,
+};
+
+function __nmsByDistance(matches, distPx) {
+  const kept = [];
+  const d2 = distPx * distPx;
+  const sorted = [...matches].sort((a, b) => (b.score - a.score));
+  for (const m of sorted) {
+    let ok = true;
+    for (const k of kept) {
+      const dx = (m.cx - k.cx);
+      const dy = (m.cy - k.cy);
+      if ((dx*dx + dy*dy) <= d2) { ok = false; break; }
+    }
+    if (ok) kept.push(m);
+  }
+  return kept;
+}
+
+function __scanBarrowsChestForDrops_Box(lock, cap) {
+  const s = __chestScale(lock);
+  const band = {
+    x: Math.round(CHEST_BOX_SCAN.band.x * s),
+    y: Math.round(CHEST_BOX_SCAN.band.y * s),
+    w: Math.round(CHEST_BOX_SCAN.band.w * s),
+    h: Math.round(CHEST_BOX_SCAN.band.h * s),
+  };
+
+  const x0 = Math.max(0, Math.min(cap.width - 1, band.x | 0));
+  const y0 = Math.max(0, Math.min(cap.height - 1, band.y | 0));
+  const x1 = Math.max(0, Math.min(cap.width, (band.x + band.w) | 0));
+  const y1 = Math.max(0, Math.min(cap.height, (band.y + band.h) | 0));
+
+  const step = Math.max(1, Math.round(CHEST_BOX_SCAN.step * s)) | 0;
+
+  const raw = [];
+  let attempts = 0;
+
+  for (const size0 of CHEST_BOX_SCAN.sizes) {
+    const iconSz = Math.max(18, Math.round(size0 * s)) | 0;
+    if (iconSz >= cap.width || iconSz >= cap.height) continue;
+
+    for (let yy = y0; yy <= (y1 - iconSz); yy += step) {
+      for (let xx = x0; xx <= (x1 - iconSz); xx += step) {
+        const occ = __isChestSlotOccupied(cap, xx, yy, iconSz, iconSz);
+        if (!occ || !occ.occupied) continue;
+
+        attempts++;
+        if (attempts > CHEST_BOX_SCAN.maxMatchAttempts) break;
+
+        const selection = { capProps: cap, rect: { x: xx, y: yy, w: iconSz, h: iconSz } };
+        const best = matchIconFromSelection(selection, __iconTemplates);
+        if (!best || !best.accepted) continue;
+        if (!validateDropName(best.name)) continue;
+
+        const dx = (typeof best.dx === "number" ? best.dx : 0) | 0;
+        const dy = (typeof best.dy === "number" ? best.dy : 0) | 0;
+        const ax = (xx + dx) | 0;
+        const ay = (yy + dy) | 0;
+        const cx = (ax + (iconSz >> 1)) | 0;
+        const cy = (ay + (iconSz >> 1)) | 0;
+
+        raw.push({ name: best.name, score: best.score, ax, ay, iconSz, cx, cy });
+      }
+      if (attempts > CHEST_BOX_SCAN.maxMatchAttempts) break;
+    }
+    if (attempts > CHEST_BOX_SCAN.maxMatchAttempts) break;
+  }
+
+  const clustered = __nmsByDistance(raw, Math.round(CHEST_BOX_SCAN.nmsDist * s));
+  const byName = new Map();
+  for (const m of clustered) {
+    const prev = byName.get(m.name);
+    if (!prev || m.score > prev.score) byName.set(m.name, m);
+  }
+  const final = [...byName.values()].sort((a, b) => b.score - a.score);
+
+  if (CHEST_BOX_SCAN.debugOverlay && final.length) {
+    for (const m of final) {
+      __overlayRectAbs((lock.x + m.ax) | 0, (lock.y + m.ay) | 0, m.iconSz, m.iconSz, [0, 220, 0], CHEST_BOX_SCAN.debugOverlayMs);
+    }
+  }
+
+  return final.map(m => ({ name: m.name, score: m.score }));
+}
+
 function __scanBarrowsChestForDrops(lock) {
   if (!lock) return [];
   if (!__iconTemplates) {
@@ -1067,6 +1255,7 @@ function __scanBarrowsChestForDrops(lock) {
     try { ensureIconTemplatesLoaded(); } catch (e) {}
     return [];
   }
+
   const cap = __captureRect(lock.x, lock.y, lock.w, lock.h);
   if (!cap) return [];
 
@@ -1076,54 +1265,41 @@ function __scanBarrowsChestForDrops(lock) {
     ICON_MATCH.acceptScore = CHEST_ICON_MATCH_OVERRIDES.acceptScore;
     ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
     ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
-    // Use the same snap mechanism as manual submit: local dx/dy search around slot center
-    ICON_MATCH.snapRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;
-    ICON_MATCH.snapStep = CHEST_ICON_MATCH_OVERRIDES.snapStep ?? 1;
-    // (legacy) keep searchRadius in sync for any other call sites
-    ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;  } catch (e) {}
+    ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;
+  } catch (e) {}
 
-  const hits = [];
-  const rows = [];
-  const slots = __barrowsSlotRects(lock);
-
-  for (let i = 0; i < slots.length; i++) {
-    const x = slots[i].x | 0;
-    const y = slots[i].y | 0;
-    const iconSz = slots[i].w | 0;
-
-    // Skip if outside bounds
-    if (x < 0 || y < 0 || (x+iconSz) > cap.width || (y+iconSz) > cap.height) {
-      rows.push({ slot: i, skipped: true });
-      continue;
+  try {
+    if (CHEST_BOX_SCAN.enabled) {
+      return __scanBarrowsChestForDrops_Box(lock, cap);
     }
 
+    // Fallback: grid slots (legacy)
+    const hits = [];
+    const slots = __barrowsSlotRects(lock);
 
-const occ = __isChestSlotOccupied(cap, x, y, iconSz, iconSz);
+    for (let i = 0; i < slots.length; i++) {
+      const x = slots[i].x | 0;
+      const y = slots[i].y | 0;
+      const iconSz = slots[i].w | 0;
 
-const selection = {
-  capProps: cap,
-  rect: { x, y, w: iconSz, h: iconSz },
-};
+      if (x < 0 || y < 0 || (x + iconSz) > cap.width || (y + iconSz) > cap.height) continue;
 
-// Only attempt template match on occupied slots (saves CPU + reduces noise)
-const best = occ.occupied ? matchIconFromSelection(selection, __iconTemplates) : null;
+      const occ = __isChestSlotOccupied(cap, x, y, iconSz, iconSz);
+      if (!occ || !occ.occupied) continue;
 
-// Visual proof: draw slot boxes at the snapped position actually evaluated
-if (CHEST_SCAN_DEBUG_OVERLAY) {
-  const dx = (best && typeof best.dx === "number") ? best.dx : 0;
-  const dy = (best && typeof best.dy === "number") ? best.dy : 0;
-  const ax = (lock.x + x + dx)|0;
-  const ay = (lock.y + y + dy)|0;
+      const selection = { capProps: cap, rect: { x, y, w: iconSz, h: iconSz } };
+      const best = matchIconFromSelection(selection, __iconTemplates);
+      if (!best || !best.accepted) continue;
+      if (!validateDropName(best.name)) continue;
 
-  const isBarrows = !!(best && best.accepted && validateDropName(best.name));
-  const nearMiss = !!(occ.occupied && best && !isBarrows && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore);
+      hits.push({ name: best.name, score: best.score });
+    }
 
-  // Color scheme:
-  // - Green: accepted Barrows unique
-  // - Red: near-miss (looked close but failed)
-  // - Gray: empty slot or junk / low-confidence
-  const col = isBarrows ? [0, 220, 0] : (nearMiss ? [220, 0, 0] : [140, 140, 140]);
-  __overlayRectAbs(ax, ay, iconSz, iconSz, col, 280);
+    const seen = new Set();
+    return hits.filter(h => (seen.has(h.name) ? false : (seen.add(h.name), true)));
+  } finally {
+    try { Object.assign(ICON_MATCH, __savedIconMatch); } catch (e) {}
+  }
 }
 
 
@@ -1189,8 +1365,65 @@ function __formatBarrowsHits(hits) {
 let __barrowsTopbarT = null;          // { w,h, feat }
 let __barrowsTopbarTLoading = null;
 
-let __barrowsCloseT = null;          // { w,h, feat }
-let __barrowsCloseTLoading = null;
+__validateBarrowsChestLock(lock) {
+  if (!lock) return { ok:false, score:0, topbar:0 };
+  const s = __chestScale(lock);
+
+  const closeT = __getBarrowsCloseTemplateScaled(s, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+  if (!closeT) return { ok:false, score:0, topbar:0 };
+
+  const tw = closeT.w | 0;
+  const th = closeT.h | 0;
+
+  const padR = Math.round(BARROWS_CLOSE_PAD_R * s) | 0;
+  const padT = Math.round(BARROWS_CLOSE_PAD_T * s) | 0;
+
+  const expCloseX = (lock.x + (lock.w - tw - padR)) | 0;
+  const expCloseY = (lock.y + padT) | 0;
+
+  if (BARROWS_LOCK_DEBUG_OVERLAY) {
+    try {
+      __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 220); // cyan expected close
+      __overlayRectAbs(lock.x|0, lock.y|0, lock.w|0, lock.h|0, [255, 200, 0], 220); // yellow chest
+    } catch (e) {}
+  }
+
+  const capClose = __captureRect(expCloseX, expCloseY, tw, th);
+  if (!capClose) return { ok:false, score:0, topbar:0 };
+
+  const grayClose = __downsampleCapToGrayRect(capClose, 0, 0, tw, th, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
+  const featClose = __centerAndInvStd(grayClose);
+  const closeScore = __znccScore(closeT.feat, featClose);
+
+  if (closeScore < (BARROWS_CLOSE_ACCEPT - 0.05)) return { ok:false, score:closeScore, topbar:0 };
+
+  // Optional: validate topbar to reduce false positives when scanning full-screen
+  const topbarT = __getBarrowsTopbarTemplateScaled(s);
+  if (!topbarT) return { ok:true, score:closeScore, topbar:0 };
+
+  const insetX = Math.round(CHEST_TEST.topbarInsetX * s) | 0;
+  const insetY = Math.round(CHEST_TEST.topbarInsetY * s) | 0;
+
+  const topX = (lock.x + insetX) | 0;
+  const topY = (lock.y + insetY) | 0;
+
+  const capTop = __captureRect(topX, topY, topbarT.w|0, topbarT.h|0);
+  if (!capTop) return { ok:true, score:closeScore, topbar:0 };
+
+  const grayTop = __downsampleCapToGrayRect(capTop, 0, 0, topbarT.w|0, topbarT.h|0, CHEST_TEST.featW, CHEST_TEST.featH);
+  const featTop = __centerAndInvStd(grayTop);
+  const topbarScore = __znccScore(topbarT.feat, featTop);
+
+  return { ok: topbarScore >= (BARROWS_AUTOLOCATE.validateTopbarAccept - 0.03), score: closeScore, topbar: topbarScore };
+}
+
+
+let __barrowsCloseImgData = null;     // ImageData for base template
+const __barrowsCloseCache = new Map(); // key: `${scale}|${featW}x${featH}` -> { w,h, feat }
+
+let __barrowsTopbarImgData = null;    // ImageData for base topbar
+const __barrowsTopbarCache = new Map(); // key: `${scale}` -> { w,h, feat }
+
 let __lastChestTestMs = 0;
 let __lastChestSeenMs = 0;
 let __lastChestRect = null;
@@ -1209,6 +1442,7 @@ async function ensureBarrowsTopbarTemplateLoaded() {
     if (!img) throw new Error("Failed to load barrows_topbar.png");
     const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, CHEST_TEST.featW, CHEST_TEST.featH);
     const feat = __centerAndInvStd(featGray);
+    __barrowsTopbarImgData = img;
     __barrowsTopbarT = { w: img.width, h: img.height, feat };
     return __barrowsTopbarT;
   })().finally(() => { __barrowsTopbarTLoading = null; });
@@ -1226,6 +1460,8 @@ async function ensureBarrowsCloseTemplateLoaded() {
     if (!img) throw new Error("Failed to load offsets.png");
     const featGray = __downsampleImageDataToGrayRect(img, 0, 0, img.width, img.height, BARROWS_CLOSE_FEAT_W, BARROWS_CLOSE_FEAT_H);
     const feat = __centerAndInvStd(featGray);
+    __barrowsCloseImgData = img;
+    __barrowsCloseCache.clear();
     __barrowsCloseT = { w: img.width, h: img.height, feat };
     console.log(`[barrows-close] template loaded: ${img.width}x${img.height} ${BARROWS_CLOSE_URL}`);
     return __barrowsCloseT;
@@ -1573,11 +1809,26 @@ __loadBarrowsChestLock();
 
 const now = Date.now();
 
-// If no lock yet, do nothing (user must press Alt+1 to locate)
-if (!__barrowsChestLock) return;
+// If no lock yet, try auto-locate (full-screen)
+if (!__barrowsChestLock) {
+  const auto = __locateBarrowsChestAuto();
+  if (auto) {
+    __saveBarrowsChestLock(auto);
+    __statusChest("Chest lock acquired (auto).", "ok");
+  } else {
+    return;
+  }
+}
 
-// Validate cached lock
-const v = __validateBarrowsChestLock(__barrowsChestLock);
+// Validate cached lock; if invalid, try to re-acquire (chest can be moved)
+let v = __validateBarrowsChestLock(__barrowsChestLock);
+if (!v.ok) {
+  const auto = __locateBarrowsChestAuto();
+  if (auto) {
+    __saveBarrowsChestLock(auto);
+    v = __validateBarrowsChestLock(__barrowsChestLock);
+  }
+}
 if (!v.ok) {
   if (__barrowsChestSeen) {
     __barrowsChestSeen = false;
@@ -3874,6 +4125,61 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
       return btn;
     } catch (e) { return null; }
   }
+
+
+
+function __rescaleImageDataNearest(img, scale) {
+  const sw = img.width | 0;
+  const sh = img.height | 0;
+  const dw = Math.max(1, Math.round(sw * scale)) | 0;
+  const dh = Math.max(1, Math.round(sh * scale)) | 0;
+
+  const c = document.createElement("canvas");
+  c.width = dw;
+  c.height = dh;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  // Nearest scaling for crisp UI pixels
+  ctx.imageSmoothingEnabled = false;
+
+  const srcC = document.createElement("canvas");
+  srcC.width = sw;
+  srcC.height = sh;
+  const srcCtx = srcC.getContext("2d", { willReadFrequently: true });
+  srcCtx.putImageData(img, 0, 0);
+  ctx.drawImage(srcC, 0, 0, dw, dh);
+
+  return ctx.getImageData(0, 0, dw, dh);
+}
+
+function __getBarrowsCloseTemplateScaled(scale, featW, featH) {
+  if (!__barrowsCloseImgData) return null;
+  const s = Math.max(0.5, Math.min(2.0, scale));
+  const key = `${s.toFixed(3)}|${featW}x${featH}`;
+  const cached = __barrowsCloseCache.get(key);
+  if (cached) return cached;
+
+  const imgS = (Math.abs(s - 1.0) < 0.001) ? __barrowsCloseImgData : __rescaleImageDataNearest(__barrowsCloseImgData, s);
+  const featGray = __downsampleImageDataToGrayRect(imgS, 0, 0, imgS.width, imgS.height, featW, featH);
+  const feat = __centerAndInvStd(featGray);
+  const t = { w: imgS.width | 0, h: imgS.height | 0, feat, scale: s };
+  __barrowsCloseCache.set(key, t);
+  return t;
+}
+
+function __getBarrowsTopbarTemplateScaled(scale) {
+  if (!__barrowsTopbarImgData) return null;
+  const s = Math.max(0.5, Math.min(2.0, scale));
+  const key = `${s.toFixed(3)}`;
+  const cached = __barrowsTopbarCache.get(key);
+  if (cached) return cached;
+
+  const imgS = (Math.abs(s - 1.0) < 0.001) ? __barrowsTopbarImgData : __rescaleImageDataNearest(__barrowsTopbarImgData, s);
+  const featGray = __downsampleImageDataToGrayRect(imgS, 0, 0, imgS.width, imgS.height, CHEST_TEST.featW, CHEST_TEST.featH);
+  const feat = __centerAndInvStd(featGray);
+  const t = { w: imgS.width | 0, h: imgS.height | 0, feat, scale: s };
+  __barrowsTopbarCache.set(key, t);
+  return t;
+}
 
 
 
