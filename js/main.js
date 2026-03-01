@@ -563,8 +563,8 @@ const CHEST_TEST = {
   featH: 16,                  // downsampled feature height
   acceptScore: 0.78,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
-  chestWidth: 560,
-  chestHeight: 312,
+  chestWidth: 456,
+  chestHeight: 296,
   topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
   debug: true,
