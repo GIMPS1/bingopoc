@@ -590,8 +590,8 @@ const BARROWS_CHEST_SLOTS = {
   // relative to chest top-left (at scale=1.0):
   // These values are derived from the actual Barrows chest layout and then
   // scaled from the topbar match scale to keep placement exact.
-  rowY: 43,          // y of icon row (top-left of icon)
-  startX: 15,        // x of first icon (top-left of icon)
+  rowY: 44,          // y of icon row (top-left of icon)
+  startX: 14,        // x of first icon (top-left of icon)
   spacing: 56,       // horizontal step between icons
 };
 // --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
@@ -789,12 +789,8 @@ function __barrowsSlotRects(lock) {
   x0 = Math.round((lock.grid.x - lock.x));
   y0 = Math.round((lock.grid.y - lock.y));
 } else {
-  // shift from window frame → inner loot panel
-  const CONTENT_OFFSET_X = 13;
-  const CONTENT_OFFSET_Y = 36;
-
-  x0 = Math.round((BARROWS_CHEST_SLOTS.startX + CONTENT_OFFSET_X) * s);
-  y0 = Math.round((BARROWS_CHEST_SLOTS.rowY + CONTENT_OFFSET_Y) * s);
+  x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
+  y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
 }
 
   const rects = [];
