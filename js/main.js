@@ -952,8 +952,8 @@ function __locateBarrowsChestFromMouse() {
   // Keep close anchor info for downstream debugging / grid refinement.
   lock.close = { x: absCloseX, y: absCloseY, tw: tw, th: th, score: refined.score };
 
-  // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
-  lock.grid = __irb_findBarrowsSlotGrid(lock);
+// Pixel-find grid is unreliable for Barrows loot row (no real slot borders). Force tuned offsets.
+lock.grid = null;
 
 
 
