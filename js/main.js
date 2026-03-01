@@ -14,7 +14,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-v3";
+  const BUILD_VERSION = "v2026-03-01-v1";
 
 
   // ---------------------------------------------------------------------------
@@ -47,7 +47,7 @@ function __getImgProps(img) {
   console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-v3`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-01-v1`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -583,17 +583,33 @@ const BARROWS_CLOSE_FEAT_H = 52;
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
 const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
 
-// Slot/grid assumptions inside the chest window (can be tuned later)
+// Slot/grid assumptions inside the chest window (hardcoded inner scan boxes).
+// These are measured from your Barrows chest window and scaled by __chestScale(lock).
+// If you ever need to micro-adjust: tweak startX/startY/stepX/stepY/slotW/slotH.
 const BARROWS_CHEST_SLOTS = {
+  // Chest is 456px wide at CHEST_TEST.chestWidth. We scale from lock.w.
+  cols: 8,
+  rows: 4,
+
+  // Slot box size (captures around the icon). Keep ~32 for best template match.
+  slotW: 32,
+  slotH: 32,
+
+  // Top-left of slot[0] inside the chest (relative to chest top-left, scale=1.0)
+  startX: 15,
+  startY: 42,
+
+  // Step between slots (left-edge to left-edge / top-edge to top-edge), scale=1.0
+  stepX: 55,
+  stepY: 45,
+
+  // Legacy aliases used in a few places (do not remove)
   iconSz: 32,
-  max: 8,
-  // relative to chest top-left (at scale=1.0):
-  // These values are derived from the actual Barrows chest layout and then
-  // scaled from the topbar match scale to keep placement exact.
-  rowY: 44,          // y of icon row (top-left of icon)
-  startX: 14,        // x of first icon (top-left of icon)
-  spacing: 56,       // horizontal step between icons
+  max: 32,
+  rowY: 42,
+  spacing: 55,
 };
+
 // --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
 function __chestScale(lock) {
   if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
@@ -780,23 +796,28 @@ function __scaledChestSize(scale) {
 }
 function __barrowsSlotRects(lock) {
   const s = __chestScale(lock);
-  const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
-  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing * s);
 
-  // Prefer pixel-detected grid origin if present (absolute coords), else fall back to constants.
-  let x0, y0;
-  if (lock && lock.grid && typeof lock.grid.x === "number" && typeof lock.grid.y === "number") {
-  x0 = Math.round((lock.grid.x - lock.x));
-  y0 = Math.round((lock.grid.y - lock.y));
-} else {
-  x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
-  y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
-}
+  const cols = (BARROWS_CHEST_SLOTS.cols|0) || 8;
+  const rows = (BARROWS_CHEST_SLOTS.rows|0) || 4;
+
+  const w  = Math.round((BARROWS_CHEST_SLOTS.slotW || BARROWS_CHEST_SLOTS.iconSz || 32) * s) | 0;
+  const h  = Math.round((BARROWS_CHEST_SLOTS.slotH || BARROWS_CHEST_SLOTS.iconSz || 32) * s) | 0;
+  const dx = Math.round((BARROWS_CHEST_SLOTS.stepX || BARROWS_CHEST_SLOTS.spacing || 55) * s) | 0;
+  const dy = Math.round((BARROWS_CHEST_SLOTS.stepY || 45) * s) | 0;
+
+  // Hardcoded grid origin inside the chest rect (capture-local coords)
+  const x0 = Math.round((BARROWS_CHEST_SLOTS.startX || 0) * s) | 0;
+  const y0 = Math.round((BARROWS_CHEST_SLOTS.startY || BARROWS_CHEST_SLOTS.rowY || 0) * s) | 0;
 
   const rects = [];
-  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      rects.push({ x: (x0 + c * dx) | 0, y: (y0 + r * dy) | 0, w, h });
+    }
+  }
   return rects;
 }
+
 // Barrows chest scan debug
 const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
 const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
@@ -965,14 +986,12 @@ lock.grid = null;
     try {
       __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
 // Also draw expected icon slots so you can visually confirm alignment.
-const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
-const absGX = (lock.grid && typeof lock.grid.x === "number") ? (lock.grid.x | 0) : ((lock.x + BARROWS_CHEST_SLOTS.startX) | 0);
-const absGY = (lock.grid && typeof lock.grid.y === "number") ? (lock.grid.y | 0) : ((lock.y + BARROWS_CHEST_SLOTS.rowY) | 0);
-for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
-  const sx = (absGX + i * (BARROWS_CHEST_SLOTS.spacing | 0)) | 0;
-  const sy = absGY;
-  __overlayRectAbs(sx, sy, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+const slots = __barrowsSlotRects(lock);
+for (let i = 0; i < slots.length; i++) {
+  const r = slots[i];
+  __overlayRectAbs((lock.x + (r.x|0))|0, (lock.y + (r.y|0))|0, (r.w|0), (r.h|0), [255, 80, 80], 1200); // red = slot boxes
 }
+
     } catch (e) {}
   }
 
@@ -1004,6 +1023,8 @@ function __validateBarrowsChestLock(lock) {
   const th = __barrowsCloseT.h|0;
 
   const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
+
   if (BARROWS_LOCK_DEBUG_OVERLAY) {
     try {
       __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
@@ -1011,7 +1032,6 @@ function __validateBarrowsChestLock(lock) {
     } catch (e) {}
   }
 
-  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
 
   const cap = __captureRect(expCloseX, expCloseY, tw, th);
   if (!cap) return { ok:false, score:0 };
