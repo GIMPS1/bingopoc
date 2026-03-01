@@ -1076,6 +1076,10 @@ function __scanBarrowsChestForDrops(lock) {
     ICON_MATCH.acceptScore = CHEST_ICON_MATCH_OVERRIDES.acceptScore;
     ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
     ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
+    // Use the same snap mechanism as manual submit: local dx/dy search around slot center
+    ICON_MATCH.snapRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;
+    ICON_MATCH.snapStep = CHEST_ICON_MATCH_OVERRIDES.snapStep ?? 1;
+    // (legacy) keep searchRadius in sync for any other call sites
     ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;  } catch (e) {}
 
   const hits = [];
