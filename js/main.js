@@ -4204,21 +4204,21 @@ function getInstallId() {
   return v;
 }
 
-async function sendHeartbeat() {
-  try {
-    const install_id = getInstallId();
+async function sendHeartbeat(){
+  const install_id = getInstallId();
+  const ign = (localStorage.getItem("rs3bingo_ign") || "").trim();
+  const board_id = Number(localStorage.getItem("rs3bingo_board_id") || 0) || null;
 
-    // Use your real plugin keys
-    const ign = (localStorage.getItem(LS.ign) || "").trim();
-    const board_id = parseInt(localStorage.getItem(LS.bingoId) || "0", 10) || null;
-
-    await fetch(`${apiBase}/api/plugin/presence`, {
+  try{
+    const r = await fetch(`${apiBase}/b/${board_id}/api/presence`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ install_id, ign, board_id })
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ install_id, ign })
     });
-  } catch (e) {
-    // ignore
+
+    console.log("Heartbeat sent", install_id, ign, board_id, r.status);
+  }catch(e){
+    console.error("Heartbeat failed", e);
   }
 }
 
