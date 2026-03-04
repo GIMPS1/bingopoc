@@ -2917,7 +2917,12 @@ function initHistoryPanel() {
     if (ui.btnLockSetup) ui.btnLockSetup.disabled = true;
 
     try {
-      const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
+      const ign = (ui.ign?.value || localStorage.getItem(LS.ign) || "").trim();
+      const ignLocked = (localStorage.getItem(LS.ignLocked) === "1");
+      const endpoint = (ignLocked && ign)
+        ? `/api/resolve-bingos?ign=${encodeURIComponent(ign)}`
+        : `/api/bingos`;
+      const res = await fetch(`${base}${endpoint}`, { method: "GET", credentials: "omit" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -3841,6 +3846,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ign, ign);
     localStorage.setItem(LS.ignLocked, "1");
     setIgnLocked(true);
+    loadBingosAndPopulate();
     addFeed("IGN locked ✅", "ok");
     playBeep("ok");
     refreshSummary();
@@ -3851,6 +3857,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
   ui.btnResetIgn && ui.btnResetIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
+    loadBingosAndPopulate();
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
     playBeep("warn");
     refreshSummary();
