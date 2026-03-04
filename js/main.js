@@ -4193,3 +4193,31 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
+//heartbeat
+function getInstallId(){
+  const k = "rs3bingo_install_id";
+  let v = localStorage.getItem(k);
+  if(!v){
+    v = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    localStorage.setItem(k, v);
+  }
+  return v;
+}
+
+async function sendHeartbeat(){
+  const install_id = getInstallId();
+  const ign = (localStorage.getItem("rs3bingo_ign") || "").trim(); // adjust to your key
+  const board_id = Number(localStorage.getItem("rs3bingo_board_id") || 0) || null;
+
+  try{
+    await fetch(`${apiBase}/api/presence/heartbeat`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ install_id, ign, board_id })
+    });
+  }catch(e){ /* ignore */ }
+}
+
+// every 25s + immediately once
+sendHeartbeat();
+setInterval(sendHeartbeat, 25000);
