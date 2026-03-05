@@ -4208,17 +4208,23 @@ const API_ROOT = "https://rs3bingo.com";
 
 async function sendHeartbeat(){
   const install_id = getInstallId();
-  const ign = (localStorage.getItem(LS.ign) || "").trim();
-  const board_id = Number(localStorage.getItem(LS.bingoId) || 0) || null;
+
+  const ign = (localStorage.getItem("rs3bingo_ign") || "").trim();
+  const board_id = Number(localStorage.getItem("rs3bingo_board_id") || 0) || null;
 
   try{
     const r = await fetch(`${API_ROOT}/api/plugin/presence`, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ install_id, ign, board_id })
+      body: JSON.stringify({
+        install_id,
+        ign,
+        board_id
+      })
     });
 
-    console.log("Heartbeat sent", install_id, ign, board_id, r.status);
+    console.log("Heartbeat OK", install_id, ign, board_id, r.status);
+
   }catch(e){
     console.error("Heartbeat failed", e);
   }
