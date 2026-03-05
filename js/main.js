@@ -4193,27 +4193,29 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
-// --- heartbeat (global) ---
-function getInstallId() {
+// --- plugin heartbeat (global) ---
+function getInstallId(){
   const k = "rs3bingo_install_id";
   let v = localStorage.getItem(k);
-  if (!v) {
-    v = (crypto.randomUUID ? crypto.randomUUID() : (Date.now() + "-" + Math.random()));
+  if(!v){
+    v = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
     localStorage.setItem(k, v);
   }
   return v;
 }
 
+const API_ROOT = "https://rs3bingo.com";
+
 async function sendHeartbeat(){
   const install_id = getInstallId();
-  const ign = (localStorage.getItem("rs3bingo_ign") || "").trim();
-  const board_id = Number(localStorage.getItem("rs3bingo_board_id") || 0) || null;
+  const ign = (localStorage.getItem(LS.ign) || "").trim();
+  const board_id = Number(localStorage.getItem(LS.bingoId) || 0) || null;
 
   try{
-    const r = await fetch(`${apiBase}/b/${board_id}/api/presence`, {
+    const r = await fetch(`${API_ROOT}/api/plugin/presence`, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({ install_id, ign })
+      body: JSON.stringify({ install_id, ign, board_id })
     });
 
     console.log("Heartbeat sent", install_id, ign, board_id, r.status);
