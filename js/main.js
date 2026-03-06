@@ -3127,6 +3127,8 @@ function initHistoryPanel() {
     validatedAtIso: null,
     lastFeed: "",
     backendOnline: null,
+    lastCommandKey: "",
+    lastCommandAt: 0,
   };
 
   function precheckCtx() {
@@ -3258,26 +3260,60 @@ function initHistoryPanel() {
   }
 
   function parsePrecheckObservation(raw) {
-    let t = getOwnMessageContent(raw);
-    if (!t) return null;
+    function tryParseCandidate(candidate) {
+      let t = String(candidate || "").replace(/\s+/g, " ").trim();
+      if (!t) return null;
 
-    t = t.replace(/\s+/g, " ").trim();
+      const m = t.match(/(?:^|:\s*)I\s+have\s+obtained\s+([\d,]+)\s+(.+?)(?:\s+from\s+.+)?[.!?]*$/i);
+      if (!m) return null;
 
-    const m = t.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+?)(?:\s+from\s+.+)?[.!?]*$/i);
-    if (!m) return null;
+      const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+      const itemRaw = String(m[2] || "").trim();
+      const itemKey = normalizePrecheckItemName(itemRaw);
+      if (!qty || !itemKey) return null;
 
-    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-    const itemRaw = String(m[2] || "").trim();
-    const itemKey = normalizePrecheckItemName(itemRaw);
-    if (!qty || !itemKey) return null;
+      const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+      return {
+        itemKey,
+        label: item ? item.label : itemKey,
+        qty,
+        raw: t
+      };
+    }
 
-    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
-    return {
-      itemKey,
-      label: item ? item.label : itemKey,
-      qty,
-      raw: t
-    };
+    const candidates = [];
+    const own = getOwnMessageContent(raw);
+    if (own) candidates.push(own);
+
+    let cleaned = stripTimestampPrefix(raw);
+    cleaned = stripChatPrefix(cleaned);
+    if (cleaned) candidates.push(cleaned);
+
+    if (cleaned && cleaned.includes(":")) {
+      const parts = cleaned.split(":");
+      if (parts.length > 1) {
+        const tail = parts.slice(1).join(":").trim();
+        if (tail) candidates.push(tail);
+      }
+    }
+
+    const expected = precheckExpectedItem();
+    if (cleaned && expected) {
+      const cleanedLc = cleaned.toLowerCase();
+      const matchesExpected = (expected.aliases || [expected.key]).some(alias => cleanedLc.includes(String(alias).toLowerCase()));
+      if (matchesExpected) candidates.push(cleaned);
+    }
+
+    const seen = new Set();
+    for (const c of candidates) {
+      const key = String(c || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const parsed = tryParseCandidate(c);
+      if (parsed) return parsed;
+    }
+
+    return null;
   }
 
   async function postPrecheckJson(path, payload) {
@@ -3405,6 +3441,12 @@ function initHistoryPanel() {
   async function handlePrecheckCommand(raw) {
     const cmd = parsePrecheckCommand(raw);
     if (!cmd) return false;
+
+    const now = Date.now();
+    const dedupeKey = `${cmd}::${String(raw || "").trim().toLowerCase()}`;
+    if (precheck.lastCommandKey === dedupeKey && (now - precheck.lastCommandAt) < 2500) return true;
+    precheck.lastCommandKey = dedupeKey;
+    precheck.lastCommandAt = now;
 
     if (cmd === "start") {
       await startPrecheck();
