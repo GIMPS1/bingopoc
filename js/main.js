@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18g-safe-opt";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18j-narrow-gray";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18i-audio-timing ✅");
+  console.log("IRB v2026-03-06-precheck-v18j-narrow-gray ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18i-audio-timing`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18j-narrow-gray`;
   } catch (e) {}
 
   function __pcNow() {
@@ -3257,41 +3257,94 @@ function initHistoryPanel() {
     }
   }
 
-  async function precheckCaptureChatBlob() {
-    const rect = precheckGetChatRect();
-    if (!rect) throw new Error("chat_rect_unavailable");
-    if (!(window.A1lib && typeof A1lib.capture === "function")) throw new Error("capture_unavailable");
-    if (!window.alt1 || !alt1.permissionPixel) throw new Error("pixel_permission_missing");
+  const PRECHECK_SNAPSHOT = {
+    insetXRatio: 0.012,
+    bandTopRatio: 0.58,
+    bandHeightRatio: 0.24,
+    minWidth: 120,
+    minHeight: 28,
+    maxHeight: 64,
+    padX: 6,
+    padY: 4,
+    grayscale: true,
+    jpegQuality: 0.72,
+  };
 
-    const padX = Math.max(8, Math.round(rect.w * 0.02));
-    const padY = Math.max(6, Math.round(rect.h * 0.04));
-    const x = Math.max(0, (rect.x - padX) | 0);
-    const y = Math.max(0, (rect.y - padY) | 0);
-    const w = Math.max(32, (rect.w + padX * 2) | 0);
-    const h = Math.max(20, (rect.h + padY * 2) | 0);
+  function precheckComputeSnapshotRect(rect) {
+    const insetX = Math.max(4, Math.round(rect.w * PRECHECK_SNAPSHOT.insetXRatio));
+    const innerX = Math.max(0, (rect.x + insetX) | 0);
+    const innerW = Math.max(PRECHECK_SNAPSHOT.minWidth, (rect.w - insetX * 2) | 0);
 
-    let img = null;
-    try { img = A1lib.capture(x, y, w, h); } catch (e) {}
-    const props = __getImgProps(img);
-    if (!props) throw new Error("capture_failed");
+    const baseY = rect.y + Math.round(rect.h * PRECHECK_SNAPSHOT.bandTopRatio);
+    const bandH = Math.max(
+      PRECHECK_SNAPSHOT.minHeight,
+      Math.min(PRECHECK_SNAPSHOT.maxHeight, Math.round(rect.h * PRECHECK_SNAPSHOT.bandHeightRatio))
+    );
 
+    const x = Math.max(0, (innerX - PRECHECK_SNAPSHOT.padX) | 0);
+    const y = Math.max(0, (baseY - PRECHECK_SNAPSHOT.padY) | 0);
+    const w = Math.max(PRECHECK_SNAPSHOT.minWidth, (innerW + PRECHECK_SNAPSHOT.padX * 2) | 0);
+    const h = Math.max(PRECHECK_SNAPSHOT.minHeight, (bandH + PRECHECK_SNAPSHOT.padY * 2) | 0);
+
+    return { x, y, w, h };
+  }
+
+  function precheckRenderSnapshotToCanvas(props) {
     const canvas = document.createElement("canvas");
     canvas.width = props.width | 0;
     canvas.height = props.height | 0;
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const id = ctx.createImageData(props.width | 0, props.height | 0);
     id.data.set(props.data);
+
+    if (PRECHECK_SNAPSHOT.grayscale) {
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = Math.max(0, Math.min(255, Math.round(d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114)));
+        const boosted = lum < 110 ? Math.max(0, lum - 12) : Math.min(255, lum + 10);
+        d[i] = boosted;
+        d[i + 1] = boosted;
+        d[i + 2] = boosted;
+      }
+    }
+
     ctx.putImageData(id, 0, 0);
+    return canvas;
+  }
+
+  async function precheckCaptureChatBlob() {
+    const rect = precheckGetChatRect();
+    if (!rect) throw new Error("chat_rect_unavailable");
+    if (!(window.A1lib && typeof A1lib.capture === "function")) throw new Error("capture_unavailable");
+    if (!window.alt1 || !alt1.permissionPixel) throw new Error("pixel_permission_missing");
+
+    const shotRect = precheckComputeSnapshotRect(rect);
+
+    let img = null;
+    try { img = A1lib.capture(shotRect.x, shotRect.y, shotRect.w, shotRect.h); } catch (e) {}
+    const props = __getImgProps(img);
+    if (!props) throw new Error("capture_failed");
+
+    const canvas = precheckRenderSnapshotToCanvas(props);
 
     const blob = await new Promise((resolve, reject) => {
       try {
-        canvas.toBlob((b) => b ? resolve(b) : reject(new Error("blob_encode_failed")), "image/jpeg", 0.82);
+        canvas.toBlob(
+          (b) => b ? resolve(b) : reject(new Error("blob_encode_failed")),
+          "image/jpeg",
+          PRECHECK_SNAPSHOT.jpegQuality
+        );
       } catch (e) {
         reject(e);
       }
     });
 
-    return { blob, rect: { x, y, w, h } };
+    return {
+      blob,
+      rect: shotRect,
+      grayscale: !!PRECHECK_SNAPSHOT.grayscale,
+      jpegQuality: PRECHECK_SNAPSHOT.jpegQuality,
+    };
   }
 
 
@@ -3315,7 +3368,7 @@ function initHistoryPanel() {
     fd.append("mode", String(mode || ""));
     fd.append("client_ts", new Date().toISOString());
     if (rawHint) fd.append("raw_hint", String(rawHint));
-    fd.append("image", shot.blob, "precheck-chat.jpg");
+    fd.append("image", shot.blob, PRECHECK_SNAPSHOT.grayscale ? "precheck-chat-gray.jpg" : "precheck-chat.jpg");
 
     const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
