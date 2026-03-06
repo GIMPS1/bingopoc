@@ -3082,6 +3082,345 @@ function initHistoryPanel() {
     return true;
   }
 
+
+  // ---------- guided pre-check baseline tracking ----------
+  const PRECHECK_ITEMS = [
+    { key: "tectonic energy", label: "Tectonic energy", aliases: ["tectonic energy"] },
+    { key: "draconic energy", label: "Draconic energy", aliases: ["draconic energy"] },
+    { key: "black stone heart", label: "Black stone heart", aliases: ["black stone heart", "black stone hearts"] },
+    { key: "ancient scale", label: "Ancient scale", aliases: ["ancient scale", "ancient scales"] },
+    { key: "dark nilas", label: "Dark Nilas", aliases: ["dark nilas", "nilas"] },
+  ];
+
+  const precheck = {
+    mode: "inactive", // inactive | collecting | ready_to_validate | live
+    sessionId: null,
+    currentIndex: 0,
+    promptTimer: null,
+    lastPromptAt: 0,
+    lastHandledKeys: new Map(),
+    captured: {},         // key -> qty
+    liveHighest: {},      // key -> highest observed qty post-validation
+    startedAtIso: null,
+    validatedAtIso: null,
+    lastFeed: "",
+    backendOnline: null,
+  };
+
+  function precheckCtx() {
+    const bingo_id = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+    const team_no = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+    const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim() || "Unknown";
+    return { bingo_id, team_no, ign };
+  }
+
+  function precheckResetTimers() {
+    if (precheck.promptTimer) {
+      try { clearTimeout(precheck.promptTimer); } catch (e) {}
+    }
+    precheck.promptTimer = null;
+  }
+
+  function precheckMakeSessionId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return "pc_" + window.crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+      }
+    } catch (e) {}
+    return "pc_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function precheckExpectedItem() {
+    return PRECHECK_ITEMS[precheck.currentIndex] || null;
+  }
+
+  function precheckSetFeed(msg, level = "warn") {
+    if (precheck.lastFeed === msg) return;
+    precheck.lastFeed = msg;
+    addFeed(msg, level);
+  }
+
+  function normalizePrecheckItemName(name) {
+    const t = String(name || "")
+      .toLowerCase()
+      .replace(/[.,!?]+$/g, "")
+      .replace(/\s+from.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!t) return "";
+    for (const item of PRECHECK_ITEMS) {
+      for (const alias of item.aliases) {
+        if (t === alias) return item.key;
+      }
+    }
+    return "";
+  }
+
+  function getObservationLineKey(raw, parsed) {
+    const qty = parsed && parsed.qty != null ? String(parsed.qty) : "";
+    const item = parsed && parsed.itemKey ? parsed.itemKey : "";
+    return (String(raw || "").trim() + "||" + item + "||" + qty).toLowerCase();
+  }
+
+  function precheckSeenRecently(raw, parsed, windowMs = 3500) {
+    const key = getObservationLineKey(raw, parsed);
+    const now = Date.now();
+    const last = precheck.lastHandledKeys.get(key) || 0;
+    if (now - last < windowMs) return true;
+    precheck.lastHandledKeys.set(key, now);
+
+    if (precheck.lastHandledKeys.size > 250) {
+      for (const [k, ts] of precheck.lastHandledKeys) {
+        if (now - ts > 20000) precheck.lastHandledKeys.delete(k);
+      }
+    }
+    return false;
+  }
+
+  function getOwnMessageContent(raw) {
+    let t = stripTimestampPrefix(raw);
+    t = stripChatPrefix(t);
+
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    const lockedIgn = typeof normalizeIgn === "function" ? normalizeIgn(lockedIgnRaw).toLowerCase() : String(lockedIgnRaw || "").toLowerCase();
+
+    const m = t.match(/^([^:]{1,40})\s*:\s*(.+)$/);
+    if (m) {
+      const speaker = (typeof normalizeIgn === "function" ? normalizeIgn(m[1]) : m[1]).toLowerCase();
+      if (lockedIgn && speaker && speaker !== lockedIgn) return null;
+      return (m[2] || "").trim();
+    }
+
+    return t.trim();
+  }
+
+  function parsePrecheckCommand(raw) {
+    const msg = (getOwnMessageContent(raw) || "").trim();
+    if (!msg) return null;
+    if (/^pre[\s-]*check!?$/i.test(msg) || /^precheck!?$/i.test(msg)) return "start";
+    if (/^validate!?$/i.test(msg)) return "validate";
+    if (/^cancel[\s-]*precheck!?$/i.test(msg) || /^cancelprecheck!?$/i.test(msg)) return "cancel";
+    return null;
+  }
+
+  function parsePrecheckObservation(raw) {
+    let t = getOwnMessageContent(raw);
+    if (!t) return null;
+
+    t = t.replace(/\s+/g, " ").trim();
+
+    const m = t.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+?)(?:\s+from\s+.+)?[.!?]*$/i);
+    if (!m) return null;
+
+    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    const itemRaw = String(m[2] || "").trim();
+    const itemKey = normalizePrecheckItemName(itemRaw);
+    if (!qty || !itemKey) return null;
+
+    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+    return {
+      itemKey,
+      label: item ? item.label : itemKey,
+      qty,
+      raw: t
+    };
+  }
+
+  async function postPrecheckJson(path, payload) {
+    const base = getApiBase();
+    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+    const url = `${base}/b/${bingoId}${path}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "omit",
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    precheck.backendOnline = true;
+    try { return await res.json(); } catch (e) { return { ok: true }; }
+  }
+
+  async function precheckBestEffortSubmit(path, payload) {
+    try {
+      const out = await postPrecheckJson(path, payload);
+      return out;
+    } catch (e) {
+      precheck.backendOnline = false;
+      console.warn("[precheck] backend unavailable for", path, payload, e);
+      return null;
+    }
+  }
+
+  async function startPrecheck() {
+    precheckResetTimers();
+    precheck.mode = "collecting";
+    precheck.sessionId = precheckMakeSessionId();
+    precheck.currentIndex = 0;
+    precheck.captured = {};
+    precheck.liveHighest = {};
+    precheck.startedAtIso = new Date().toISOString();
+    precheck.validatedAtIso = null;
+    precheck.lastFeed = "";
+    precheckSetFeed("Pre-check mode enabled", "ok");
+
+    const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
+    await precheckBestEffortSubmit("/api/precheck/start", payload);
+
+    scheduleNextPrecheckPrompt(800);
+  }
+
+  function scheduleNextPrecheckPrompt(delayMs = 2000) {
+    precheckResetTimers();
+    precheck.promptTimer = setTimeout(() => {
+      precheck.promptTimer = null;
+      const expected = precheckExpectedItem();
+      if (!expected) {
+        precheck.mode = "ready_to_validate";
+        precheckSetFeed('All items recorded', "ok");
+        precheck.promptTimer = setTimeout(() => {
+          precheck.promptTimer = null;
+          if (precheck.mode === "ready_to_validate") {
+            precheckSetFeed('Type "Validate!" in chat to complete', "warn");
+          }
+        }, 1100);
+        return;
+      }
+      precheck.lastPromptAt = Date.now();
+      precheckSetFeed(`Quick chat ${expected.label}`, "warn");
+    }, Math.max(0, delayMs));
+  }
+
+  async function cancelPrecheck(showFeedMsg = true) {
+    const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: new Date().toISOString() };
+    if (precheck.sessionId) await precheckBestEffortSubmit("/api/precheck/cancel", payload);
+
+    precheckResetTimers();
+    precheck.mode = "inactive";
+    precheck.sessionId = null;
+    precheck.currentIndex = 0;
+    precheck.captured = {};
+    precheck.liveHighest = {};
+    precheck.validatedAtIso = null;
+    precheck.lastFeed = "";
+    if (showFeedMsg) precheckSetFeed("Pre-check cancelled", "warn");
+  }
+
+  async function validatePrecheck() {
+    if (precheck.mode !== "ready_to_validate" && precheck.mode !== "collecting") {
+      precheckSetFeed("No active pre-check to validate", "warn");
+      return;
+    }
+
+    const missing = PRECHECK_ITEMS.filter(item => !(item.key in precheck.captured));
+    if (missing.length) {
+      precheckSetFeed(`Missing: ${missing.map(x => x.label).join(", ")}`, "warn");
+      return;
+    }
+
+    const items = PRECHECK_ITEMS.map(item => ({
+      item_name: item.key,
+      baseline_qty: Number(precheck.captured[item.key] || 0)
+    }));
+
+    const payload = {
+      ...precheckCtx(),
+      session_id: precheck.sessionId,
+      client_ts: new Date().toISOString(),
+      items
+    };
+
+    await precheckBestEffortSubmit("/api/precheck/validate", payload);
+
+    precheck.mode = "live";
+    precheck.validatedAtIso = payload.client_ts;
+    precheck.liveHighest = { ...precheck.captured };
+    precheckResetTimers();
+    precheck.lastFeed = "";
+    precheckSetFeed("Validated!", "ok");
+    precheck.promptTimer = setTimeout(() => {
+      precheck.promptTimer = null;
+      if (precheck.mode === "live") precheckSetFeed("Live tracking enabled", "ok");
+    }, 1100);
+  }
+
+  async function handlePrecheckCommand(raw) {
+    const cmd = parsePrecheckCommand(raw);
+    if (!cmd) return false;
+
+    if (cmd === "start") {
+      await startPrecheck();
+      return true;
+    }
+    if (cmd === "cancel") {
+      await cancelPrecheck(true);
+      return true;
+    }
+    if (cmd === "validate") {
+      await validatePrecheck();
+      return true;
+    }
+    return false;
+  }
+
+  async function handlePrecheckObservation(raw) {
+    const parsed = parsePrecheckObservation(raw);
+    if (!parsed) return false;
+    if (precheckSeenRecently(raw, parsed)) return true;
+
+    if (precheck.mode === "collecting") {
+      const expected = precheckExpectedItem();
+      if (!expected) return true;
+      if (parsed.itemKey !== expected.key) return true;
+
+      precheck.captured[parsed.itemKey] = parsed.qty;
+      const payload = {
+        ...precheckCtx(),
+        session_id: precheck.sessionId,
+        item_name: parsed.itemKey,
+        observed_qty: parsed.qty,
+        raw_text: raw,
+        source: "baseline",
+        client_ts: new Date().toISOString()
+      };
+      await precheckBestEffortSubmit("/api/precheck/baseline", payload);
+
+      precheck.lastFeed = "";
+      precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
+      precheck.currentIndex += 1;
+      scheduleNextPrecheckPrompt(2000);
+      return true;
+    }
+
+    if (precheck.mode === "live") {
+      const baseline = Number(precheck.captured[parsed.itemKey] || 0);
+      if (!baseline) return true;
+
+      const prevHighest = Number(precheck.liveHighest[parsed.itemKey] || baseline);
+      if (parsed.qty <= prevHighest) return true;
+
+      precheck.liveHighest[parsed.itemKey] = parsed.qty;
+      const payload = {
+        ...precheckCtx(),
+        session_id: precheck.sessionId,
+        item_name: parsed.itemKey,
+        observed_qty: parsed.qty,
+        raw_text: raw,
+        source: "live",
+        client_ts: new Date().toISOString()
+      };
+      await precheckBestEffortSubmit("/api/precheck/observe", payload);
+
+      const delta = Math.max(0, parsed.qty - baseline);
+      precheck.lastFeed = "";
+      precheckSetFeed(`${parsed.label} +${delta} tracked`, "ok");
+      return true;
+    }
+
+    return false;
+  }
+
+
   // ---------- drop parsing ----------
   function stripTimestampPrefix(s) {
     return (s || "")
@@ -3636,15 +3975,24 @@ function stitchChatMessages(lines) {
 
       chatState.lastLine = stripTimestampPrefix(raw);
 
-      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
-      const parsed = parseDropLine(raw, nextRaw);
-      if (!parsed) continue;
-
-      // Reject rich-fragment stringify artifacts
       if (raw.includes("[object Object]")) {
         addFeed("Ignored line (unparsed rich text): " + raw, "warn");
         continue;
       }
+
+      try {
+        const handledCmd = await handlePrecheckCommand(raw);
+        if (handledCmd) continue;
+
+        const handledObservation = await handlePrecheckObservation(raw);
+        if (handledObservation) continue;
+      } catch (e) {
+        console.warn("[precheck] line handling failed:", e);
+      }
+
+      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
+      const parsed = parseDropLine(raw, nextRaw);
+      if (!parsed) continue;
 
       // Allowlist validation (primary gate)
       const strictOn = settings.strictDrops && canonicalMap.size > 0;
@@ -3668,7 +4016,6 @@ function stitchChatMessages(lines) {
           canonicalName = wikiName;
         }
       }
-
 
       // De-dupe across ALL detection paths (broadcast, "You received", etc.)
       const amtKey = (parsed.amount || "1").toString().trim();
