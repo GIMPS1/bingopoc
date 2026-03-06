@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18h-stallfix";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18g-safe-opt";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18h-stallfix ✅");
+  console.log("IRB v2026-03-06-precheck-v18g-safe-opt ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18h-stallfix`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18g-safe-opt`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3275,28 +3275,17 @@ function initHistoryPanel() {
     const now = Date.now();
     const rawText = String(raw || "");
     const collapsedRaw = collapseIgnForMatch(rawText);
-    const ownMsg = String(getOwnMessageContent(rawText) || "").replace(/\s+/g, " ").trim();
 
     const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
     const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
-    const looksLikeOwnObtained = /\bi\s*have\s*obtained\b/i.test(ownMsg);
-    const looksLikeTriggeredObtained = precheckIsTriggeredObtainedLine(rawText);
-    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1200);
-    const looksLikeNoisyMixedLine =
-      /(?:\[cc\]|\[clan system\]|\[news\])/i.test(rawText) &&
-      !looksLikeOwnObtained;
+    const looksLikeObtained = /obtained/i.test(rawText);
+    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
 
-    // Only fire on a real obtained-looking self line,
-    // or on a very short post-prompt self stub window when the line is not noisy.
-    const shouldTrigger =
-      looksLikeTriggeredObtained ||
-      (withinPromptWindow && looksLikeSelf && !looksLikeNoisyMixedLine);
+    if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
 
-    if (!shouldTrigger) return null;
-
-    const triggerKey = ((looksLikeOwnObtained ? ownMsg.toLowerCase() : (collapsedRaw || rawText.trim().toLowerCase())) + "||" + expected.key);
+    const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
     if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
-    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1200) {
+    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1600) {
       return { handled: true, matched: false, duplicate: true };
     }
 
@@ -3755,7 +3744,15 @@ function parsePrecheckObservation(raw) {
 
     if (precheck.mode === "collecting") {
       const snapshotParsed = await tryCollectPrecheckViaSnapshot(raw);
-      if (snapshotParsed && snapshotParsed.handled && snapshotParsed.matched) {
+      if (snapshotParsed && snapshotParsed.handled) {
+        if (!snapshotParsed.matched) {
+          if (snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
+            precheck.lastFeed = "";
+            precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
+          }
+          return true;
+        }
+
         const parsed = {
           itemKey: snapshotParsed.itemKey,
           label: snapshotParsed.label,
@@ -3783,22 +3780,10 @@ function parsePrecheckObservation(raw) {
         scheduleNextPrecheckPrompt(500);
         return true;
       }
-      // snapshot miss/busy/duplicate: fall through to local parser before warning
     }
 
     const parsed = parsePrecheckObservation(raw);
-    if (!parsed) {
-      if (precheck.mode === "collecting") {
-        const snapshotParsed = await tryCollectPrecheckViaSnapshot(raw);
-        if (snapshotParsed && snapshotParsed.handled && !snapshotParsed.matched && snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
-          precheck.lastFeed = "";
-          precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
-          return true;
-        }
-      }
-      return false;
-    }
-
+    if (!parsed) return false;
     if (precheckSeenRecently(raw, parsed)) return true;
 
     if (precheck.mode === "collecting") {
