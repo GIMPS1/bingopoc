@@ -3259,51 +3259,93 @@ function initHistoryPanel() {
     return null;
   }
 
-  function parsePrecheckObservation(raw) {
-    const msg = String(getOwnMessageContent(raw) || "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!msg) return null;
-    if (!/i\s+have\s+obtained/i.test(msg)) return null;
+  
+function parsePrecheckObservation(raw) {
+    const mode = precheck.mode;
+    const expected = precheckExpectedItem();
+    const pool = (mode === "collecting" && expected) ? [expected] : PRECHECK_ITEMS;
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    const lockedIgn = collapseIgnForMatch(lockedIgnRaw);
 
-    let m = msg.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
-    if (!m) return null;
+    function tryParseCandidate(candidate) {
+      let t = String(candidate || "").replace(/\s+/g, " ").trim();
+      if (!t) return null;
 
-    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-    if (!qty) return null;
+      const lower = t.toLowerCase();
+      const obtainedIdx = lower.indexOf("i have obtained");
+      if (obtainedIdx < 0) return null;
 
-    let remainder = String(m[2] || "")
-      .replace(/[.!?]+$/g, "")
-      .replace(/\s+from\s+.+$/i, "")
-      .trim();
-    if (!remainder) return null;
+      const after = t.slice(obtainedIdx).trim();
+      const m = after.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+      if (!m) return null;
 
-    const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
-    let itemKey = normalizePrecheckItemName(remainder);
+      const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+      if (!Number.isFinite(qty) || qty <= 0) return null;
 
-    if (!itemKey) {
-      const expected = precheckExpectedItem();
-      const pool = expected ? [expected] : PRECHECK_ITEMS;
-      for (const item of pool) {
-        const aliases = item.aliases || [item.key];
-        if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
-          itemKey = item.key;
-          break;
+      let remainder = String(m[2] || "")
+        .replace(/[.!?]+$/g, "")
+        .replace(/\s+from\s+.+$/i, "")
+        .trim();
+      if (!remainder) return null;
+
+      const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+      let itemKey = normalizePrecheckItemName(remainder);
+
+      if (!itemKey) {
+        for (const item of pool) {
+          const aliases = item.aliases || [item.key];
+          if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+            itemKey = item.key;
+            break;
+          }
         }
       }
+
+      if (!itemKey) return null;
+      const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+      return {
+        itemKey,
+        label: item ? item.label : itemKey,
+        qty,
+        raw: t
+      };
     }
 
-    if (!itemKey) return null;
+    function looksLikeOwnObtainedLine(line) {
+      let t = stripTimestampPrefix(String(line || ""));
+      t = stripChatPrefix(t);
+      if (!t) return null;
 
-    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
-    const parsed = {
-      itemKey,
-      label: item ? item.label : itemKey,
-      qty,
-      raw: msg
-    };
-    try { console.log("[precheck][parsed observation]", { raw, msg, parsed }); } catch (e) {}
-    return parsed;
+      const lower = t.toLowerCase();
+      const obtainedIdx = lower.indexOf("i have obtained");
+      if (obtainedIdx < 0) return null;
+
+      if (lockedIgn) {
+        const pre = t.slice(0, obtainedIdx);
+        const preCollapsed = collapseIgnForMatch(pre);
+        if (!preCollapsed || !preCollapsed.includes(lockedIgn)) return null;
+      }
+
+      return t.slice(obtainedIdx).trim();
+    }
+
+    const candidates = [];
+    const own = getOwnMessageContent(raw);
+    if (own) candidates.push(own);
+
+    const ownObtained = looksLikeOwnObtainedLine(raw);
+    if (ownObtained) candidates.push(ownObtained);
+
+    const seen = new Set();
+    for (const c of candidates) {
+      const key = String(c || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const parsed = tryParseCandidate(c);
+      if (parsed) return parsed;
+    }
+
+    return null;
   }
 
   async function postPrecheckJson(path, payload) {
