@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v11";
+  const BUILD_VERSION = "v2026-03-06-precheck-v12";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v10 ✅");
+  console.log("IRB v2026-03-06-precheck-v12 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v10`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v12`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3214,15 +3214,23 @@ function initHistoryPanel() {
     return String(raw || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
 
-  function buildIgnLoosePattern(rawIgn) {
-    const parts = String(rawIgn || "")
-      .trim()
-      .split(/\s+/)
-      .map(escapeRegex)
-      .filter(Boolean);
-    if (!parts.length) return null;
-    return parts.join("\\s*");
-  }
+  
+function buildIgnLoosePattern(rawIgn) {
+  const parts = String(rawIgn || "")
+    .match(/[A-Za-z0-9]+/g);
+  if (!parts || !parts.length) return "";
+  const sep = "[^A-Za-z0-9]{0,6}";
+  return parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(sep);
+}
+
+function buildIgnGlyphPattern(rawIgn) {
+  const chars = (String(rawIgn || "").match(/[A-Za-z0-9]/g) || []);
+  if (!chars.length) return "";
+  return chars
+    .map(ch => String(ch).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^A-Za-z0-9]{0,4}");
+}
+
 
 
   function sanitizeSpeakerSegment(raw) {
@@ -3285,13 +3293,10 @@ function getOwnMessageContent(raw) {
   return t.trim();
 }
 
+
 function extractPrecheckObtainedMessage(raw) {
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
-    const lockedIgn = collapseIgnForMatch(lockedIgnRaw);
-
-    const own = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
-    if (/^i\s+have\s+obtained\b/i.test(own)) return own;
-
+    const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
     const source = String(raw || "");
     const candidates = [
       stripChatPrefix(stripTimestampPrefix(source)),
@@ -3299,44 +3304,63 @@ function extractPrecheckObtainedMessage(raw) {
       source
     ];
 
+    const own = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/^i\s+have\s+obtained\b/i.test(own)) return own;
+
     const ignLoose = buildIgnLoosePattern(lockedIgnRaw);
+    const ignGlyph = buildIgnGlyphPattern(lockedIgnRaw);
 
     for (const candidateRaw of candidates) {
       const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
       if (!candidate) continue;
 
       if (lockedIgnRaw && ignLoose) {
-        const strictOwn = candidate.match(new RegExp("^.*?(" + ignLoose + "(?:[^A-Za-z0-9:;]{0,8})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i"));
-        if (strictOwn) {
-          return String(strictOwn[2] || "").trim();
-        }
+        const rxLoose = new RegExp("^.*?(" + ignLoose + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const mLoose = candidate.match(rxLoose);
+        if (mLoose) return String(mLoose[2] || "").trim();
+      }
+
+      if (lockedIgnRaw && ignGlyph) {
+        const rxGlyph = new RegExp("^.*?(" + ignGlyph + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const mGlyph = candidate.match(rxGlyph);
+        if (mGlyph) return String(mGlyph[2] || "").trim();
       }
 
       const direct = candidate.match(/^(.*?)\s*[:;]\s*(I\s+have\s+obtained\s+[\d,]+\s+.+)$/i);
       if (direct) {
         const speaker = sanitizeSpeakerSegment(direct[1] || "");
         const msg = String(direct[2] || "").trim();
-        if (!lockedIgn || speakerMatchesLockedIgn(speaker, lockedIgnRaw)) {
+        if (!lockedIgnRaw || speakerMatchesLockedIgn(speaker, lockedIgnRaw)) {
           return msg;
         }
       }
 
-      const lower = candidate.toLowerCase();
-      const idx = lower.indexOf("i have obtained");
-      if (idx < 0) continue;
+      const obtainedIdx = candidate.toLowerCase().indexOf("i have obtained");
+      if (obtainedIdx < 0) continue;
 
-      const before = sanitizeSpeakerSegment(candidate.slice(0, idx));
-      const after = candidate.slice(idx).trim();
-
+      const after = candidate.slice(obtainedIdx).trim();
       if (!/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) continue;
 
-      if (lockedIgn) {
-        const beforeCollapsed = collapseIgnForMatch(before);
-        if (!beforeCollapsed || !beforeCollapsed.includes(lockedIgn)) continue;
-      }
+      if (!lockedIgnCollapsed) return after;
 
-      return after;
+      const before = sanitizeSpeakerSegment(candidate.slice(0, obtainedIdx));
+      const beforeCollapsed = collapseIgnForMatch(before);
+      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
+        return after;
+      }
     }
+
+    try {
+      const expected = precheckExpectedItem && precheckExpectedItem();
+      const lc = String(source || "").toLowerCase();
+      if (expected && lc.includes("i have obtained")) {
+        const aliases = expected.aliases || [expected.key];
+        const matchesExpected = aliases.some(alias => lc.includes(String(alias).toLowerCase()));
+        if (matchesExpected) {
+          console.log("[precheck][extract miss]", { raw: source, own, lockedIgnRaw, expected: expected.key });
+        }
+      }
+    } catch (e) {}
 
     return null;
   }
@@ -3388,6 +3412,7 @@ function parsePrecheckObservation(raw) {
 
     if (!itemKey) return null;
     const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+    try { console.log("[precheck][parsed observation]", { raw, candidate: t, itemKey, qty }); } catch (e) {}
     return {
       itemKey,
       label: item ? item.label : itemKey,
