@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-01-v1";
+  const BUILD_VERSION = "v2026-03-06-precheck-v8";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
+  console.log("IRB v2026-03-06-precheck-v8 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-01-v1`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v8`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3218,39 +3218,49 @@ function initHistoryPanel() {
     return false;
   }
 
-  function getOwnMessageContent(raw) {
-    let t = stripTimestampPrefix(raw);
-    t = stripChatPrefix(t);
 
-    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+function getOwnMessageContent(raw) {
+  let t = stripTimestampPrefix(raw);
+  t = stripChatPrefix(t);
 
-    const m = t.match(/^([^:]{1,120})\s*:\s*(.+)$/);
-    if (m) {
-      const speakerRaw = (m[1] || "").trim();
-      const msgRaw = (m[2] || "").trim();
-      if (!lockedIgnRaw) return msgRaw;
-      if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
+  const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
 
-      const speakerCollapsed = collapseIgnForMatch(speakerRaw);
-      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
-      if (speakerCollapsed && ignCollapsed && speakerCollapsed.includes(ignCollapsed)) return msgRaw;
-      return null;
-    }
+  const m = t.match(/^([^:]{1,160})\s*:\s*(.+)$/);
+  if (m) {
+    const speakerRaw = (m[1] || "").trim();
+    const msgRaw = (m[2] || "").trim();
+    if (!lockedIgnRaw) return msgRaw;
 
-    if (lockedIgnRaw) {
-      const collapsed = collapseIgnForMatch(t);
-      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
-      if (collapsed && ignCollapsed && collapsed.includes(ignCollapsed)) {
-        const idx = t.lastIndexOf(":");
-        if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
-      }
-      return null;
-    }
+    if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
 
-    return t.trim();
+    const speakerCollapsed = collapseIgnForMatch(speakerRaw);
+    if (speakerCollapsed && lockedIgnCollapsed && speakerCollapsed.includes(lockedIgnCollapsed)) return msgRaw;
   }
 
-  function parsePrecheckCommand(raw) {
+  if (lockedIgnCollapsed) {
+    const lower = t.toLowerCase();
+    const obtainedIdx = lower.indexOf("i have obtained");
+    if (obtainedIdx >= 0) {
+      const before = t.slice(0, obtainedIdx);
+      const beforeCollapsed = collapseIgnForMatch(before);
+      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
+        return t.slice(obtainedIdx).trim();
+      }
+    }
+
+    const collapsed = collapseIgnForMatch(t);
+    if (collapsed && collapsed.includes(lockedIgnCollapsed)) {
+      const idx = t.lastIndexOf(":");
+      if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
+    }
+    return null;
+  }
+
+  return t.trim();
+}
+
+function parsePrecheckCommand(raw) {
     const msg = (getOwnMessageContent(raw) || "").trim();
     if (!msg) return null;
     if (/^pre[\s-]*check!?$/i.test(msg) || /^precheck!?$/i.test(msg)) return "start";
@@ -3259,7 +3269,6 @@ function initHistoryPanel() {
     return null;
   }
 
-  
 function parsePrecheckObservation(raw) {
     const mode = precheck.mode;
     const expected = precheckExpectedItem();
@@ -3271,8 +3280,7 @@ function parsePrecheckObservation(raw) {
       let t = String(candidate || "").replace(/\s+/g, " ").trim();
       if (!t) return null;
 
-      const lower = t.toLowerCase();
-      const obtainedIdx = lower.indexOf("i have obtained");
+      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
       if (obtainedIdx < 0) return null;
 
       const after = t.slice(obtainedIdx).trim();
@@ -3307,45 +3315,31 @@ function parsePrecheckObservation(raw) {
         itemKey,
         label: item ? item.label : itemKey,
         qty,
-        raw: t
+        raw: after
       };
     }
 
-    function looksLikeOwnObtainedLine(line) {
-      let t = stripTimestampPrefix(String(line || ""));
+    let candidate = getOwnMessageContent(raw);
+
+    if (!candidate) {
+      let t = stripTimestampPrefix(String(raw || ""));
       t = stripChatPrefix(t);
-      if (!t) return null;
-
-      const lower = t.toLowerCase();
-      const obtainedIdx = lower.indexOf("i have obtained");
-      if (obtainedIdx < 0) return null;
-
-      if (lockedIgn) {
-        const pre = t.slice(0, obtainedIdx);
-        const preCollapsed = collapseIgnForMatch(pre);
-        if (!preCollapsed || !preCollapsed.includes(lockedIgn)) return null;
+      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
+      if (obtainedIdx >= 0) {
+        if (lockedIgn) {
+          const before = t.slice(0, obtainedIdx);
+          const beforeCollapsed = collapseIgnForMatch(before);
+          if (beforeCollapsed && beforeCollapsed.includes(lockedIgn)) {
+            candidate = t.slice(obtainedIdx).trim();
+          }
+        } else {
+          candidate = t.slice(obtainedIdx).trim();
+        }
       }
-
-      return t.slice(obtainedIdx).trim();
     }
 
-    const candidates = [];
-    const own = getOwnMessageContent(raw);
-    if (own) candidates.push(own);
-
-    const ownObtained = looksLikeOwnObtainedLine(raw);
-    if (ownObtained) candidates.push(ownObtained);
-
-    const seen = new Set();
-    for (const c of candidates) {
-      const key = String(c || "").trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      const parsed = tryParseCandidate(c);
-      if (parsed) return parsed;
-    }
-
-    return null;
+    if (!candidate) return null;
+    return tryParseCandidate(candidate);
   }
 
   async function postPrecheckJson(path, payload) {
