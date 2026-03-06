@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18-snapshot";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18a-precheck-hostfix";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18-snapshot ✅");
+  console.log("IRB v2026-03-06-precheck-v18a-precheck-hostfix ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18-snapshot`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18a-precheck-hostfix`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -169,6 +169,7 @@ btnCloseSettings: $("btnCloseSettings"),
   // API base is locked (hidden in UI)
   const LOCKED_API_BASE = (ui.apiBase && ui.apiBase.value) ? ui.apiBase.value : "";
   const getApiBase = () => LOCKED_API_BASE;
+  function getPrecheckApiBase() { return "https://api.rs3bingo.com"; }
 
   function loadSettings() {
     let s = {};
@@ -3234,7 +3235,7 @@ function initHistoryPanel() {
   }
 
   async function postPrecheckSnapshot(expectedItem, mode, rawHint) {
-    const base = getApiBase();
+    const base = getPrecheckApiBase();
     const ctx = precheckCtx();
     const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
     const shot = await precheckCaptureChatBlob();
@@ -3554,7 +3555,7 @@ function parsePrecheckObservation(raw) {
   }
 
   async function postPrecheckJson(path, payload) {
-    const base = getApiBase();
+    const base = getPrecheckApiBase();
     const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
     const url = `${base}/b/${bingoId}${path}`;
     const res = await fetch(url, {
