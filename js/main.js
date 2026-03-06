@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v10";
+  const BUILD_VERSION = "v2026-03-06-precheck-v11";
 
 
   // ---------------------------------------------------------------------------
@@ -3210,6 +3210,21 @@ function initHistoryPanel() {
       .toLowerCase();
   }
 
+  function escapeRegex(raw) {
+    return String(raw || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  function buildIgnLoosePattern(rawIgn) {
+    const parts = String(rawIgn || "")
+      .trim()
+      .split(/\s+/)
+      .map(escapeRegex)
+      .filter(Boolean);
+    if (!parts.length) return null;
+    return parts.join("\\s*");
+  }
+
+
   function sanitizeSpeakerSegment(raw) {
     return String(raw || "")
       .normalize("NFKD")
@@ -3284,9 +3299,18 @@ function extractPrecheckObtainedMessage(raw) {
       source
     ];
 
+    const ignLoose = buildIgnLoosePattern(lockedIgnRaw);
+
     for (const candidateRaw of candidates) {
       const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
       if (!candidate) continue;
+
+      if (lockedIgnRaw && ignLoose) {
+        const strictOwn = candidate.match(new RegExp("^.*?(" + ignLoose + "(?:[^A-Za-z0-9:;]{0,8})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i"));
+        if (strictOwn) {
+          return String(strictOwn[2] || "").trim();
+        }
+      }
 
       const direct = candidate.match(/^(.*?)\s*[:;]\s*(I\s+have\s+obtained\s+[\d,]+\s+.+)$/i);
       if (direct) {
