@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v8";
+  const BUILD_VERSION = "v2026-03-06-precheck-v9";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v8 ✅");
+  console.log("IRB v2026-03-06-precheck-v9 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v8`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v9`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3260,6 +3260,43 @@ function getOwnMessageContent(raw) {
   return t.trim();
 }
 
+function extractPrecheckObtainedMessage(raw) {
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    const lockedIgn = collapseIgnForMatch(lockedIgnRaw);
+
+    const own = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/^i\s+have\s+obtained\b/i.test(own)) return own;
+
+    const source = String(raw || "");
+    const candidates = [
+      stripTimestampPrefix(source),
+      source
+    ];
+
+    for (const candidateRaw of candidates) {
+      const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
+      if (!candidate) continue;
+
+      const lower = candidate.toLowerCase();
+      const idx = lower.indexOf("i have obtained");
+      if (idx < 0) continue;
+
+      const before = candidate.slice(0, idx);
+      const after = candidate.slice(idx).trim();
+
+      if (!/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) continue;
+
+      if (lockedIgn) {
+        const beforeCollapsed = collapseIgnForMatch(before);
+        if (!beforeCollapsed || !beforeCollapsed.includes(lockedIgn)) continue;
+      }
+
+      return after;
+    }
+
+    return null;
+  }
+
 function parsePrecheckCommand(raw) {
     const msg = (getOwnMessageContent(raw) || "").trim();
     if (!msg) return null;
@@ -3273,73 +3310,46 @@ function parsePrecheckObservation(raw) {
     const mode = precheck.mode;
     const expected = precheckExpectedItem();
     const pool = (mode === "collecting" && expected) ? [expected] : PRECHECK_ITEMS;
-    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
-    const lockedIgn = collapseIgnForMatch(lockedIgnRaw);
 
-    function tryParseCandidate(candidate) {
-      let t = String(candidate || "").replace(/\s+/g, " ").trim();
-      if (!t) return null;
-
-      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
-      if (obtainedIdx < 0) return null;
-
-      const after = t.slice(obtainedIdx).trim();
-      const m = after.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
-      if (!m) return null;
-
-      const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-      if (!Number.isFinite(qty) || qty <= 0) return null;
-
-      let remainder = String(m[2] || "")
-        .replace(/[.!?]+$/g, "")
-        .replace(/\s+from\s+.+$/i, "")
-        .trim();
-      if (!remainder) return null;
-
-      const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
-      let itemKey = normalizePrecheckItemName(remainder);
-
-      if (!itemKey) {
-        for (const item of pool) {
-          const aliases = item.aliases || [item.key];
-          if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
-            itemKey = item.key;
-            break;
-          }
-        }
-      }
-
-      if (!itemKey) return null;
-      const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
-      return {
-        itemKey,
-        label: item ? item.label : itemKey,
-        qty,
-        raw: after
-      };
-    }
-
-    let candidate = getOwnMessageContent(raw);
-
-    if (!candidate) {
-      let t = stripTimestampPrefix(String(raw || ""));
-      t = stripChatPrefix(t);
-      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
-      if (obtainedIdx >= 0) {
-        if (lockedIgn) {
-          const before = t.slice(0, obtainedIdx);
-          const beforeCollapsed = collapseIgnForMatch(before);
-          if (beforeCollapsed && beforeCollapsed.includes(lockedIgn)) {
-            candidate = t.slice(obtainedIdx).trim();
-          }
-        } else {
-          candidate = t.slice(obtainedIdx).trim();
-        }
-      }
-    }
-
+    const candidate = extractPrecheckObtainedMessage(raw);
     if (!candidate) return null;
-    return tryParseCandidate(candidate);
+
+    let t = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (!t) return null;
+
+    const m = t.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+    if (!m) return null;
+
+    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+
+    let remainder = String(m[2] || "")
+      .replace(/[.!?]+$/g, "")
+      .replace(/\s+from\s+.+$/i, "")
+      .trim();
+    if (!remainder) return null;
+
+    const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+    let itemKey = normalizePrecheckItemName(remainder);
+
+    if (!itemKey) {
+      for (const item of pool) {
+        const aliases = item.aliases || [item.key];
+        if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+          itemKey = item.key;
+          break;
+        }
+      }
+    }
+
+    if (!itemKey) return null;
+    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+    return {
+      itemKey,
+      label: item ? item.label : itemKey,
+      qty,
+      raw: t
+    };
   }
 
   async function postPrecheckJson(path, payload) {
