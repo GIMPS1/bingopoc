@@ -3332,7 +3332,7 @@ function initHistoryPanel() {
 
     try {
       let out = null;
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < 2; i++) {
         try {
           out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
           if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
@@ -3349,7 +3349,7 @@ function initHistoryPanel() {
         } catch (innerErr) {
           if (i === 2) throw innerErr;
         }
-        if (i < 2) await new Promise(resolve => setTimeout(resolve, 220));
+        if (i < 2) await new Promise(resolve => setTimeout(resolve, 140));
       }
 
       precheck.backendOnline = true;
