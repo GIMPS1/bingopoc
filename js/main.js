@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18f-audio";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18g-safe-opt";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18f-audio ✅");
+  console.log("IRB v2026-03-06-precheck-v18g-safe-opt ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18f-audio`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18g-safe-opt`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3170,60 +3170,6 @@ function initHistoryPanel() {
     addFeed(msg, level, "precheck");
   }
 
-  let __lastPrecheckAudioAt = 0;
-  function precheckAudioCue(kind) {
-    try {
-      const nowMs = Date.now();
-      if ((nowMs - __lastPrecheckAudioAt) < 90) return;
-      __lastPrecheckAudioAt = nowMs;
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) return;
-      if (!_audioCtx) _audioCtx = new AudioCtx();
-      const ctx = _audioCtx;
-      const now = ctx.currentTime;
-
-      function tone(freq, start, dur, gain) {
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = "sine";
-        o.frequency.setValueAtTime(freq, start);
-        g.gain.setValueAtTime(0.0001, start);
-        g.gain.exponentialRampToValueAtTime(gain, start + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
-        o.connect(g).connect(ctx.destination);
-        o.start(start);
-        o.stop(start + dur + 0.02);
-      }
-
-      if (kind === "prompt") {
-        tone(1046, now, 0.08, 0.05);
-        tone(1318, now + 0.10, 0.09, 0.05);
-        return;
-      }
-      if (kind === "recorded") {
-        tone(880, now, 0.08, 0.06);
-        tone(1174, now + 0.10, 0.10, 0.06);
-        return;
-      }
-      if (kind === "validated") {
-        tone(784, now, 0.07, 0.05);
-        tone(988, now + 0.09, 0.08, 0.05);
-        tone(1318, now + 0.18, 0.10, 0.06);
-        return;
-      }
-      if (kind === "warning") {
-        tone(440, now, 0.09, 0.045);
-        return;
-      }
-      if (kind === "cancel") {
-        tone(392, now, 0.08, 0.04);
-        tone(330, now + 0.10, 0.10, 0.04);
-        return;
-      }
-      playChime();
-    } catch (e) {}
-  }
-
   function precheckIsTriggeredObtainedLine(raw) {
     const own = String(getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
     if (/\bi\s*have\s*obtained\b/i.test(own)) return true;
@@ -3290,7 +3236,7 @@ function initHistoryPanel() {
 
 
   let __precheckLastSnapshotPreviewUrl = null;
-  function precheckDebugSnapshotPreview(shot, expectedItem, rawHint) {
+  function precheckDebugSnapshotPreview(_shot, _expectedItem, _rawHint) {
     return;
   }
 
@@ -3299,6 +3245,7 @@ function initHistoryPanel() {
     const ctx = precheckCtx();
     const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
     const shot = await precheckCaptureChatBlob();
+    precheckDebugSnapshotPreview(shot, expectedItem, rawHint);
 
     const fd = new FormData();
     fd.append("expected_item", String(expectedItem || ""));
@@ -3334,15 +3281,11 @@ function initHistoryPanel() {
     const looksLikeObtained = /obtained/i.test(rawText);
     const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
 
-    // During guided pre-check, trigger snapshot collection on:
-    // - a likely self line/stub,
-    // - any obtained-looking line,
-    // - or shortly after the current prompt.
     if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
 
     const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
     if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
-    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 2000) {
+    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1600) {
       return { handled: true, matched: false, duplicate: true };
     }
 
@@ -3688,7 +3631,6 @@ function parsePrecheckObservation(raw) {
     __stopIdleDots();
     try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
     precheckSetFeed("Pre-check mode enabled", "ok");
-    precheckAudioCue("prompt");
 
     const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
     await precheckBestEffortSubmit("/api/precheck/start", payload);
@@ -3704,19 +3646,16 @@ function parsePrecheckObservation(raw) {
       if (!expected) {
         precheck.mode = "ready_to_validate";
         precheckSetFeed('All items recorded', "ok");
-        precheckAudioCue("recorded");
         precheck.promptTimer = setTimeout(() => {
           precheck.promptTimer = null;
           if (precheck.mode === "ready_to_validate") {
             precheckSetFeed('Type "Validate!" in chat to complete', "warn");
-            precheckAudioCue("prompt");
           }
         }, 250);
         return;
       }
       precheck.lastPromptAt = Date.now();
       precheckSetFeed(`Quick chat ${expected.label}`, "warn");
-      precheckAudioCue("prompt");
     }, Math.max(0, delayMs));
   }
 
@@ -3733,23 +3672,18 @@ function parsePrecheckObservation(raw) {
     precheck.liveHighest = {};
     precheck.validatedAtIso = null;
     precheck.lastFeed = "";
-    if (showFeedMsg) {
-      precheckSetFeed("Pre-check cancelled", "warn");
-      precheckAudioCue("cancel");
-    }
+    if (showFeedMsg) precheckSetFeed("Pre-check cancelled", "warn");
   }
 
   async function validatePrecheck() {
     if (precheck.mode !== "ready_to_validate" && precheck.mode !== "collecting") {
       precheckSetFeed("No active pre-check to validate", "warn");
-      precheckAudioCue("warning");
       return;
     }
 
     const missing = PRECHECK_ITEMS.filter(item => !(item.key in precheck.captured));
     if (missing.length) {
       precheckSetFeed(`Missing: ${missing.map(x => x.label).join(", ")}`, "warn");
-      precheckAudioCue("warning");
       return;
     }
 
@@ -3773,13 +3707,9 @@ function parsePrecheckObservation(raw) {
     precheckResetTimers();
     precheck.lastFeed = "";
     precheckSetFeed("Validated!", "ok");
-    precheckAudioCue("validated");
     precheck.promptTimer = setTimeout(() => {
       precheck.promptTimer = null;
-      if (precheck.mode === "live") {
-        precheckSetFeed("Live tracking enabled", "ok");
-        precheckAudioCue("recorded");
-      }
+      if (precheck.mode === "live") precheckSetFeed("Live tracking enabled", "ok");
     }, 250);
   }
 
@@ -3819,7 +3749,6 @@ function parsePrecheckObservation(raw) {
           if (snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
             precheck.lastFeed = "";
             precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
-            precheckAudioCue("warning");
           }
           return true;
         }
@@ -3847,9 +3776,8 @@ function parsePrecheckObservation(raw) {
         try { console.log("[precheck][recorded baseline snapshot]", { raw, parsed }); } catch (e) {}
         precheck.lastFeed = "";
         precheckSetFeed(`${parsed.label} x ${parsed.qty} recorded`, "ok");
-        precheckAudioCue("recorded");
         precheck.currentIndex += 1;
-        scheduleNextPrecheckPrompt(1200);
+        scheduleNextPrecheckPrompt(500);
         return true;
       }
     }
@@ -3881,9 +3809,8 @@ function parsePrecheckObservation(raw) {
       try { console.log("[precheck][recorded baseline fallback]", { raw, parsed, expected: expected.key }); } catch (e) {}
       precheck.lastFeed = "";
       precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
-      precheckAudioCue("recorded");
       precheck.currentIndex += 1;
-      scheduleNextPrecheckPrompt(2000);
+      scheduleNextPrecheckPrompt(500);
       return true;
     }
 
