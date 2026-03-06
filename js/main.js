@@ -3343,6 +3343,9 @@ function initHistoryPanel() {
   }
 
   async function startPrecheck() {
+    if (precheck.mode && precheck.mode !== "inactive") {
+      return;
+    }
     precheckResetTimers();
     precheck.mode = "collecting";
     precheck.sessionId = precheckMakeSessionId();
@@ -3444,11 +3447,12 @@ function initHistoryPanel() {
 
     const now = Date.now();
     const dedupeKey = `${cmd}::${String(raw || "").trim().toLowerCase()}`;
-    if (precheck.lastCommandKey === dedupeKey && (now - precheck.lastCommandAt) < 2500) return true;
+    if (precheck.lastCommandKey === dedupeKey && (now - precheck.lastCommandAt) < 10000) return true;
     precheck.lastCommandKey = dedupeKey;
     precheck.lastCommandAt = now;
 
     if (cmd === "start") {
+      if (precheck.mode && precheck.mode !== "inactive") return true;
       await startPrecheck();
       return true;
     }
