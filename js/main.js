@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v14-stubmerge";
+  const BUILD_VERSION = "v2026-03-06-precheck-v15-nuclear";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v14-stubmerge ✅");
+  console.log("IRB v2026-03-06-precheck-v15-nuclear ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v14-stubmerge`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v15-nuclear`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3129,6 +3129,9 @@ function initHistoryPanel() {
     backendOnline: null,
     lastCommandKey: "",
     lastCommandAt: 0,
+    pendingStub: null,
+    pendingRawCandidates: [],
+    pendingNuclearTs: 0,
   };
 
   function precheckCtx() {
@@ -3305,7 +3308,100 @@ function getOwnMessageContent(raw) {
     return speakerMatchesLockedIgn(t, lockedIgnRaw);
   }
 
-  function mergePrecheckSpeakerStub(stubRaw, bodyRaw) {
+  
+function isPrecheckOwnSpeakerStub(raw) {
+    let t = stripChatPrefix(stripTimestampPrefix(String(raw || ""))).replace(/\s+/g, " ").trim();
+    if (!t) return false;
+    if (/[:;]/.test(t)) return false;
+    if (/i\s+have\s+obtained/i.test(t)) return false;
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    if (!lockedIgnRaw) return false;
+    return speakerMatchesLockedIgn(t, lockedIgnRaw);
+  }
+
+  function extractObtainedMessageLoose(text) {
+    const t = String(text || "").replace(/\s+/g, " ").trim();
+    if (!t) return null;
+
+    let m = t.match(/I\s+have\s+obtained\s+([\d,]+)\s+(.+?)(?:\s+from\s+.+)?[.!?]*$/i);
+    if (m) {
+      return `I have obtained ${String(m[1] || "").trim()} ${String(m[2] || "").trim()}`.trim();
+    }
+
+    const expected = precheckExpectedItem && precheckExpectedItem();
+    if (precheck.mode === "collecting" && expected) {
+      const aliases = expected.aliases || [expected.key];
+      const lower = t.toLowerCase();
+      const alias = aliases.find(a => lower.includes(String(a).toLowerCase()));
+      const qtyMatch = t.match(/(?:^|[^\d])(\d{1,3}(?:,\d{3})*|\d+)(?!\d)/);
+      if (alias && qtyMatch) {
+        return `I have obtained ${String(qtyMatch[1] || "").trim()} ${expected.label}`.trim();
+      }
+    }
+    return null;
+  }
+
+  function refreshPrecheckNuclearCandidates(lines, stitchedMessages) {
+    if (precheck.mode !== "collecting" && precheck.mode !== "live") {
+      precheck.pendingRawCandidates = [];
+      precheck.pendingStub = null;
+      precheck.pendingNuclearTs = 0;
+      return;
+    }
+
+    const rawTexts = (lines || []).map(lineToText).filter(Boolean).map(v => String(v || ""));
+    const stitched = (stitchedMessages || []).filter(Boolean).map(v => String(v || ""));
+    const all = [...rawTexts, ...stitched];
+    const candidates = [];
+    const now = Date.now();
+
+    for (const raw of all) {
+      let cleaned = stripChatPrefix(stripTimestampPrefix(raw)).replace(/\s+/g, " ").trim();
+      if (!cleaned) continue;
+
+      if (isPrecheckOwnSpeakerStub(raw) || isPrecheckOwnSpeakerStub(cleaned)) {
+        precheck.pendingStub = { raw: cleaned, ts: now };
+        candidates.push(cleaned);
+        continue;
+      }
+
+      const obtained = extractObtainedMessageLoose(cleaned);
+      if (obtained) {
+        candidates.push(obtained);
+        if (precheck.pendingStub && (now - Number(precheck.pendingStub.ts || 0) < 15000)) {
+          candidates.push(`${precheck.pendingStub.raw}: ${obtained}`);
+        }
+      } else if (precheck.pendingStub && (now - Number(precheck.pendingStub.ts || 0) < 15000)) {
+        const expected = precheckExpectedItem && precheckExpectedItem();
+        if (expected) {
+          const lower = cleaned.toLowerCase();
+          const aliases = expected.aliases || [expected.key];
+          const alias = aliases.find(a => lower.includes(String(a).toLowerCase()));
+          const qtyMatch = cleaned.match(/(?:^|[^\d])(\d{1,3}(?:,\d{3})*|\d+)(?!\d)/);
+          if (alias && qtyMatch) {
+            const synthetic = `I have obtained ${String(qtyMatch[1] || "").trim()} ${expected.label}`;
+            candidates.push(synthetic);
+            candidates.push(`${precheck.pendingStub.raw}: ${synthetic}`);
+          }
+        }
+      }
+    }
+
+    const seen = new Set();
+    precheck.pendingRawCandidates = candidates.filter(c => {
+      const k = String(c || "").trim().toLowerCase();
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(-20);
+    precheck.pendingNuclearTs = now;
+    try {
+      const expected = precheckExpectedItem && precheckExpectedItem();
+      console.log("[precheck][nuclear candidates]", { expected: expected ? expected.key : null, candidates: precheck.pendingRawCandidates });
+    } catch (_) {}
+  }
+
+function mergePrecheckSpeakerStub(stubRaw, bodyRaw) {
     const stub = stripChatPrefix(stripTimestampPrefix(String(stubRaw || ""))).replace(/\s+/g, " ").trim();
     const body0 = stripChatPrefix(stripTimestampPrefix(String(bodyRaw || ""))).replace(/\s+/g, " ").trim();
     if (!stub || !body0) return null;
@@ -3319,30 +3415,54 @@ function extractPrecheckObtainedMessage(raw) {
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
     const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
     const source = String(raw || "");
-    const candidates = [
-      stripChatPrefix(stripTimestampPrefix(source)),
-      stripTimestampPrefix(source),
-      source
-    ];
+    const sourceClean = stripChatPrefix(stripTimestampPrefix(source)).replace(/\s+/g, " ").trim();
 
-    const own = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
-    if (/^i\s+have\s+obtained\b/i.test(own)) return own;
+    const directOwn = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/^i\s+have\s+obtained\b/i.test(directOwn)) return directOwn;
+
+    const candidates = [];
+    for (const c of [
+      source,
+      stripTimestampPrefix(source),
+      stripChatPrefix(stripTimestampPrefix(source)),
+      sourceClean
+    ]) {
+      if (c) candidates.push(String(c));
+    }
+    for (const c of (precheck.pendingRawCandidates || [])) {
+      if (c) candidates.push(String(c));
+    }
+
+    const now = Date.now();
+    if (precheck.pendingStub && (now - Number(precheck.pendingStub.ts || 0) < 15000)) {
+      const synthetic = extractObtainedMessageLoose(sourceClean);
+      if (synthetic) {
+        candidates.push(synthetic);
+        candidates.push(`${precheck.pendingStub.raw}: ${synthetic}`);
+      }
+    }
 
     const ignLoose = buildIgnLoosePattern(lockedIgnRaw);
     const ignGlyph = buildIgnGlyphPattern(lockedIgnRaw);
 
+    const seen = new Set();
     for (const candidateRaw of candidates) {
       const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
-      if (!candidate) continue;
+      const key = candidate.toLowerCase();
+      if (!candidate || seen.has(key)) continue;
+      seen.add(key);
+
+      const looseOnly = extractObtainedMessageLoose(candidate);
+      if (looseOnly) return looseOnly;
 
       if (lockedIgnRaw && ignLoose) {
-        const rxLoose = new RegExp("^.*?(" + ignLoose + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const rxLoose = new RegExp("^.*?(" + ignLoose + "(?:[^:;]{0,24})?)\\s*[:;]?\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
         const mLoose = candidate.match(rxLoose);
         if (mLoose) return String(mLoose[2] || "").trim();
       }
 
       if (lockedIgnRaw && ignGlyph) {
-        const rxGlyph = new RegExp("^.*?(" + ignGlyph + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const rxGlyph = new RegExp("^.*?(" + ignGlyph + "(?:[^:;]{0,24})?)\\s*[:;]?\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
         const mGlyph = candidate.match(rxGlyph);
         if (mGlyph) return String(mGlyph[2] || "").trim();
       }
@@ -3357,32 +3477,29 @@ function extractPrecheckObtainedMessage(raw) {
       }
 
       const obtainedIdx = candidate.toLowerCase().indexOf("i have obtained");
-      if (obtainedIdx < 0) continue;
-
-      const after = candidate.slice(obtainedIdx).trim();
-      if (!/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) continue;
-
-      if (!lockedIgnCollapsed) return after;
-
-      const before = sanitizeSpeakerSegment(candidate.slice(0, obtainedIdx));
-      const beforeCollapsed = collapseIgnForMatch(before);
-      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
-        return after;
+      if (obtainedIdx >= 0) {
+        const after = candidate.slice(obtainedIdx).trim();
+        if (/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) {
+          if (!lockedIgnCollapsed) return after;
+          const before = sanitizeSpeakerSegment(candidate.slice(0, obtainedIdx));
+          const beforeCollapsed = collapseIgnForMatch(before);
+          if (!before || !beforeCollapsed || beforeCollapsed.includes(lockedIgnCollapsed)) {
+            return after;
+          }
+        }
       }
     }
 
     try {
       const expected = precheckExpectedItem && precheckExpectedItem();
-      const lc = String(source || "").toLowerCase();
-      if (expected && lc.includes("i have obtained")) {
-        const aliases = expected.aliases || [expected.key];
-        const matchesExpected = aliases.some(alias => lc.includes(String(alias).toLowerCase()));
-        if (matchesExpected) {
-          console.log("[precheck][extract miss]", { raw: source, own, lockedIgnRaw, expected: expected.key });
-        }
-      }
-    } catch (e) {}
-
+      console.log("[precheck][extract miss]", {
+        raw: source,
+        sourceClean,
+        expected: expected ? expected.key : null,
+        pendingStub: precheck.pendingStub,
+        pendingRawCandidates: precheck.pendingRawCandidates
+      });
+    } catch (_) {}
     return null;
   }
 
@@ -3481,6 +3598,9 @@ function parsePrecheckObservation(raw) {
     precheck.startedAtIso = new Date().toISOString();
     precheck.validatedAtIso = null;
     precheck.lastFeed = "";
+    precheck.pendingStub = null;
+    precheck.pendingRawCandidates = [];
+    precheck.pendingNuclearTs = 0;
     __idleModeOn = false;
     __stopIdleDots();
     try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
@@ -3526,6 +3646,12 @@ function parsePrecheckObservation(raw) {
     precheck.liveHighest = {};
     precheck.validatedAtIso = null;
     precheck.lastFeed = "";
+    precheck.pendingStub = null;
+    precheck.pendingRawCandidates = [];
+    precheck.pendingNuclearTs = 0;
+    precheck.pendingStub = null;
+    precheck.pendingRawCandidates = [];
+    precheck.pendingNuclearTs = 0;
     if (showFeedMsg) precheckSetFeed("Pre-check cancelled", "warn");
   }
 
@@ -4204,6 +4330,7 @@ function stitchChatMessages(lines) {
 
     chatState.consecutiveEmpty = 0;
     const stitched = stitchChatMessages(lines);
+    try { refreshPrecheckNuclearCandidates(lines, stitched.messages); } catch (e) { console.warn("[precheck] nuclear candidate refresh failed:", e); }
 
     for (let i = 0; i < stitched.messages.length; i++) {
       const raw = stitched.messages[i];
