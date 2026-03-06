@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18a-precheck-hostfix";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18b-snapshot-triggerfix";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18a-precheck-hostfix ✅");
+  console.log("IRB v2026-03-06-precheck-v18b-snapshot-triggerfix ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18a-precheck-hostfix`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18b-snapshot-triggerfix`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3261,22 +3261,39 @@ function initHistoryPanel() {
 
   async function tryCollectPrecheckViaSnapshot(raw) {
     if (precheck.mode !== "collecting") return null;
+
     const expected = precheckExpectedItem();
     if (!expected) return null;
-    if (!precheckIsTriggeredObtainedLine(raw)) return null;
 
-    const triggerKey = (String(raw || "").trim().toLowerCase() + "||" + expected.key);
     const now = Date.now();
+    const rawText = String(raw || "");
+    const collapsedRaw = collapseIgnForMatch(rawText);
+
+    const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
+    const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
+    const looksLikeObtained = /obtained/i.test(rawText);
+    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 2500);
+
+    // During guided pre-check, trigger snapshot collection on:
+    // - a likely self line/stub,
+    // - any obtained-looking line,
+    // - or shortly after the current prompt.
+    if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
+
+    const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
     if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
-    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 2500) return { handled: true, matched: false, duplicate: true };
+    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 2000) {
+      return { handled: true, matched: false, duplicate: true };
+    }
 
     precheck.snapshotBusy = true;
     precheck.snapshotLastKey = triggerKey;
     precheck.snapshotLastAt = now;
 
     try {
-      const out = await postPrecheckSnapshot(expected.key, "baseline", raw);
+      const out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
       precheck.backendOnline = true;
+
       if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
         return {
           handled: true,
@@ -3284,11 +3301,17 @@ function initHistoryPanel() {
           itemKey: expected.key,
           label: expected.label,
           qty: Number(out.observed_qty),
-          raw: String((out && out.raw_text) || raw || "")
+          raw: String((out && out.raw_text) || rawText || "")
         };
       }
-      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw, out }); } catch (e) {}
-      return { handled: true, matched: false, reason: out && out.reason ? out.reason : "snapshot_no_match", raw: out && out.raw_text ? out.raw_text : "" };
+
+      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out }); } catch (e) {}
+      return {
+        handled: true,
+        matched: false,
+        reason: out && out.reason ? out.reason : "snapshot_no_match",
+        raw: out && out.raw_text ? out.raw_text : ""
+      };
     } catch (e) {
       precheck.backendOnline = false;
       try { console.warn("[precheck][snapshot unavailable]", expected.key, e); } catch (ee) {}
