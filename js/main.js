@@ -45,11 +45,16 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18g-safe-opt ✅");
+  console.log("IRB v2026-03-06-precheck-v18i-audio-timing ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18g-safe-opt`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18i-audio-timing`;
   } catch (e) {}
+
+  function __pcNow() {
+    try { return Math.round(performance.now()); } catch (e) { return Date.now(); }
+  }
+
   const $ = (id) => document.getElementById(id);
 
   const ui = {
@@ -238,6 +243,61 @@ btnCloseSettings: $("btnCloseSettings"),
       o2.connect(g2).connect(ctx.destination);
       o2.start(now + 0.10);
       o2.stop(now + 0.25);
+    } catch (e) {}
+  }
+
+  function precheckAudioCue(kind) {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!_audioCtx) _audioCtx = new AudioCtx();
+      const ctx = _audioCtx;
+      const now = ctx.currentTime;
+
+      function tone(freq, start, dur, gain = 0.08, type = "sine") {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(freq, start);
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.exponentialRampToValueAtTime(gain, start + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        o.connect(g).connect(ctx.destination);
+        o.start(start);
+        o.stop(start + dur + 0.02);
+      }
+
+      switch (kind) {
+        case "start":
+          tone(740, now, 0.10, 0.06);
+          tone(988, now + 0.11, 0.12, 0.06);
+          break;
+        case "prompt":
+          tone(880, now, 0.08, 0.05, "square");
+          break;
+        case "recorded":
+          tone(880, now, 0.07, 0.06);
+          tone(1175, now + 0.08, 0.09, 0.06);
+          break;
+        case "validate":
+          tone(784, now, 0.08, 0.06);
+          tone(1047, now + 0.08, 0.10, 0.06);
+          tone(1319, now + 0.18, 0.12, 0.06);
+          break;
+        case "live":
+          tone(988, now, 0.08, 0.06);
+          tone(1319, now + 0.09, 0.12, 0.06);
+          break;
+        case "warn":
+          tone(440, now, 0.10, 0.05, "sawtooth");
+          break;
+        case "cancel":
+          tone(392, now, 0.08, 0.05);
+          tone(330, now + 0.09, 0.10, 0.05);
+          break;
+        default:
+          playChime();
+      }
     } catch (e) {}
   }
 
@@ -3297,7 +3357,17 @@ function initHistoryPanel() {
       let out = null;
       for (let i = 0; i < 2; i++) {
         try {
+          const __snapStart = __pcNow();
           out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
+          const __snapDone = __pcNow();
+          try {
+            console.log("[precheck][timing] snapshot_done", {
+              ms: __snapDone - __snapStart,
+              matched: !!(out && out.matched),
+              expected: expected.key,
+              out
+            });
+          } catch (e) {}
           if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
             precheck.backendOnline = true;
             return {
@@ -3631,6 +3701,7 @@ function parsePrecheckObservation(raw) {
     __stopIdleDots();
     try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
     precheckSetFeed("Pre-check mode enabled", "ok");
+    precheckAudioCue("start");
 
     const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
     await precheckBestEffortSubmit("/api/precheck/start", payload);
@@ -3650,12 +3721,14 @@ function parsePrecheckObservation(raw) {
           precheck.promptTimer = null;
           if (precheck.mode === "ready_to_validate") {
             precheckSetFeed('Type "Validate!" in chat to complete', "warn");
+            precheckAudioCue("prompt");
           }
         }, 250);
         return;
       }
       precheck.lastPromptAt = Date.now();
       precheckSetFeed(`Quick chat ${expected.label}`, "warn");
+      precheckAudioCue("prompt");
     }, Math.max(0, delayMs));
   }
 
@@ -3672,18 +3745,23 @@ function parsePrecheckObservation(raw) {
     precheck.liveHighest = {};
     precheck.validatedAtIso = null;
     precheck.lastFeed = "";
-    if (showFeedMsg) precheckSetFeed("Pre-check cancelled", "warn");
+    if (showFeedMsg) {
+      precheckSetFeed("Pre-check cancelled", "warn");
+      precheckAudioCue("cancel");
+    }
   }
 
   async function validatePrecheck() {
     if (precheck.mode !== "ready_to_validate" && precheck.mode !== "collecting") {
       precheckSetFeed("No active pre-check to validate", "warn");
+      precheckAudioCue("warn");
       return;
     }
 
     const missing = PRECHECK_ITEMS.filter(item => !(item.key in precheck.captured));
     if (missing.length) {
       precheckSetFeed(`Missing: ${missing.map(x => x.label).join(", ")}`, "warn");
+      precheckAudioCue("warn");
       return;
     }
 
@@ -3707,9 +3785,13 @@ function parsePrecheckObservation(raw) {
     precheckResetTimers();
     precheck.lastFeed = "";
     precheckSetFeed("Validated!", "ok");
+    precheckAudioCue("validate");
     precheck.promptTimer = setTimeout(() => {
       precheck.promptTimer = null;
-      if (precheck.mode === "live") precheckSetFeed("Live tracking enabled", "ok");
+      if (precheck.mode === "live") {
+        precheckSetFeed("Live tracking enabled", "ok");
+        precheckAudioCue("live");
+      }
     }, 250);
   }
 
@@ -3740,6 +3822,8 @@ function parsePrecheckObservation(raw) {
   }
 
   async function handlePrecheckObservation(raw) {
+    const __t0 = __pcNow();
+    try { console.log("[precheck][timing] trigger", __t0, raw); } catch (e) {}
     if (precheck.mode !== "collecting" && precheck.mode !== "live") return false;
 
     if (precheck.mode === "collecting") {
@@ -3749,6 +3833,7 @@ function parsePrecheckObservation(raw) {
           if (snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
             precheck.lastFeed = "";
             precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
+            precheckAudioCue("warn");
           }
           return true;
         }
@@ -3774,8 +3859,18 @@ function parsePrecheckObservation(raw) {
         await precheckBestEffortSubmit("/api/precheck/baseline", payload);
 
         try { console.log("[precheck][recorded baseline snapshot]", { raw, parsed }); } catch (e) {}
+        try {
+          const __done = __pcNow();
+          console.log("[precheck][timing] recorded", {
+            total_ms: __done - __t0,
+            item: parsed.itemKey,
+            qty: parsed.qty,
+            source: "snapshot"
+          });
+        } catch (e) {}
         precheck.lastFeed = "";
         precheckSetFeed(`${parsed.label} x ${parsed.qty} recorded`, "ok");
+        precheckAudioCue("recorded");
         precheck.currentIndex += 1;
         scheduleNextPrecheckPrompt(500);
         return true;
@@ -3807,8 +3902,18 @@ function parsePrecheckObservation(raw) {
       await precheckBestEffortSubmit("/api/precheck/baseline", payload);
 
       try { console.log("[precheck][recorded baseline fallback]", { raw, parsed, expected: expected.key }); } catch (e) {}
+      try {
+        const __done = __pcNow();
+        console.log("[precheck][timing] recorded", {
+          total_ms: __done - __t0,
+          item: parsed.itemKey,
+          qty: parsed.qty,
+          source: "fallback"
+        });
+      } catch (e) {}
       precheck.lastFeed = "";
       precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
+      precheckAudioCue("recorded");
       precheck.currentIndex += 1;
       scheduleNextPrecheckPrompt(500);
       return true;
