@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18g-safe-opt";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18k-single-hq";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18i-audio-timing ✅");
+  console.log("IRB v2026-03-06-precheck-v18k-single-hq ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18i-audio-timing`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18k-single-hq`;
   } catch (e) {}
 
   function __pcNow() {
@@ -3263,37 +3263,47 @@ function initHistoryPanel() {
     if (!(window.A1lib && typeof A1lib.capture === "function")) throw new Error("capture_unavailable");
     if (!window.alt1 || !alt1.permissionPixel) throw new Error("pixel_permission_missing");
 
-    const padX = Math.max(8, Math.round(rect.w * 0.02));
-    const padY = Math.max(6, Math.round(rect.h * 0.04));
+    // One stronger snapshot: focus on the newest line area near the bottom of the chatbox,
+    // keep useful width, add modest padding, and encode at higher JPEG quality.
+    const padX = Math.max(10, Math.round(rect.w * 0.03));
+    const bandTop = Math.max(0, Math.round(rect.h * 0.62));
+    const bandBottom = Math.min(rect.h, Math.round(rect.h * 0.98));
+
     const x = Math.max(0, (rect.x - padX) | 0);
-    const y = Math.max(0, (rect.y - padY) | 0);
-    const w = Math.max(32, (rect.w + padX * 2) | 0);
-    const h = Math.max(20, (rect.h + padY * 2) | 0);
+    const y = Math.max(0, (rect.y + bandTop) | 0);
+    const w = Math.max(64, (rect.w + padX * 2) | 0);
+    const h = Math.max(28, (bandBottom - bandTop) | 0);
 
     let img = null;
     try { img = A1lib.capture(x, y, w, h); } catch (e) {}
     const props = __getImgProps(img);
     if (!props) throw new Error("capture_failed");
 
-    const canvas = document.createElement("canvas");
-    canvas.width = props.width | 0;
-    canvas.height = props.height | 0;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    const id = ctx.createImageData(props.width | 0, props.height | 0);
+    const srcCanvas = document.createElement("canvas");
+    srcCanvas.width = props.width | 0;
+    srcCanvas.height = props.height | 0;
+    const sctx = srcCanvas.getContext("2d", { willReadFrequently: true });
+    const id = sctx.createImageData(props.width | 0, props.height | 0);
     id.data.set(props.data);
-    ctx.putImageData(id, 0, 0);
+    sctx.putImageData(id, 0, 0);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, (props.width | 0) * 2);
+    canvas.height = Math.max(1, (props.height | 0) * 2);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(srcCanvas, 0, 0, canvas.width, canvas.height);
 
     const blob = await new Promise((resolve, reject) => {
       try {
-        canvas.toBlob((b) => b ? resolve(b) : reject(new Error("blob_encode_failed")), "image/jpeg", 0.82);
+        canvas.toBlob((b) => b ? resolve(b) : reject(new Error("blob_encode_failed")), "image/jpeg", 0.92);
       } catch (e) {
         reject(e);
       }
     });
 
-    return { blob, rect: { x, y, w, h } };
+    return { blob, rect: { x, y, w, h, scaled_w: canvas.width, scaled_h: canvas.height } };
   }
-
 
   let __precheckLastSnapshotPreviewUrl = null;
   function precheckDebugSnapshotPreview(_shot, _expectedItem, _rawHint) {
@@ -3355,19 +3365,39 @@ function initHistoryPanel() {
 
     try {
       let out = null;
-      for (let i = 0; i < 2; i++) {
-        try {
-          const __snapStart = __pcNow();
-          out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
-          const __snapDone = __pcNow();
-          try {
-            console.log("[precheck][timing] snapshot_done", {
-              ms: __snapDone - __snapStart,
-              matched: !!(out && out.matched),
-              expected: expected.key,
-              out
-            });
-          } catch (e) {}
+      const __snapStart = __pcNow();
+      out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
+      const __snapDone = __pcNow();
+      try {
+        console.log("[precheck][timing] snapshot_done", {
+          ms: __snapDone - __snapStart,
+          matched: !!(out && out.matched),
+          expected: expected.key,
+          out
+        });
+      } catch (e) {}
+
+      if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
+        precheck.backendOnline = true;
+        return {
+          handled: true,
+          matched: true,
+          itemKey: expected.key,
+          label: expected.label,
+          qty: Number(out.observed_qty),
+          raw: String((out && out.raw_text) || rawText || "")
+        };
+      }
+
+      precheck.backendOnline = true;
+      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out }); } catch (e) {}
+      return {
+        handled: true,
+        matched: false,
+        reason: out && out.reason ? out.reason : "snapshot_no_match",
+        raw: out && out.raw_text ? out.raw_text : ""
+      };
+    } catch (e) {}
           if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
             precheck.backendOnline = true;
             return {
