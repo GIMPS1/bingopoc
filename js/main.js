@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v12";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18-snapshot";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v12 ✅");
+  console.log("IRB v2026-03-06-precheck-v18-snapshot ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v12`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18-snapshot`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3109,6 +3109,7 @@ function initHistoryPanel() {
   const PRECHECK_ITEMS = [
     { key: "tectonic energy", label: "Tectonic energy", aliases: ["tectonic energy"] },
     { key: "draconic energy", label: "Draconic energy", aliases: ["draconic energy"] },
+    { key: "malevolent energy", label: "Malevolent energy", aliases: ["malevolent energy"] },
     { key: "black stone heart", label: "Black stone heart", aliases: ["black stone heart", "black stone hearts"] },
     { key: "ancient scale", label: "Ancient scale", aliases: ["ancient scale", "ancient scales"] },
     { key: "dark nilas", label: "Dark Nilas", aliases: ["dark nilas", "nilas"] },
@@ -3129,6 +3130,9 @@ function initHistoryPanel() {
     backendOnline: null,
     lastCommandKey: "",
     lastCommandAt: 0,
+    snapshotBusy: false,
+    snapshotLastAt: 0,
+    snapshotLastKey: "",
   };
 
   function precheckCtx() {
@@ -3163,6 +3167,134 @@ function initHistoryPanel() {
     precheck.lastFeed = msg;
     setEventFeedPriority(FEED_PRIORITY.precheck);
     addFeed(msg, level, "precheck");
+  }
+
+  function precheckIsTriggeredObtainedLine(raw) {
+    const own = String(getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/\bi\s*have\s*obtained\b/i.test(own)) return true;
+
+    const t = String(raw || "");
+    const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
+    if (!ign) return /\bi\s*have\s*obtained\b/i.test(t);
+    return /\bi\s*have\s*obtained\b/i.test(t) && collapseIgnForMatch(t).includes(ign);
+  }
+
+  function precheckGetChatRect() {
+    try {
+      const pos = chatReader && chatReader.pos ? chatReader.pos : loadChatPos();
+      if (!pos) return null;
+      const rect = pos.mainbox && pos.mainbox.rect ? pos.mainbox.rect : (pos.rect ? pos.rect : pos);
+      if (!rect) return null;
+      const x = rect.x | 0;
+      const y = rect.y | 0;
+      const w = (rect.width || rect.w || 0) | 0;
+      const h = (rect.height || rect.h || 0) | 0;
+      if (w <= 0 || h <= 0) return null;
+      return { x, y, w, h };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function precheckCaptureChatBlob() {
+    const rect = precheckGetChatRect();
+    if (!rect) throw new Error("chat_rect_unavailable");
+    if (!(window.A1lib && typeof A1lib.capture === "function")) throw new Error("capture_unavailable");
+    if (!window.alt1 || !alt1.permissionPixel) throw new Error("pixel_permission_missing");
+
+    const padX = Math.max(8, Math.round(rect.w * 0.02));
+    const padY = Math.max(6, Math.round(rect.h * 0.04));
+    const x = Math.max(0, (rect.x - padX) | 0);
+    const y = Math.max(0, (rect.y - padY) | 0);
+    const w = Math.max(32, (rect.w + padX * 2) | 0);
+    const h = Math.max(20, (rect.h + padY * 2) | 0);
+
+    let img = null;
+    try { img = A1lib.capture(x, y, w, h); } catch (e) {}
+    const props = __getImgProps(img);
+    if (!props) throw new Error("capture_failed");
+
+    const canvas = document.createElement("canvas");
+    canvas.width = props.width | 0;
+    canvas.height = props.height | 0;
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const id = ctx.createImageData(props.width | 0, props.height | 0);
+    id.data.set(props.data);
+    ctx.putImageData(id, 0, 0);
+
+    const blob = await new Promise((resolve, reject) => {
+      try {
+        canvas.toBlob((b) => b ? resolve(b) : reject(new Error("blob_encode_failed")), "image/jpeg", 0.82);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    return { blob, rect: { x, y, w, h } };
+  }
+
+  async function postPrecheckSnapshot(expectedItem, mode, rawHint) {
+    const base = getApiBase();
+    const ctx = precheckCtx();
+    const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
+    const shot = await precheckCaptureChatBlob();
+
+    const fd = new FormData();
+    fd.append("expected_item", String(expectedItem || ""));
+    fd.append("ign", ctx.ign);
+    fd.append("team_no", String(ctx.team_no || 0));
+    fd.append("session_id", String(precheck.sessionId || ""));
+    fd.append("mode", String(mode || ""));
+    fd.append("client_ts", new Date().toISOString());
+    if (rawHint) fd.append("raw_hint", String(rawHint));
+    fd.append("image", shot.blob, "precheck-chat.jpg");
+
+    const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    try {
+      return await res.json();
+    } catch (e) {
+      return { ok: true, matched: false, reason: "bad_snapshot_json" };
+    }
+  }
+
+  async function tryCollectPrecheckViaSnapshot(raw) {
+    if (precheck.mode !== "collecting") return null;
+    const expected = precheckExpectedItem();
+    if (!expected) return null;
+    if (!precheckIsTriggeredObtainedLine(raw)) return null;
+
+    const triggerKey = (String(raw || "").trim().toLowerCase() + "||" + expected.key);
+    const now = Date.now();
+    if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
+    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 2500) return { handled: true, matched: false, duplicate: true };
+
+    precheck.snapshotBusy = true;
+    precheck.snapshotLastKey = triggerKey;
+    precheck.snapshotLastAt = now;
+
+    try {
+      const out = await postPrecheckSnapshot(expected.key, "baseline", raw);
+      precheck.backendOnline = true;
+      if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
+        return {
+          handled: true,
+          matched: true,
+          itemKey: expected.key,
+          label: expected.label,
+          qty: Number(out.observed_qty),
+          raw: String((out && out.raw_text) || raw || "")
+        };
+      }
+      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw, out }); } catch (e) {}
+      return { handled: true, matched: false, reason: out && out.reason ? out.reason : "snapshot_no_match", raw: out && out.raw_text ? out.raw_text : "" };
+    } catch (e) {
+      precheck.backendOnline = false;
+      try { console.warn("[precheck][snapshot unavailable]", expected.key, e); } catch (ee) {}
+      return null;
+    } finally {
+      precheck.snapshotBusy = false;
+    }
   }
 
   function normalizePrecheckItemName(name) {
@@ -3574,6 +3706,47 @@ function parsePrecheckObservation(raw) {
 
   async function handlePrecheckObservation(raw) {
     if (precheck.mode !== "collecting" && precheck.mode !== "live") return false;
+
+    if (precheck.mode === "collecting") {
+      const snapshotParsed = await tryCollectPrecheckViaSnapshot(raw);
+      if (snapshotParsed && snapshotParsed.handled) {
+        if (!snapshotParsed.matched) {
+          if (snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
+            precheck.lastFeed = "";
+            precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
+          }
+          return true;
+        }
+
+        const parsed = {
+          itemKey: snapshotParsed.itemKey,
+          label: snapshotParsed.label,
+          qty: snapshotParsed.qty,
+          raw: snapshotParsed.raw
+        };
+        if (precheckSeenRecently(raw, parsed)) return true;
+
+        precheck.captured[parsed.itemKey] = parsed.qty;
+        const payload = {
+          ...precheckCtx(),
+          session_id: precheck.sessionId,
+          item_name: parsed.itemKey,
+          observed_qty: parsed.qty,
+          raw_text: parsed.raw || raw,
+          source: "baseline",
+          client_ts: new Date().toISOString()
+        };
+        await precheckBestEffortSubmit("/api/precheck/baseline", payload);
+
+        try { console.log("[precheck][recorded baseline snapshot]", { raw, parsed }); } catch (e) {}
+        precheck.lastFeed = "";
+        precheckSetFeed(`${parsed.label} x ${parsed.qty} recorded`, "ok");
+        precheck.currentIndex += 1;
+        scheduleNextPrecheckPrompt(2000);
+        return true;
+      }
+    }
+
     const parsed = parsePrecheckObservation(raw);
     if (!parsed) return false;
     if (precheckSeenRecently(raw, parsed)) return true;
@@ -3598,7 +3771,7 @@ function parsePrecheckObservation(raw) {
       };
       await precheckBestEffortSubmit("/api/precheck/baseline", payload);
 
-      try { console.log("[precheck][recorded baseline]", { raw, parsed, expected: expected.key }); } catch (e) {}
+      try { console.log("[precheck][recorded baseline fallback]", { raw, parsed, expected: expected.key }); } catch (e) {}
       precheck.lastFeed = "";
       precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
       precheck.currentIndex += 1;
