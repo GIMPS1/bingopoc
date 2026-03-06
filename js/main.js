@@ -3337,100 +3337,84 @@ function initHistoryPanel() {
   }
 
   async function tryCollectPrecheckViaSnapshot(raw) {
-    if (precheck.mode !== "collecting") return null;
+  if (precheck.mode !== "collecting") return null;
 
-    const expected = precheckExpectedItem();
-    if (!expected) return null;
+  const expected = precheckExpectedItem();
+  if (!expected) return null;
 
-    const now = Date.now();
-    const rawText = String(raw || "");
-    const collapsedRaw = collapseIgnForMatch(rawText);
+  const now = Date.now();
+  const rawText = String(raw || "");
+  const collapsedRaw = collapseIgnForMatch(rawText);
 
-    const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
-    const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
-    const looksLikeObtained = /obtained/i.test(rawText);
-    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
+  const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
+  const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
+  const looksLikeObtained = /obtained/i.test(rawText);
+  const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
 
-    if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
+  if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
 
-    const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
-    if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
-    if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1600) {
-      return { handled: true, matched: false, duplicate: true };
-    }
+  const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
+  if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
+  if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1600) {
+    return { handled: true, matched: false, duplicate: true };
+  }
 
-    precheck.snapshotBusy = true;
-    precheck.snapshotLastKey = triggerKey;
-    precheck.snapshotLastAt = now;
+  precheck.snapshotBusy = true;
+  precheck.snapshotLastKey = triggerKey;
+  precheck.snapshotLastAt = now;
+
+  try {
+    const snapStart = __pcNow();
+    const out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
+    const snapDone = __pcNow();
 
     try {
-      let out = null;
-      const __snapStart = __pcNow();
-      out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
-      const __snapDone = __pcNow();
-      try {
-        console.log("[precheck][timing] snapshot_done", {
-          ms: __snapDone - __snapStart,
-          matched: !!(out && out.matched),
-          expected: expected.key,
-          out
-        });
-      } catch (e) {}
-
-      if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
-        precheck.backendOnline = true;
-        return {
-          handled: true,
-          matched: true,
-          itemKey: expected.key,
-          label: expected.label,
-          qty: Number(out.observed_qty),
-          raw: String((out && out.raw_text) || rawText || "")
-        };
-      }
-
-      precheck.backendOnline = true;
-      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out }); } catch (e) {}
-      return {
-        handled: true,
-        matched: false,
-        reason: out && out.reason ? out.reason : "snapshot_no_match",
-        raw: out && out.raw_text ? out.raw_text : ""
-      };
+      console.log("[precheck][timing] snapshot_done", {
+        ms: snapDone - snapStart,
+        matched: !!(out && out.matched),
+        expected: expected.key,
+        out
+      });
     } catch (e) {}
-          if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
-            precheck.backendOnline = true;
-            return {
-              handled: true,
-              matched: true,
-              itemKey: expected.key,
-              label: expected.label,
-              qty: Number(out.observed_qty),
-              raw: String((out && out.raw_text) || rawText || "")
-            };
-          }
-        } catch (innerErr) {
-          if (i === 1) throw innerErr;
-        }
-        if (i < 1) await new Promise(resolve => setTimeout(resolve, 120));
-      }
 
+    if (
+      out &&
+      out.matched &&
+      out.item_name === expected.key &&
+      Number.isFinite(Number(out.observed_qty))
+    ) {
       precheck.backendOnline = true;
-      try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out }); } catch (e) {}
       return {
         handled: true,
-        matched: false,
-        reason: out && out.reason ? out.reason : "snapshot_no_match",
-        raw: out && out.raw_text ? out.raw_text : ""
+        matched: true,
+        itemKey: expected.key,
+        label: expected.label,
+        qty: Number(out.observed_qty),
+        raw: String((out && out.raw_text) || rawText || "")
       };
-    } catch (e) {
-      precheck.backendOnline = false;
-      try { console.warn("[precheck][snapshot unavailable]", expected.key, e); } catch (ee) {}
-      return null;
-    } finally {
-      precheck.snapshotBusy = false;
     }
+
+    precheck.backendOnline = true;
+    try {
+      console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out });
+    } catch (e) {}
+
+    return {
+      handled: true,
+      matched: false,
+      reason: out && out.reason ? out.reason : "snapshot_no_match",
+      raw: out && out.raw_text ? out.raw_text : ""
+    };
+  } catch (e) {
+    precheck.backendOnline = false;
+    try {
+      console.warn("[precheck][snapshot unavailable]", expected.key, e);
+    } catch (ee) {}
+    return null;
+  } finally {
+    precheck.snapshotBusy = false;
   }
+}
 
   function normalizePrecheckItemName(name) {
     const t = String(name || "")
