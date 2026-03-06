@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v13-diagnostic";
+  const BUILD_VERSION = "v2026-03-06-precheck-v14-stubmerge";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v13-diagnostic ✅");
+  console.log("IRB v2026-03-06-precheck-v14-stubmerge ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v13-diagnostic`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v14-stubmerge`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3294,6 +3294,27 @@ function getOwnMessageContent(raw) {
 }
 
 
+
+  function isPrecheckSpeakerStub(raw) {
+    const t = stripChatPrefix(stripTimestampPrefix(String(raw || ""))).replace(/\s+/g, " ").trim();
+    if (!t) return false;
+    if (/[:;]/.test(t)) return false;
+    if (/\bi\s+have\s+obtained\b/i.test(t)) return false;
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    if (!lockedIgnRaw) return false;
+    return speakerMatchesLockedIgn(t, lockedIgnRaw);
+  }
+
+  function mergePrecheckSpeakerStub(stubRaw, bodyRaw) {
+    const stub = stripChatPrefix(stripTimestampPrefix(String(stubRaw || ""))).replace(/\s+/g, " ").trim();
+    const body0 = stripChatPrefix(stripTimestampPrefix(String(bodyRaw || ""))).replace(/\s+/g, " ").trim();
+    if (!stub || !body0) return null;
+    const bodyMatch = body0.match(/(I\s+have\s+obtained\s+[\d,]+\s+.+)$/i);
+    if (!bodyMatch) return null;
+    const body = String(bodyMatch[1] || "").trim();
+    return `${stub}: ${body}`;
+  }
+
 function extractPrecheckObtainedMessage(raw) {
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
     const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
@@ -4202,11 +4223,25 @@ function stitchChatMessages(lines) {
             console.log("[precheck][charcodes]", Array.from(String(raw || "")).map(ch => `${ch}:${ch.charCodeAt(0)}`).join(" | "));
           } catch (_) {}
         }
-        const handledCmd = await handlePrecheckCommand(raw);
+
+        let precheckRaw = raw;
+        const nextRawForPrecheck = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
+        if (precheck.mode === "collecting" || precheck.mode === "live") {
+          const merged = mergePrecheckSpeakerStub(raw, nextRawForPrecheck);
+          if (merged) {
+            try { console.log("[precheck][merged stub]", JSON.stringify(merged)); } catch (_) {}
+            precheckRaw = merged;
+          }
+        }
+
+        const handledCmd = await handlePrecheckCommand(precheckRaw);
         if (handledCmd) continue;
 
-        const handledObservation = await handlePrecheckObservation(raw);
-        if (handledObservation) continue;
+        const handledObservation = await handlePrecheckObservation(precheckRaw);
+        if (handledObservation) {
+          if (precheckRaw !== raw && nextRawForPrecheck) i += 1;
+          continue;
+        }
       } catch (e) {
         console.warn("[precheck] line handling failed:", e);
       }
