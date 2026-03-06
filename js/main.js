@@ -3264,14 +3264,41 @@ function initHistoryPanel() {
       let t = String(candidate || "").replace(/\s+/g, " ").trim();
       if (!t) return null;
 
-      const m = t.match(/(?:^|:\s*)I\s+have\s+obtained\s+([\d,]+)\s+(.+?)(?:\s+from\s+.+)?[.!?]*$/i);
+      const lower = t.toLowerCase();
+      const obtainedIdx = lower.indexOf("i have obtained");
+      if (obtainedIdx < 0) return null;
+
+      let after = t.slice(obtainedIdx).trim();
+      let m = after.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+      if (!m && after.includes(":")) {
+        const tail = after.slice(after.indexOf(":") + 1).trim();
+        m = tail.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+      }
       if (!m) return null;
 
       const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-      const itemRaw = String(m[2] || "").trim();
-      const itemKey = normalizePrecheckItemName(itemRaw);
-      if (!qty || !itemKey) return null;
+      if (!qty) return null;
 
+      let remainder = String(m[2] || "")
+        .replace(/[.!?]+$/g, "")
+        .replace(/\s+from\s+.+$/i, "")
+        .trim();
+      if (!remainder) return null;
+
+      const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+      let itemKey = normalizePrecheckItemName(remainder);
+
+      if (!itemKey) {
+        for (const item of PRECHECK_ITEMS) {
+          const aliases = item.aliases || [item.key];
+          if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+            itemKey = item.key;
+            break;
+          }
+        }
+      }
+
+      if (!itemKey) return null;
       const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
       return {
         itemKey,
@@ -3298,10 +3325,14 @@ function initHistoryPanel() {
     }
 
     const expected = precheckExpectedItem();
-    if (cleaned && expected) {
-      const cleanedLc = cleaned.toLowerCase();
-      const matchesExpected = (expected.aliases || [expected.key]).some(alias => cleanedLc.includes(String(alias).toLowerCase()));
-      if (matchesExpected) candidates.push(cleaned);
+    if (expected) {
+      candidates.push(raw);
+      if (cleaned) {
+        const cleanedLc = cleaned.toLowerCase();
+        const aliases = expected.aliases || [expected.key];
+        const matchesExpected = aliases.some(alias => cleanedLc.includes(String(alias).toLowerCase()));
+        if (matchesExpected) candidates.push(cleaned);
+      }
     }
 
     const seen = new Set();
@@ -3310,9 +3341,13 @@ function initHistoryPanel() {
       if (!key || seen.has(key)) continue;
       seen.add(key);
       const parsed = tryParseCandidate(c);
-      if (parsed) return parsed;
+      if (parsed) {
+        try { console.log("[precheck][parsed observation]", { raw, candidate: c, parsed }); } catch (e) {}
+        return parsed;
+      }
     }
 
+    try { console.log("[precheck][failed observation parse]", { raw, candidates }); } catch (e) {}
     return null;
   }
 
@@ -3475,7 +3510,10 @@ function initHistoryPanel() {
     if (precheck.mode === "collecting") {
       const expected = precheckExpectedItem();
       if (!expected) return true;
-      if (parsed.itemKey !== expected.key) return true;
+      if (parsed.itemKey !== expected.key) {
+        try { console.log("[precheck][unexpected item while collecting]", { raw, parsed, expected: expected.key }); } catch (e) {}
+        return true;
+      }
 
       precheck.captured[parsed.itemKey] = parsed.qty;
       const payload = {
@@ -3489,6 +3527,7 @@ function initHistoryPanel() {
       };
       await precheckBestEffortSubmit("/api/precheck/baseline", payload);
 
+      try { console.log("[precheck][recorded baseline]", { raw, parsed, expected: expected.key }); } catch (e) {}
       precheck.lastFeed = "";
       precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
       precheck.currentIndex += 1;
