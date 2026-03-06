@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v15-nuclear";
+  const BUILD_VERSION = "v2026-03-06-precheck-v16-rawprecheck";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v15-nuclear ✅");
+  console.log("IRB v2026-03-06-precheck-v16-rawprecheck ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v15-nuclear`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v16-rawprecheck`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -4329,6 +4329,44 @@ function stitchChatMessages(lines) {
 }
 
     chatState.consecutiveEmpty = 0;
+
+    const rawTexts = (lines || []).map(lineToText).filter(Boolean).map(v => String(v || "").trim()).filter(Boolean);
+    try {
+      for (let i = 0; i < rawTexts.length; i++) {
+        const rawLine = rawTexts[i];
+        if (!rawLine) continue;
+
+        if (/obtained|tectonic|precheck|validate/i.test(rawLine)) {
+          try {
+            console.log("[precheck][raw direct]", JSON.stringify(rawLine));
+            console.log("[precheck][raw direct charcodes]", Array.from(String(rawLine || "")).map(ch => `${ch}:${ch.charCodeAt(0)}`).join(" | "));
+          } catch (_) {}
+        }
+
+        let precheckRaw = rawLine;
+        const nextRawDirect = rawTexts[i + 1] ? rawTexts[i + 1] : "";
+        const mergedDirect = mergePrecheckSpeakerStub(rawLine, nextRawDirect);
+        if (mergedDirect) {
+          try { console.log("[precheck][merged direct stub]", JSON.stringify(mergedDirect)); } catch (_) {}
+          precheckRaw = mergedDirect;
+        }
+
+        const handledCmdDirect = await handlePrecheckCommand(precheckRaw);
+        if (handledCmdDirect) {
+          if (precheckRaw !== rawLine && nextRawDirect) i += 1;
+          continue;
+        }
+
+        const handledObsDirect = await handlePrecheckObservation(precheckRaw);
+        if (handledObsDirect) {
+          if (precheckRaw !== rawLine && nextRawDirect) i += 1;
+          continue;
+        }
+      }
+    } catch (e) {
+      console.warn("[precheck] raw-line handling failed:", e);
+    }
+
     const stitched = stitchChatMessages(lines);
     try { refreshPrecheckNuclearCandidates(lines, stitched.messages); } catch (e) { console.warn("[precheck] nuclear candidate refresh failed:", e); }
 
@@ -4350,27 +4388,8 @@ function stitchChatMessages(lines) {
             console.log("[precheck][charcodes]", Array.from(String(raw || "")).map(ch => `${ch}:${ch.charCodeAt(0)}`).join(" | "));
           } catch (_) {}
         }
-
-        let precheckRaw = raw;
-        const nextRawForPrecheck = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
-        if (precheck.mode === "collecting" || precheck.mode === "live") {
-          const merged = mergePrecheckSpeakerStub(raw, nextRawForPrecheck);
-          if (merged) {
-            try { console.log("[precheck][merged stub]", JSON.stringify(merged)); } catch (_) {}
-            precheckRaw = merged;
-          }
-        }
-
-        const handledCmd = await handlePrecheckCommand(precheckRaw);
-        if (handledCmd) continue;
-
-        const handledObservation = await handlePrecheckObservation(precheckRaw);
-        if (handledObservation) {
-          if (precheckRaw !== raw && nextRawForPrecheck) i += 1;
-          continue;
-        }
       } catch (e) {
-        console.warn("[precheck] line handling failed:", e);
+        console.warn("[precheck] stitched debug logging failed:", e);
       }
 
       const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
