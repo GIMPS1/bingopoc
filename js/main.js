@@ -3260,95 +3260,50 @@ function initHistoryPanel() {
   }
 
   function parsePrecheckObservation(raw) {
-    function tryParseCandidate(candidate) {
-      let t = String(candidate || "").replace(/\s+/g, " ").trim();
-      if (!t) return null;
+    const msg = String(getOwnMessageContent(raw) || "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!msg) return null;
+    if (!/i\s+have\s+obtained/i.test(msg)) return null;
 
-      const lower = t.toLowerCase();
-      const obtainedIdx = lower.indexOf("i have obtained");
-      if (obtainedIdx < 0) return null;
+    let m = msg.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+    if (!m) return null;
 
-      let after = t.slice(obtainedIdx).trim();
-      let m = after.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
-      if (!m && after.includes(":")) {
-        const tail = after.slice(after.indexOf(":") + 1).trim();
-        m = tail.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
-      }
-      if (!m) return null;
+    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    if (!qty) return null;
 
-      const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-      if (!qty) return null;
+    let remainder = String(m[2] || "")
+      .replace(/[.!?]+$/g, "")
+      .replace(/\s+from\s+.+$/i, "")
+      .trim();
+    if (!remainder) return null;
 
-      let remainder = String(m[2] || "")
-        .replace(/[.!?]+$/g, "")
-        .replace(/\s+from\s+.+$/i, "")
-        .trim();
-      if (!remainder) return null;
+    const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+    let itemKey = normalizePrecheckItemName(remainder);
 
-      const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
-      let itemKey = normalizePrecheckItemName(remainder);
-
-      if (!itemKey) {
-        for (const item of PRECHECK_ITEMS) {
-          const aliases = item.aliases || [item.key];
-          if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
-            itemKey = item.key;
-            break;
-          }
+    if (!itemKey) {
+      const expected = precheckExpectedItem();
+      const pool = expected ? [expected] : PRECHECK_ITEMS;
+      for (const item of pool) {
+        const aliases = item.aliases || [item.key];
+        if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+          itemKey = item.key;
+          break;
         }
       }
-
-      if (!itemKey) return null;
-      const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
-      return {
-        itemKey,
-        label: item ? item.label : itemKey,
-        qty,
-        raw: t
-      };
     }
 
-    const candidates = [];
-    const own = getOwnMessageContent(raw);
-    if (own) candidates.push(own);
+    if (!itemKey) return null;
 
-    let cleaned = stripTimestampPrefix(raw);
-    cleaned = stripChatPrefix(cleaned);
-    if (cleaned) candidates.push(cleaned);
-
-    if (cleaned && cleaned.includes(":")) {
-      const parts = cleaned.split(":");
-      if (parts.length > 1) {
-        const tail = parts.slice(1).join(":").trim();
-        if (tail) candidates.push(tail);
-      }
-    }
-
-    const expected = precheckExpectedItem();
-    if (expected) {
-      candidates.push(raw);
-      if (cleaned) {
-        const cleanedLc = cleaned.toLowerCase();
-        const aliases = expected.aliases || [expected.key];
-        const matchesExpected = aliases.some(alias => cleanedLc.includes(String(alias).toLowerCase()));
-        if (matchesExpected) candidates.push(cleaned);
-      }
-    }
-
-    const seen = new Set();
-    for (const c of candidates) {
-      const key = String(c || "").trim().toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      const parsed = tryParseCandidate(c);
-      if (parsed) {
-        try { console.log("[precheck][parsed observation]", { raw, candidate: c, parsed }); } catch (e) {}
-        return parsed;
-      }
-    }
-
-    try { console.log("[precheck][failed observation parse]", { raw, candidates }); } catch (e) {}
-    return null;
+    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+    const parsed = {
+      itemKey,
+      label: item ? item.label : itemKey,
+      qty,
+      raw: msg
+    };
+    try { console.log("[precheck][parsed observation]", { raw, msg, parsed }); } catch (e) {}
+    return parsed;
   }
 
   async function postPrecheckJson(path, payload) {
@@ -3503,6 +3458,7 @@ function initHistoryPanel() {
   }
 
   async function handlePrecheckObservation(raw) {
+    if (precheck.mode !== "collecting" && precheck.mode !== "live") return false;
     const parsed = parsePrecheckObservation(raw);
     if (!parsed) return false;
     if (precheckSeenRecently(raw, parsed)) return true;
