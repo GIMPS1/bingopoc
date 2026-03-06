@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v16-rawprecheck";
+  const BUILD_VERSION = "v2026-03-06-precheck-v17-qcocr";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v16-rawprecheck ✅");
+  console.log("IRB v2026-03-06-precheck-v17-qcocr ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v16-rawprecheck`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v17-qcocr`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3132,6 +3132,8 @@ function initHistoryPanel() {
     pendingStub: null,
     pendingRawCandidates: [],
     pendingNuclearTs: 0,
+    regionScanAt: 0,
+    regionLastSig: "",
   };
 
   function precheckCtx() {
@@ -3346,6 +3348,8 @@ function isPrecheckOwnSpeakerStub(raw) {
       precheck.pendingRawCandidates = [];
       precheck.pendingStub = null;
       precheck.pendingNuclearTs = 0;
+    precheck.regionScanAt = 0;
+    precheck.regionLastSig = "";
       return;
     }
 
@@ -3503,6 +3507,126 @@ function extractPrecheckObtainedMessage(raw) {
     return null;
   }
 
+
+  function normalizePrecheckScanText(s) {
+    return String(s || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/[|¦]/g, "I")
+      .replace(/[’`]/g, "'")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function precheckExpectedAliases() {
+    const expected = precheckExpectedItem();
+    if (!expected) return [];
+    const aliases = Array.isArray(expected.aliases) && expected.aliases.length ? expected.aliases.slice() : [expected.key];
+    return aliases.map(a => String(a || "").toLowerCase()).filter(Boolean);
+  }
+
+  function parseExpectedItemFromScanText(s) {
+    const expected = precheckExpectedItem();
+    if (!expected) return null;
+    const textNorm = normalizePrecheckScanText(s).toLowerCase();
+    const aliases = precheckExpectedAliases();
+    let foundAlias = "";
+    for (const alias of aliases) {
+      if (textNorm.includes(alias)) { foundAlias = alias; break; }
+    }
+    if (!foundAlias) return null;
+
+    let qty = null;
+    let m = textNorm.match(/i\s+have\s+obtained\s+([\d,]+)/i);
+    if (m) qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      const aliasRx = foundAlias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      m = textNorm.match(new RegExp("(\\d[\\d,]*)\\s+" + aliasRx, "i"));
+      if (m) qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    }
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+    return {
+      itemKey: expected.key,
+      label: expected.label,
+      qty,
+      raw: normalizePrecheckScanText(s)
+    };
+  }
+
+  function precheckRegionFallbackScan() {
+    if (precheck.mode !== "collecting") return null;
+    const expected = precheckExpectedItem();
+    if (!expected) return null;
+    const now = Date.now();
+    if (precheck.regionScanAt && (now - precheck.regionScanAt) < 900) return null;
+    precheck.regionScanAt = now;
+
+    if (!window.alt1 || !alt1.permissionPixel || !chatReader || !chatReader.pos) return null;
+
+    const rect = extractRectFromPos(chatReader.pos);
+    if (!rect) return null;
+
+    let id = 0;
+    try {
+      id = alt1.bindRegion(rect.x|0, rect.y|0, (rect.width||rect.w)|0, (rect.height||rect.h)|0);
+    } catch (e) {
+      try { console.warn("[precheck][qcocr bind failed]", e); } catch (_) {}
+      return null;
+    }
+    if (!id) return null;
+
+    const fonts = ["chat", "chatmono"];
+    const colors = (chatReader && chatReader.readargs && Array.isArray(chatReader.readargs.colors) && chatReader.readargs.colors.length)
+      ? chatReader.readargs.colors.slice(0, 8)
+      : undefined;
+
+    const hits = [];
+    const seen = {};
+    const w = (rect.width || rect.w) | 0;
+    const h = (rect.height || rect.h) | 0;
+
+    for (let fi = 0; fi < fonts.length; fi++) {
+      const font = fonts[fi];
+      const argsObj = { fontname: font, allowgap: true };
+      if (colors) argsObj.colors = colors;
+      const args = JSON.stringify(argsObj);
+
+      for (let yy = 0; yy < h; yy += 2) {
+        for (let xx = 0; xx < w; xx += 8) {
+          let s = "";
+          try {
+            s = alt1.bindReadStringEx(id, xx, yy, args) || "";
+          } catch (e) {
+            try { s = alt1.bindReadString(id, font, xx, yy) || ""; } catch (e2) { s = ""; }
+          }
+          s = normalizePrecheckScanText(s);
+          if (!s || s.length < 6) continue;
+          const k = s.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+
+          const parsed = parseExpectedItemFromScanText(s);
+          if (parsed) {
+            hits.push(parsed);
+            if (hits.length >= 3) break;
+          }
+        }
+        if (hits.length >= 3) break;
+      }
+      if (hits.length >= 3) break;
+    }
+
+    if (!hits.length) return null;
+    hits.sort((a,b) => String(a.raw).length - String(b.raw).length);
+    const chosen = hits[0];
+    const sig = `${chosen.itemKey}:${chosen.qty}`;
+    if (precheck.regionLastSig === sig) {
+      return null;
+    }
+    precheck.regionLastSig = sig;
+    try { console.log("[precheck][qcocr hit]", hits); } catch (_) {}
+    return chosen;
+  }
+
 function parsePrecheckCommand(raw) {
     const msg = (getOwnMessageContent(raw) || "").trim();
     if (!msg) return null;
@@ -3601,6 +3725,8 @@ function parsePrecheckObservation(raw) {
     precheck.pendingStub = null;
     precheck.pendingRawCandidates = [];
     precheck.pendingNuclearTs = 0;
+    precheck.regionScanAt = 0;
+    precheck.regionLastSig = "";
     __idleModeOn = false;
     __stopIdleDots();
     try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
@@ -3649,9 +3775,13 @@ function parsePrecheckObservation(raw) {
     precheck.pendingStub = null;
     precheck.pendingRawCandidates = [];
     precheck.pendingNuclearTs = 0;
+    precheck.regionScanAt = 0;
+    precheck.regionLastSig = "";
     precheck.pendingStub = null;
     precheck.pendingRawCandidates = [];
     precheck.pendingNuclearTs = 0;
+    precheck.regionScanAt = 0;
+    precheck.regionLastSig = "";
     if (showFeedMsg) precheckSetFeed("Pre-check cancelled", "warn");
   }
 
@@ -4365,6 +4495,39 @@ function stitchChatMessages(lines) {
       }
     } catch (e) {
       console.warn("[precheck] raw-line handling failed:", e);
+    }
+
+
+    if (precheck.mode === "collecting") {
+      try {
+        const regionParsed = precheckRegionFallbackScan();
+        if (regionParsed) {
+          try { console.log("[precheck][qcocr parsed]", regionParsed); } catch (_) {}
+          if (!precheckSeenRecently(regionParsed.raw, regionParsed)) {
+            const expected = precheckExpectedItem();
+            if (expected && regionParsed.itemKey === expected.key) {
+              precheck.captured[regionParsed.itemKey] = regionParsed.qty;
+              const payload = {
+                ...precheckCtx(),
+                session_id: precheck.sessionId,
+                item_name: regionParsed.itemKey,
+                observed_qty: regionParsed.qty,
+                raw_text: regionParsed.raw,
+                source: "baseline",
+                channel: "qcocr",
+                client_ts: new Date().toISOString()
+              };
+              precheckMarkSeen(regionParsed.raw, regionParsed);
+              await precheckBestEffortSubmit("/api/precheck/baseline", payload);
+              precheckSetFeed(`${regionParsed.label} x ${regionParsed.qty} recorded`, "ok");
+              precheck.currentIndex += 1;
+              scheduleNextPrecheckPrompt(2000);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[precheck][qcocr failed]", e);
+      }
     }
 
     const stitched = stitchChatMessages(lines);
