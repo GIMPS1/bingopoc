@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18b-snapshot-triggerfix";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18c-snapshot-burstfix";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18b-snapshot-triggerfix ✅");
+  console.log("IRB v2026-03-06-precheck-v18c-snapshot-burstfix ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18b-snapshot-triggerfix`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18c-snapshot-burstfix`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3291,20 +3291,28 @@ function initHistoryPanel() {
     precheck.snapshotLastAt = now;
 
     try {
-      const out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
-      precheck.backendOnline = true;
-
-      if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
-        return {
-          handled: true,
-          matched: true,
-          itemKey: expected.key,
-          label: expected.label,
-          qty: Number(out.observed_qty),
-          raw: String((out && out.raw_text) || rawText || "")
-        };
+      let out = null;
+      for (let i = 0; i < 3; i++) {
+        try {
+          out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
+          if (out && out.matched && out.item_name === expected.key && Number.isFinite(Number(out.observed_qty))) {
+            precheck.backendOnline = true;
+            return {
+              handled: true,
+              matched: true,
+              itemKey: expected.key,
+              label: expected.label,
+              qty: Number(out.observed_qty),
+              raw: String((out && out.raw_text) || rawText || "")
+            };
+          }
+        } catch (innerErr) {
+          if (i === 2) throw innerErr;
+        }
+        if (i < 2) await new Promise(resolve => setTimeout(resolve, 220));
       }
 
+      precheck.backendOnline = true;
       try { console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out }); } catch (e) {}
       return {
         handled: true,
