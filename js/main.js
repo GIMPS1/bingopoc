@@ -240,8 +240,11 @@ btnCloseSettings: $("btnCloseSettings"),
     } catch (e) {}
   }
 
-  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false) {
+  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false, priority = FEED_PRIORITY.normal) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
+    if (priority < __eventFeedPriority) return;
+    if (isPrecheckUiActive() && priority < FEED_PRIORITY.precheck) return;
+    if (priority > __eventFeedPriority) setEventFeedPriority(priority);
 
     // Idle handling:
     // - Any non-idle event exits idle mode and resets the idle timer.
@@ -291,11 +294,28 @@ btnCloseSettings: $("btnCloseSettings"),
     };
   }
 
-  function addFeed(msg, level = "warn") {
+  
+  const FEED_PRIORITY = { normal: 1, precheck: 10 };
+  let __eventFeedPriority = FEED_PRIORITY.normal;
+
+  function isPrecheckUiActive() {
+    try { return !!(precheck && precheck.mode && precheck.mode !== "inactive"); } catch (e) { return false; }
+  }
+
+  function setEventFeedPriority(priority) {
+    __eventFeedPriority = Math.max(FEED_PRIORITY.normal, Number(priority || FEED_PRIORITY.normal));
+  }
+
+  function releaseEventFeedPriority() {
+    __eventFeedPriority = FEED_PRIORITY.normal;
+  }
+
+function addFeed(msg, level = "warn", source = "normal") {
     const isSubmitOk = level === "ok" && /^Submitted ✅/.test(msg);
     const title = msg.replace(/^Submitted ✅\s*/,"").replace(/^Drop:\s*/,"").trim();
     const subtitle = isSubmitOk ? "Submitted" : (level === "bad" ? "Error" : "Status");
-    showEvent(title || msg, subtitle, level, true, isSubmitOk);
+    const priority = source === "precheck" ? FEED_PRIORITY.precheck : FEED_PRIORITY.normal;
+    showEvent(title || msg, subtitle, level, true, isSubmitOk, false, priority);
 
     feedItems.unshift({ ts: nowTs(), msg, level });
     while (feedItems.length > FEED_MAX) feedItems.pop();
@@ -326,7 +346,7 @@ function __startIdleDots() {
   __stopIdleDots();
   __idleDotsTimer = setInterval(() => {
     try {
-      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
+      if (!__idleModeOn || !ui.eventSub || isPrecheckUiActive()) { __stopIdleDots(); return; }
       __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
       const dots = ".".repeat(__idleDotsPhase);
       ui.eventSub.textContent = "Waiting for drops" + dots;
@@ -335,6 +355,7 @@ function __startIdleDots() {
 }
 
 function showIdleRunning() {
+  if (isPrecheckUiActive()) return;
   // Only show idle when setup is ready (otherwise setup hints should stay visible)
   try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
   if (__idleModeOn) return;
@@ -351,6 +372,7 @@ function startIdleTicker() {
     try {
       const now = Date.now();
       if (__idleModeOn) return;
+      if (isPrecheckUiActive()) return;
       if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
     } catch (e) {}
   }, 700);
@@ -3137,7 +3159,8 @@ function initHistoryPanel() {
   function precheckSetFeed(msg, level = "warn") {
     if (precheck.lastFeed === msg) return;
     precheck.lastFeed = msg;
-    addFeed(msg, level);
+    setEventFeedPriority(FEED_PRIORITY.precheck);
+    addFeed(msg, level, "precheck");
   }
 
   function normalizePrecheckItemName(name) {
@@ -3177,17 +3200,29 @@ function initHistoryPanel() {
     return false;
   }
 
+  function collapseIgnForMatch(raw) {
+    return String(raw || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
+  function speakerMatchesLockedIgn(rawSpeaker, rawIgn) {
+    const speaker = collapseIgnForMatch(rawSpeaker);
+    const ign = collapseIgnForMatch(rawIgn);
+    if (!speaker || !ign) return false;
+    return speaker === ign || speaker.startsWith(ign) || speaker.endsWith(ign);
+  }
+
   function getOwnMessageContent(raw) {
     let t = stripTimestampPrefix(raw);
     t = stripChatPrefix(t);
 
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
-    const lockedIgn = typeof normalizeIgn === "function" ? normalizeIgn(lockedIgnRaw).toLowerCase() : String(lockedIgnRaw || "").toLowerCase();
 
-    const m = t.match(/^([^:]{1,40})\s*:\s*(.+)$/);
+    const m = t.match(/^([^:]{1,80})\s*:\s*(.+)$/);
     if (m) {
-      const speaker = (typeof normalizeIgn === "function" ? normalizeIgn(m[1]) : m[1]).toLowerCase();
-      if (lockedIgn && speaker && speaker !== lockedIgn) return null;
+      const speakerRaw = (m[1] || "").trim();
+      if (lockedIgnRaw && !speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return null;
       return (m[2] || "").trim();
     }
 
@@ -3262,6 +3297,9 @@ function initHistoryPanel() {
     precheck.startedAtIso = new Date().toISOString();
     precheck.validatedAtIso = null;
     precheck.lastFeed = "";
+    __idleModeOn = false;
+    __stopIdleDots();
+    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
     precheckSetFeed("Pre-check mode enabled", "ok");
 
     const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
@@ -3297,6 +3335,7 @@ function initHistoryPanel() {
 
     precheckResetTimers();
     precheck.mode = "inactive";
+    releaseEventFeedPriority();
     precheck.sessionId = null;
     precheck.currentIndex = 0;
     precheck.captured = {};
