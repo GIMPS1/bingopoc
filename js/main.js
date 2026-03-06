@@ -3814,7 +3814,7 @@ function parsePrecheckObservation(raw) {
         precheck.lastFeed = "";
         precheckSetFeed(`${parsed.label} x ${parsed.qty} recorded`, "ok");
         precheck.currentIndex += 1;
-        scheduleNextPrecheckPrompt(2000);
+        scheduleNextPrecheckPrompt(1200);
         return true;
       }
     }
