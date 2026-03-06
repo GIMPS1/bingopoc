@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v9";
+  const BUILD_VERSION = "v2026-03-06-precheck-v10";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v9 ✅");
+  console.log("IRB v2026-03-06-precheck-v10 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v9`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v10`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3204,12 +3204,22 @@ function initHistoryPanel() {
 
   function collapseIgnForMatch(raw) {
     return String(raw || "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "");
+      .normalize("NFKD")
+      .replace(/[㊉☠⚔✦✪★☆•·▪▫◦◉⬤⬥⬦◆◇■□▲△▼▽]+/g, " ")
+      .replace(/[^A-Za-z0-9]+/g, "")
+      .toLowerCase();
+  }
+
+  function sanitizeSpeakerSegment(raw) {
+    return String(raw || "")
+      .normalize("NFKD")
+      .replace(/[㊉☠⚔✦✪★☆•·▪▫◦◉⬤⬥⬦◆◇■□▲△▼▽]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function speakerMatchesLockedIgn(rawSpeaker, rawIgn) {
-    const speaker = collapseIgnForMatch(rawSpeaker);
+    const speaker = collapseIgnForMatch(sanitizeSpeakerSegment(rawSpeaker));
     const ign = collapseIgnForMatch(rawIgn);
     if (!speaker || !ign) return false;
     if (speaker === ign) return true;
@@ -3226,9 +3236,9 @@ function getOwnMessageContent(raw) {
   const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
   const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
 
-  const m = t.match(/^([^:]{1,160})\s*:\s*(.+)$/);
+  const m = t.match(/^([^:;]{1,200})\s*[:;]\s*(.+)$/);
   if (m) {
-    const speakerRaw = (m[1] || "").trim();
+    const speakerRaw = sanitizeSpeakerSegment((m[1] || "").trim());
     const msgRaw = (m[2] || "").trim();
     if (!lockedIgnRaw) return msgRaw;
 
@@ -3269,6 +3279,7 @@ function extractPrecheckObtainedMessage(raw) {
 
     const source = String(raw || "");
     const candidates = [
+      stripChatPrefix(stripTimestampPrefix(source)),
       stripTimestampPrefix(source),
       source
     ];
@@ -3277,11 +3288,20 @@ function extractPrecheckObtainedMessage(raw) {
       const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
       if (!candidate) continue;
 
+      const direct = candidate.match(/^(.*?)\s*[:;]\s*(I\s+have\s+obtained\s+[\d,]+\s+.+)$/i);
+      if (direct) {
+        const speaker = sanitizeSpeakerSegment(direct[1] || "");
+        const msg = String(direct[2] || "").trim();
+        if (!lockedIgn || speakerMatchesLockedIgn(speaker, lockedIgnRaw)) {
+          return msg;
+        }
+      }
+
       const lower = candidate.toLowerCase();
       const idx = lower.indexOf("i have obtained");
       if (idx < 0) continue;
 
-      const before = candidate.slice(0, idx);
+      const before = sanitizeSpeakerSegment(candidate.slice(0, idx));
       const after = candidate.slice(idx).trim();
 
       if (!/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) continue;
