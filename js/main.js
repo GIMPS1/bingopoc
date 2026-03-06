@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18c-snapshot-burstfix";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18d-snapshot-preview";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18c-snapshot-burstfix ✅");
+  console.log("IRB v2026-03-06-precheck-v18d-snapshot-preview ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18c-snapshot-burstfix`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18d-snapshot-preview`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3234,11 +3234,51 @@ function initHistoryPanel() {
     return { blob, rect: { x, y, w, h } };
   }
 
+
+  let __precheckLastSnapshotPreviewUrl = null;
+  function precheckDebugSnapshotPreview(shot, expectedItem, rawHint) {
+    try {
+      if (!shot || !shot.blob || !shot.rect) return;
+      if (__precheckLastSnapshotPreviewUrl) {
+        try { URL.revokeObjectURL(__precheckLastSnapshotPreviewUrl); } catch (e) {}
+        __precheckLastSnapshotPreviewUrl = null;
+      }
+      const url = URL.createObjectURL(shot.blob);
+      __precheckLastSnapshotPreviewUrl = url;
+
+      const img = new Image();
+      img.src = url;
+      img.alt = "precheck snapshot preview";
+      img.style.maxWidth = "420px";
+      img.style.maxHeight = "220px";
+      img.style.border = "1px solid #555";
+      img.style.background = "#111";
+
+      try {
+        console.groupCollapsed(`[precheck][snapshot preview] ${String(expectedItem || "")}`);
+        console.log("rect:", shot.rect, "size:", `${shot.blob.size} bytes`, "rawHint:", String(rawHint || ""));
+        console.log("url:", url);
+        console.log(img);
+        console.groupEnd();
+      } catch (e) {}
+
+      setTimeout(() => {
+        if (__precheckLastSnapshotPreviewUrl === url) {
+          try { URL.revokeObjectURL(url); } catch (e) {}
+          __precheckLastSnapshotPreviewUrl = null;
+        } else {
+          try { URL.revokeObjectURL(url); } catch (e) {}
+        }
+      }, 15000);
+    } catch (e) {}
+  }
+
   async function postPrecheckSnapshot(expectedItem, mode, rawHint) {
     const base = getPrecheckApiBase();
     const ctx = precheckCtx();
     const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
     const shot = await precheckCaptureChatBlob();
+    precheckDebugSnapshotPreview(shot, expectedItem, rawHint);
 
     const fd = new FormData();
     fd.append("expected_item", String(expectedItem || ""));
