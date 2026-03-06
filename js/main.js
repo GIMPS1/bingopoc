@@ -3210,7 +3210,10 @@ function initHistoryPanel() {
     const speaker = collapseIgnForMatch(rawSpeaker);
     const ign = collapseIgnForMatch(rawIgn);
     if (!speaker || !ign) return false;
-    return speaker === ign || speaker.startsWith(ign) || speaker.endsWith(ign);
+    if (speaker === ign) return true;
+    if (speaker.startsWith(ign) || speaker.endsWith(ign)) return true;
+    if (speaker.includes(ign)) return true;
+    return false;
   }
 
   function getOwnMessageContent(raw) {
@@ -3219,11 +3222,27 @@ function initHistoryPanel() {
 
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
 
-    const m = t.match(/^([^:]{1,80})\s*:\s*(.+)$/);
+    const m = t.match(/^([^:]{1,120})\s*:\s*(.+)$/);
     if (m) {
       const speakerRaw = (m[1] || "").trim();
-      if (lockedIgnRaw && !speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return null;
-      return (m[2] || "").trim();
+      const msgRaw = (m[2] || "").trim();
+      if (!lockedIgnRaw) return msgRaw;
+      if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
+
+      const speakerCollapsed = collapseIgnForMatch(speakerRaw);
+      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
+      if (speakerCollapsed && ignCollapsed && speakerCollapsed.includes(ignCollapsed)) return msgRaw;
+      return null;
+    }
+
+    if (lockedIgnRaw) {
+      const collapsed = collapseIgnForMatch(t);
+      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
+      if (collapsed && ignCollapsed && collapsed.includes(ignCollapsed)) {
+        const idx = t.lastIndexOf(":");
+        if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
+      }
+      return null;
     }
 
     return t.trim();
