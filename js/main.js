@@ -43,7 +43,7 @@ function __getImgProps(img) {
 
   // Debug: enable icon match debug arrays (used by chest scanning + manual top-10)
   // Set to false to disable heavy console.table output.
-  var DEBUG_ICON_MATCH = true;
+  var DEBUG_ICON_MATCH = false;
 ;
   console.log("IRB v2026-03-06-precheck-v18k-single-hq ✅");
   try {
@@ -651,7 +651,7 @@ const CHEST_TEST = {
   chestHeight: 296,
   topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
-  debug: true,
+  debug: false,
 };
 
 const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png");
@@ -903,8 +903,8 @@ function __barrowsSlotRects(lock) {
 }
 
 // Barrows chest scan debug
-const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
-const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
+const CHEST_SCAN_DEBUG_OVERLAY = false;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_TABLE = false;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
 
 // Best UX: scan once per chest open, with a short timeout.
