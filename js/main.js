@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18d-snapshot-preview";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18e-speed";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-03-06-precheck-v18d-snapshot-preview ✅");
+  console.log("IRB v2026-03-06-precheck-v18e-speed ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18d-snapshot-preview`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18e-speed`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3237,40 +3237,7 @@ function initHistoryPanel() {
 
   let __precheckLastSnapshotPreviewUrl = null;
   function precheckDebugSnapshotPreview(shot, expectedItem, rawHint) {
-    try {
-      if (!shot || !shot.blob || !shot.rect) return;
-      if (__precheckLastSnapshotPreviewUrl) {
-        try { URL.revokeObjectURL(__precheckLastSnapshotPreviewUrl); } catch (e) {}
-        __precheckLastSnapshotPreviewUrl = null;
-      }
-      const url = URL.createObjectURL(shot.blob);
-      __precheckLastSnapshotPreviewUrl = url;
-
-      const img = new Image();
-      img.src = url;
-      img.alt = "precheck snapshot preview";
-      img.style.maxWidth = "420px";
-      img.style.maxHeight = "220px";
-      img.style.border = "1px solid #555";
-      img.style.background = "#111";
-
-      try {
-        console.groupCollapsed(`[precheck][snapshot preview] ${String(expectedItem || "")}`);
-        console.log("rect:", shot.rect, "size:", `${shot.blob.size} bytes`, "rawHint:", String(rawHint || ""));
-        console.log("url:", url);
-        console.log(img);
-        console.groupEnd();
-      } catch (e) {}
-
-      setTimeout(() => {
-        if (__precheckLastSnapshotPreviewUrl === url) {
-          try { URL.revokeObjectURL(url); } catch (e) {}
-          __precheckLastSnapshotPreviewUrl = null;
-        } else {
-          try { URL.revokeObjectURL(url); } catch (e) {}
-        }
-      }, 15000);
-    } catch (e) {}
+    return;
   }
 
   async function postPrecheckSnapshot(expectedItem, mode, rawHint) {
@@ -3278,7 +3245,6 @@ function initHistoryPanel() {
     const ctx = precheckCtx();
     const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
     const shot = await precheckCaptureChatBlob();
-    precheckDebugSnapshotPreview(shot, expectedItem, rawHint);
 
     const fd = new FormData();
     fd.append("expected_item", String(expectedItem || ""));
@@ -3312,7 +3278,7 @@ function initHistoryPanel() {
     const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
     const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
     const looksLikeObtained = /obtained/i.test(rawText);
-    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 2500);
+    const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
 
     // During guided pre-check, trigger snapshot collection on:
     // - a likely self line/stub,
@@ -3347,9 +3313,9 @@ function initHistoryPanel() {
             };
           }
         } catch (innerErr) {
-          if (i === 2) throw innerErr;
+          if (i === 1) throw innerErr;
         }
-        if (i < 2) await new Promise(resolve => setTimeout(resolve, 140));
+        if (i < 1) await new Promise(resolve => setTimeout(resolve, 120));
       }
 
       precheck.backendOnline = true;
@@ -3672,10 +3638,10 @@ function parsePrecheckObservation(raw) {
     const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
     await precheckBestEffortSubmit("/api/precheck/start", payload);
 
-    scheduleNextPrecheckPrompt(800);
+    scheduleNextPrecheckPrompt(250);
   }
 
-  function scheduleNextPrecheckPrompt(delayMs = 2000) {
+  function scheduleNextPrecheckPrompt(delayMs = 500) {
     precheckResetTimers();
     precheck.promptTimer = setTimeout(() => {
       precheck.promptTimer = null;
@@ -3688,7 +3654,7 @@ function parsePrecheckObservation(raw) {
           if (precheck.mode === "ready_to_validate") {
             precheckSetFeed('Type "Validate!" in chat to complete', "warn");
           }
-        }, 1100);
+        }, 250);
         return;
       }
       precheck.lastPromptAt = Date.now();
@@ -3747,7 +3713,7 @@ function parsePrecheckObservation(raw) {
     precheck.promptTimer = setTimeout(() => {
       precheck.promptTimer = null;
       if (precheck.mode === "live") precheckSetFeed("Live tracking enabled", "ok");
-    }, 1100);
+    }, 250);
   }
 
   async function handlePrecheckCommand(raw) {
