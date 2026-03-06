@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-01-v1";
+  const BUILD_VERSION = "v2026-03-06-precheck-v8";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = true;
 ;
-  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
+  console.log("IRB v2026-03-06-precheck-v8 ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-01-v1`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v8`;
   } catch (e) {}
   const $ = (id) => document.getElementById(id);
 
@@ -3218,39 +3218,49 @@ function initHistoryPanel() {
     return false;
   }
 
-  function getOwnMessageContent(raw) {
-    let t = stripTimestampPrefix(raw);
-    t = stripChatPrefix(t);
 
-    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+function getOwnMessageContent(raw) {
+  let t = stripTimestampPrefix(raw);
+  t = stripChatPrefix(t);
 
-    const m = t.match(/^([^:]{1,120})\s*:\s*(.+)$/);
-    if (m) {
-      const speakerRaw = (m[1] || "").trim();
-      const msgRaw = (m[2] || "").trim();
-      if (!lockedIgnRaw) return msgRaw;
-      if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
+  const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
 
-      const speakerCollapsed = collapseIgnForMatch(speakerRaw);
-      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
-      if (speakerCollapsed && ignCollapsed && speakerCollapsed.includes(ignCollapsed)) return msgRaw;
-      return null;
-    }
+  const m = t.match(/^([^:]{1,160})\s*:\s*(.+)$/);
+  if (m) {
+    const speakerRaw = (m[1] || "").trim();
+    const msgRaw = (m[2] || "").trim();
+    if (!lockedIgnRaw) return msgRaw;
 
-    if (lockedIgnRaw) {
-      const collapsed = collapseIgnForMatch(t);
-      const ignCollapsed = collapseIgnForMatch(lockedIgnRaw);
-      if (collapsed && ignCollapsed && collapsed.includes(ignCollapsed)) {
-        const idx = t.lastIndexOf(":");
-        if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
-      }
-      return null;
-    }
+    if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
 
-    return t.trim();
+    const speakerCollapsed = collapseIgnForMatch(speakerRaw);
+    if (speakerCollapsed && lockedIgnCollapsed && speakerCollapsed.includes(lockedIgnCollapsed)) return msgRaw;
   }
 
-  function parsePrecheckCommand(raw) {
+  if (lockedIgnCollapsed) {
+    const lower = t.toLowerCase();
+    const obtainedIdx = lower.indexOf("i have obtained");
+    if (obtainedIdx >= 0) {
+      const before = t.slice(0, obtainedIdx);
+      const beforeCollapsed = collapseIgnForMatch(before);
+      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
+        return t.slice(obtainedIdx).trim();
+      }
+    }
+
+    const collapsed = collapseIgnForMatch(t);
+    if (collapsed && collapsed.includes(lockedIgnCollapsed)) {
+      const idx = t.lastIndexOf(":");
+      if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
+    }
+    return null;
+  }
+
+  return t.trim();
+}
+
+function parsePrecheckCommand(raw) {
     const msg = (getOwnMessageContent(raw) || "").trim();
     if (!msg) return null;
     if (/^pre[\s-]*check!?$/i.test(msg) || /^precheck!?$/i.test(msg)) return "start";
@@ -3259,51 +3269,77 @@ function initHistoryPanel() {
     return null;
   }
 
-  function parsePrecheckObservation(raw) {
-    const msg = String(getOwnMessageContent(raw) || "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!msg) return null;
-    if (!/i\s+have\s+obtained/i.test(msg)) return null;
+function parsePrecheckObservation(raw) {
+    const mode = precheck.mode;
+    const expected = precheckExpectedItem();
+    const pool = (mode === "collecting" && expected) ? [expected] : PRECHECK_ITEMS;
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    const lockedIgn = collapseIgnForMatch(lockedIgnRaw);
 
-    let m = msg.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
-    if (!m) return null;
+    function tryParseCandidate(candidate) {
+      let t = String(candidate || "").replace(/\s+/g, " ").trim();
+      if (!t) return null;
 
-    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
-    if (!qty) return null;
+      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
+      if (obtainedIdx < 0) return null;
 
-    let remainder = String(m[2] || "")
-      .replace(/[.!?]+$/g, "")
-      .replace(/\s+from\s+.+$/i, "")
-      .trim();
-    if (!remainder) return null;
+      const after = t.slice(obtainedIdx).trim();
+      const m = after.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+      if (!m) return null;
 
-    const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
-    let itemKey = normalizePrecheckItemName(remainder);
+      const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+      if (!Number.isFinite(qty) || qty <= 0) return null;
 
-    if (!itemKey) {
-      const expected = precheckExpectedItem();
-      const pool = expected ? [expected] : PRECHECK_ITEMS;
-      for (const item of pool) {
-        const aliases = item.aliases || [item.key];
-        if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
-          itemKey = item.key;
-          break;
+      let remainder = String(m[2] || "")
+        .replace(/[.!?]+$/g, "")
+        .replace(/\s+from\s+.+$/i, "")
+        .trim();
+      if (!remainder) return null;
+
+      const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+      let itemKey = normalizePrecheckItemName(remainder);
+
+      if (!itemKey) {
+        for (const item of pool) {
+          const aliases = item.aliases || [item.key];
+          if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+            itemKey = item.key;
+            break;
+          }
+        }
+      }
+
+      if (!itemKey) return null;
+      const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+      return {
+        itemKey,
+        label: item ? item.label : itemKey,
+        qty,
+        raw: after
+      };
+    }
+
+    let candidate = getOwnMessageContent(raw);
+
+    if (!candidate) {
+      let t = stripTimestampPrefix(String(raw || ""));
+      t = stripChatPrefix(t);
+      const obtainedIdx = t.toLowerCase().indexOf("i have obtained");
+      if (obtainedIdx >= 0) {
+        if (lockedIgn) {
+          const before = t.slice(0, obtainedIdx);
+          const beforeCollapsed = collapseIgnForMatch(before);
+          if (beforeCollapsed && beforeCollapsed.includes(lockedIgn)) {
+            candidate = t.slice(obtainedIdx).trim();
+          }
+        } else {
+          candidate = t.slice(obtainedIdx).trim();
         }
       }
     }
 
-    if (!itemKey) return null;
-
-    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
-    const parsed = {
-      itemKey,
-      label: item ? item.label : itemKey,
-      qty,
-      raw: msg
-    };
-    try { console.log("[precheck][parsed observation]", { raw, msg, parsed }); } catch (e) {}
-    return parsed;
+    if (!candidate) return null;
+    return tryParseCandidate(candidate);
   }
 
   async function postPrecheckJson(path, payload) {
