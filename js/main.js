@@ -1,4 +1,5 @@
 
+
 function __getImgProps(img) {
   // In this project we treat Alt1 captures and loaded templates as ImageData-like objects.
   // They already expose { width, height, data (RGBA) }.
@@ -14,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-02-28-v2";
+  const BUILD_VERSION = "v2026-03-06-precheck-v18k-single-hq";
 
 
   // ---------------------------------------------------------------------------
@@ -42,13 +43,18 @@ function __getImgProps(img) {
 
   // Debug: enable icon match debug arrays (used by chest scanning + manual top-10)
   // Set to false to disable heavy console.table output.
-  var DEBUG_ICON_MATCH = true;
+  var DEBUG_ICON_MATCH = false;
 ;
-  console.log("IRB v2026-02-27-barrows-iconmatch2 ✅");
+  console.log("IRB v2026-03-06-precheck-v18k-single-hq ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-02-27-2`;
+    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18k-single-hq`;
   } catch (e) {}
+
+  function __pcNow() {
+    try { return Math.round(performance.now()); } catch (e) { return Date.now(); }
+  }
+
   const $ = (id) => document.getElementById(id);
 
   const ui = {
@@ -168,6 +174,7 @@ btnCloseSettings: $("btnCloseSettings"),
   // API base is locked (hidden in UI)
   const LOCKED_API_BASE = (ui.apiBase && ui.apiBase.value) ? ui.apiBase.value : "";
   const getApiBase = () => LOCKED_API_BASE;
+  function getPrecheckApiBase() { return "https://api.rs3bingo.com"; }
 
   function loadSettings() {
     let s = {};
@@ -239,8 +246,66 @@ btnCloseSettings: $("btnCloseSettings"),
     } catch (e) {}
   }
 
-  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false) {
+  function precheckAudioCue(kind) {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      if (!_audioCtx) _audioCtx = new AudioCtx();
+      const ctx = _audioCtx;
+      const now = ctx.currentTime;
+
+      function tone(freq, start, dur, gain = 0.08, type = "sine") {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(freq, start);
+        g.gain.setValueAtTime(0.0001, start);
+        g.gain.exponentialRampToValueAtTime(gain, start + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        o.connect(g).connect(ctx.destination);
+        o.start(start);
+        o.stop(start + dur + 0.02);
+      }
+
+      switch (kind) {
+        case "start":
+          tone(740, now, 0.10, 0.06);
+          tone(988, now + 0.11, 0.12, 0.06);
+          break;
+        case "prompt":
+          tone(880, now, 0.08, 0.05, "square");
+          break;
+        case "recorded":
+          tone(880, now, 0.07, 0.06);
+          tone(1175, now + 0.08, 0.09, 0.06);
+          break;
+        case "validate":
+          tone(784, now, 0.08, 0.06);
+          tone(1047, now + 0.08, 0.10, 0.06);
+          tone(1319, now + 0.18, 0.12, 0.06);
+          break;
+        case "live":
+          tone(988, now, 0.08, 0.06);
+          tone(1319, now + 0.09, 0.12, 0.06);
+          break;
+        case "warn":
+          tone(440, now, 0.10, 0.05, "sawtooth");
+          break;
+        case "cancel":
+          tone(392, now, 0.08, 0.05);
+          tone(330, now + 0.09, 0.10, 0.05);
+          break;
+        default:
+          playChime();
+      }
+    } catch (e) {}
+  }
+
+  function showEvent(title, subtitle, level = "ok", flash = true, sound = false, isIdle = false, priority = FEED_PRIORITY.normal) {
     if (!ui.eventLine || !ui.eventTitle || !ui.eventSub) return;
+    if (priority < __eventFeedPriority) return;
+    if (isPrecheckUiActive() && priority < FEED_PRIORITY.precheck) return;
+    if (priority > __eventFeedPriority) setEventFeedPriority(priority);
 
     // Idle handling:
     // - Any non-idle event exits idle mode and resets the idle timer.
@@ -290,11 +355,28 @@ btnCloseSettings: $("btnCloseSettings"),
     };
   }
 
-  function addFeed(msg, level = "warn") {
+  
+  const FEED_PRIORITY = { normal: 1, precheck: 10 };
+  let __eventFeedPriority = FEED_PRIORITY.normal;
+
+  function isPrecheckUiActive() {
+    try { return !!(precheck && precheck.mode && precheck.mode !== "inactive"); } catch (e) { return false; }
+  }
+
+  function setEventFeedPriority(priority) {
+    __eventFeedPriority = Math.max(FEED_PRIORITY.normal, Number(priority || FEED_PRIORITY.normal));
+  }
+
+  function releaseEventFeedPriority() {
+    __eventFeedPriority = FEED_PRIORITY.normal;
+  }
+
+function addFeed(msg, level = "warn", source = "normal") {
     const isSubmitOk = level === "ok" && /^Submitted ✅/.test(msg);
     const title = msg.replace(/^Submitted ✅\s*/,"").replace(/^Drop:\s*/,"").trim();
     const subtitle = isSubmitOk ? "Submitted" : (level === "bad" ? "Error" : "Status");
-    showEvent(title || msg, subtitle, level, true, isSubmitOk);
+    const priority = source === "precheck" ? FEED_PRIORITY.precheck : FEED_PRIORITY.normal;
+    showEvent(title || msg, subtitle, level, true, isSubmitOk, false, priority);
 
     feedItems.unshift({ ts: nowTs(), msg, level });
     while (feedItems.length > FEED_MAX) feedItems.pop();
@@ -325,7 +407,7 @@ function __startIdleDots() {
   __stopIdleDots();
   __idleDotsTimer = setInterval(() => {
     try {
-      if (!__idleModeOn || !ui.eventSub) { __stopIdleDots(); return; }
+      if (!__idleModeOn || !ui.eventSub || isPrecheckUiActive()) { __stopIdleDots(); return; }
       __idleDotsPhase = (__idleDotsPhase + 1) % 4; // 0..3
       const dots = ".".repeat(__idleDotsPhase);
       ui.eventSub.textContent = "Waiting for drops" + dots;
@@ -334,6 +416,7 @@ function __startIdleDots() {
 }
 
 function showIdleRunning() {
+  if (isPrecheckUiActive()) return;
   // Only show idle when setup is ready (otherwise setup hints should stay visible)
   try { if (typeof isSetupReady === "function" && !isSetupReady()) return; } catch (e) {}
   if (__idleModeOn) return;
@@ -350,6 +433,7 @@ function startIdleTicker() {
     try {
       const now = Date.now();
       if (__idleModeOn) return;
+      if (isPrecheckUiActive()) return;
       if ((now - __lastNonIdleEventAt) >= idleMs) showIdleRunning();
     } catch (e) {}
   }, 700);
@@ -563,11 +647,11 @@ const CHEST_TEST = {
   featH: 16,                  // downsampled feature height
   acceptScore: 0.78,          // UI match threshold
   // Chest geometry relative to the matched topbar crop
-  chestWidth: 560,
-  chestHeight: 312,
+  chestWidth: 456,
+  chestHeight: 296,
   topbarInsetX: 38,           // (560 - templateW) / 2, templateW=485
   topbarInsetY: 0,
-  debug: true,
+  debug: false,
 };
 
 const BARROWS_TOPBAR_URL = assetUrl("assets/ui/barrows_topbar.png");
@@ -577,23 +661,39 @@ const BARROWS_CLOSE_PAD_T = 4;  // px from chest top edge to close template top 
 const BARROWS_CLOSE_ACCEPT = 0.90;
 const BARROWS_CLOSE_FEAT_W = 48;
 const BARROWS_CLOSE_FEAT_H = 52;
- const BARROWS_LOCK_DEBUG_OVERLAY = true; // draw anchor + chest rect on lock/validate (debug)
+ const BARROWS_LOCK_DEBUG_OVERLAY = false; // draw anchor + chest rect on lock/validate (debug)
 
 
 // --- Barrows Chest: user-locate via Alt+1, cache, validate, and scan (TEST) ---
 const BARROWS_CHEST_LOCK_KEY = "irb_barrowsChestLock_v1";
 
-// Slot/grid assumptions inside the chest window (can be tuned later)
+// Slot/grid assumptions inside the chest window (hardcoded inner scan boxes).
+// These are measured from your Barrows chest window and scaled by __chestScale(lock).
+// If you ever need to micro-adjust: tweak startX/startY/stepX/stepY/slotW/slotH.
 const BARROWS_CHEST_SLOTS = {
+  // Chest is 456px wide at CHEST_TEST.chestWidth. We scale from lock.w.
+  cols: 8,
+  rows: 4,
+
+  // Slot box size (captures around the icon). Keep ~32 for best template match.
+  slotW: 32,
+  slotH: 32,
+
+  // Top-left of slot[0] inside the chest (relative to chest top-left, scale=1.0)
+  startX: 15,
+  startY: 42,
+
+  // Step between slots (left-edge to left-edge / top-edge to top-edge), scale=1.0
+  stepX: 55,
+  stepY: 45,
+
+  // Legacy aliases used in a few places (do not remove)
   iconSz: 32,
-  max: 8,
-  // relative to chest top-left (at scale=1.0):
-  // These values are derived from the actual Barrows chest layout and then
-  // scaled from the topbar match scale to keep placement exact.
-  rowY: 40,          // y of icon row (top-left of icon)
-  startX: 27,        // x of first icon (top-left of icon)
-  spacing: 52,       // horizontal step between icons
+  max: 32,
+  rowY: 42,
+  spacing: 55,
 };
+
 // --- Barrows chest scaling helpers (prevents drift across templates/scales) ---
 function __chestScale(lock) {
   if (lock && typeof lock.scale === "number" && lock.scale > 0) return lock.scale;
@@ -659,46 +759,108 @@ function __irb_scoreGridRow(img, ox, oy, side, spacing, count) {
 // Find the *actual* first loot slot (grid origin) inside the locked chest rect.
 // Returns absolute screen coords {x,y,score} or null.
 function __irb_findBarrowsSlotGrid(lockRect) {
+  // Deterministic slot-grid anchor:
+  // Use the close-only lock as a rough bounding box, then *refine* by finding the actual slot border pattern
+  // in a tight search window near the expected row. This avoids false "slot-like" matches elsewhere.
   try {
-    const cap = __captureRect(lockRect.x, lockRect.y, lockRect.w, lockRect.h);
+    if (!window.alt1 || !alt1.capture) return null;
+
+    const cap = alt1.capture(lockRect.x|0, lockRect.y|0, lockRect.w|0, lockRect.h|0);
     if (!cap || !cap.data || !cap.width) return null;
 
-    const img = { data: cap.data, width: cap.width, height: cap.height };
+    const img = { data: cap.data, width: cap.width|0, height: cap.height|0 };
 
-    const side = BARROWS_CHEST_SLOTS.iconSz | 0;
-    const spacing = BARROWS_CHEST_SLOTS.spacing | 0;
-    const count = BARROWS_CHEST_SLOTS.max | 0;
+    // Use your current slot geometry as the *prior* (we only search around it).
+    const slotSide = (BARROWS_CHEST_SLOTS.iconSz|0) || 32;
+    const spacing  = (BARROWS_CHEST_SLOTS.spacing|0) || 52;
+    const maxSlots = (BARROWS_CHEST_SLOTS.max|0) || 8;
 
-    const xMin = 0;
-    const xMax = img.width - (side + (count - 1) * spacing) - 2;
+    // Expected origin in local coords (top-left of slot 0)
+    const expX = (BARROWS_CHEST_SLOTS.startX|0) || 0;
+    const expY = (BARROWS_CHEST_SLOTS.rowY|0) || 0;
 
-    // Barrows icon row is near the top portion of the window.
-    const yMin = __irb_clamp(Math.floor(img.height * 0.06), 6, img.height - 64);
-    const yMax = __irb_clamp(Math.floor(img.height * 0.35), yMin + 16, img.height - 40);
+    // Tight search window around expected (tuneable)
+    const xMin = __irb_clamp(expX - 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
+    const xMax = __irb_clamp(expX + 60, 0, img.width - (slotSide + (maxSlots-1)*spacing) - 2);
+    const yMin = __irb_clamp(expY - 40, 0, img.height - slotSide - 2);
+    const yMax = __irb_clamp(expY + 40, 0, img.height - slotSide - 2);
 
-    let best = { score: -1e18, x: 0, y: 0 };
+    function lumaAt(px, py) {
+      const idx = ((py|0) * img.width + (px|0)) * 4;
+      return __irb_luma(img.data, idx);
+    }
 
-    for (let y = yMin; y <= yMax; y += 2) {
-      // Coarse x scan
-      let coarse = { score: -1e18, x: 0 };
-      for (let x = xMin; x <= xMax; x += 4) {
-        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
-        if (s > coarse.score) coarse = { score: s, x };
+    // Score a single slot by checking that the 1px border is brighter than both inside & outside.
+    function scoreSlotAt(x, y) {
+      if (x < 2 || y < 2 || x + slotSide + 2 >= img.width || y + slotSide + 2 >= img.height) return -1e9;
+      const s = slotSide;
+
+      // sample 12 border locations
+      const pts = [
+        [x+1, y+1,  1,  1, -1, -1],
+        [x+s-2, y+1, -1,  1,  1, -1],
+        [x+1, y+s-2,  1, -1, -1,  1],
+        [x+s-2, y+s-2, -1, -1,  1,  1],
+
+        [x+(s>>1), y+0, 0,  1, 0, -1],
+        [x+(s>>1), y+s-1, 0, -1, 0,  1],
+        [x+0, y+(s>>1), 1, 0, -1, 0],
+        [x+s-1, y+(s>>1), -1, 0,  1, 0],
+
+        [x+Math.floor(s/3), y+0, 0,  1, 0, -1],
+        [x+Math.floor(2*s/3), y+0, 0,  1, 0, -1],
+        [x+0, y+Math.floor(s/3), 1, 0, -1, 0],
+        [x+0, y+Math.floor(2*s/3), 1, 0, -1, 0],
+      ];
+
+      let score = 0;
+      for (const [bx, by, inDx, inDy, outDx, outDy] of pts) {
+        const b = lumaAt(bx, by);
+        const inside = lumaAt(bx + inDx, by + inDy);
+        const outside = lumaAt(bx + outDx, by + outDy);
+        const ref = Math.max(inside, outside);
+        score += (b - ref);
       }
-      // Fine around coarse best
-      const fx0 = __irb_clamp(coarse.x - 8, xMin, xMax);
-      const fx1 = __irb_clamp(coarse.x + 8, xMin, xMax);
-      for (let x = fx0; x <= fx1; x += 1) {
-        const s = __irb_scoreGridRow(img, x, y, side, spacing, count);
+      return score;
+    }
+
+    function scoreRow(ox, oy) {
+      let s = 0;
+      for (let i = 0; i < maxSlots; i++) {
+        s += scoreSlotAt(ox + i*spacing, oy);
+      }
+      return s;
+    }
+
+    let best = { score: -1e18, x: expX, y: expY };
+
+    // coarse scan
+    for (let y = yMin; y <= yMax; y += 2) {
+      for (let x = xMin; x <= xMax; x += 3) {
+        const s = scoreRow(x, y);
         if (s > best.score) best = { score: s, x, y };
       }
     }
 
-    // Threshold depends on count; be conservative to avoid false anchors.
-    const minScore = 8 * count; // heuristic
-    if (best.score < minScore) return null;
+    // refine around best at 1px
+    const fx0 = __irb_clamp(best.x - 6, xMin, xMax);
+    const fx1 = __irb_clamp(best.x + 6, xMin, xMax);
+    const fy0 = __irb_clamp(best.y - 6, yMin, yMax);
+    const fy1 = __irb_clamp(best.y + 6, yMin, yMax);
 
-    return { x: (lockRect.x + best.x) | 0, y: (lockRect.y + best.y) | 0, score: best.score };
+    let refined = best;
+    for (let y = fy0; y <= fy1; y++) {
+      for (let x = fx0; x <= fx1; x++) {
+        const s = scoreRow(x, y);
+        if (s > refined.score) refined = { score: s, x, y };
+      }
+    }
+
+    // If we didn't find a convincing row, return null and fall back to offsets.
+    // Threshold is relative to the number of points (12*maxSlots); keep conservative.
+    if (refined.score < (maxSlots * 12 * 6)) return null;
+
+    return { x: (lockRect.x + refined.x)|0, y: (lockRect.y + refined.y)|0, score: refined.score };
   } catch (e) {
     console.warn("[IRB] grid anchor failed:", e);
     return null;
@@ -718,38 +880,43 @@ function __scaledChestSize(scale) {
 }
 function __barrowsSlotRects(lock) {
   const s = __chestScale(lock);
-  const icon = Math.round(BARROWS_CHEST_SLOTS.iconSz * s);
-  const dx   = Math.round(BARROWS_CHEST_SLOTS.spacing * s);
 
-  // Prefer pixel-detected grid origin if present (absolute coords), else fall back to constants.
-  let x0, y0;
-  if (lock && lock.grid && typeof lock.grid.x === "number" && typeof lock.grid.y === "number") {
-    x0 = Math.round((lock.grid.x - lock.x) * 1); // already in lock space at 100% scaling
-    y0 = Math.round((lock.grid.y - lock.y) * 1);
-  } else {
-    x0 = Math.round(BARROWS_CHEST_SLOTS.startX * s);
-    y0 = Math.round(BARROWS_CHEST_SLOTS.rowY * s);
-  }
+  const cols = (BARROWS_CHEST_SLOTS.cols|0) || 8;
+  const rows = (BARROWS_CHEST_SLOTS.rows|0) || 4;
+
+  const w  = Math.round((BARROWS_CHEST_SLOTS.slotW || BARROWS_CHEST_SLOTS.iconSz || 32) * s) | 0;
+  const h  = Math.round((BARROWS_CHEST_SLOTS.slotH || BARROWS_CHEST_SLOTS.iconSz || 32) * s) | 0;
+  const dx = Math.round((BARROWS_CHEST_SLOTS.stepX || BARROWS_CHEST_SLOTS.spacing || 55) * s) | 0;
+  const dy = Math.round((BARROWS_CHEST_SLOTS.stepY || 45) * s) | 0;
+
+  // Hardcoded grid origin inside the chest rect (capture-local coords)
+  const x0 = Math.round((BARROWS_CHEST_SLOTS.startX || 0) * s) | 0;
+  const y0 = Math.round((BARROWS_CHEST_SLOTS.startY || BARROWS_CHEST_SLOTS.rowY || 0) * s) | 0;
 
   const rects = [];
-  for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) rects.push({ x: x0 + i * dx, y: y0, w: icon, h: icon });
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      rects.push({ x: (x0 + c * dx) | 0, y: (y0 + r * dy) | 0, w, h });
+    }
+  }
   return rects;
 }
+
 // Barrows chest scan debug
-const CHEST_SCAN_DEBUG_OVERLAY = true;   // draw boxes over each scanned slot
-const CHEST_SCAN_DEBUG_TABLE = true;     // console.table per-slot results
+const CHEST_SCAN_DEBUG_OVERLAY = false;   // draw boxes over each scanned slot
+const CHEST_SCAN_DEBUG_TABLE = false;     // console.table per-slot results
 let __lastChestScanDebugAt = 0;
 
 // Best UX: scan once per chest open, with a short timeout.
-const CHEST_SCAN_TIMEOUT_MS = 3000;
-const CHEST_SCAN_INTERVAL_MS = 800;
+const CHEST_SCAN_TIMEOUT_MS = 1200;
+const CHEST_SCAN_INTERVAL_MS = 250;
 
 // Chest-specific matching thresholds (stricter than manual to avoid false positives)
 const CHEST_ICON_MATCH_OVERRIDES = {
   acceptScore: 0.70,     // require strong match for auto chest scan
   minGap: 0.04,
   minRatio: 1.08,
-  searchRadius: 30,   // allow local snap to the real icon center
+  searchRadius: 5,   // allow local snap to the real icon center
 };
 
 function __mixColorSafe(r, g, b) {
@@ -879,16 +1046,23 @@ function __locateBarrowsChestFromMouse() {
   const chestX = (absCloseX - (CHEST_TEST.chestWidth - tw - BARROWS_CLOSE_PAD_R)) | 0;
   const chestY = (absCloseY - BARROWS_CLOSE_PAD_T) | 0;
 
-  const lock = {
-    x: Math.max(0, chestX),
-    y: Math.max(0, chestY),
-    w: CHEST_TEST.chestWidth|0,
-    h: CHEST_TEST.chestHeight|0,
-    scale: 1.0,
-    savedAt: Date.now()
-  };
-  // Pixel-find the actual first loot slot inside the locked rect (optional but improves determinism).
-  lock.grid = __irb_findBarrowsSlotGrid(lock);
+  // shift lock to loot content origin (true grid origin)
+const CONTENT_SHIFT_X = 13;
+const CONTENT_SHIFT_Y = 36;
+
+const lock = {
+  x: Math.max(0, chestX),
+  y: Math.max(0, chestY),
+  w: CHEST_TEST.chestWidth|0,
+  h: CHEST_TEST.chestHeight|0,
+  scale: 1.0,
+  savedAt: Date.now()
+};
+  // Keep close anchor info for downstream debugging / grid refinement.
+  lock.close = { x: absCloseX, y: absCloseY, tw: tw, th: th, score: refined.score };
+
+// Pixel-find grid is unreliable for Barrows loot row (no real slot borders). Force tuned offsets.
+lock.grid = null;
 
 
 
@@ -896,14 +1070,12 @@ function __locateBarrowsChestFromMouse() {
     try {
       __overlayRectAbs(lock.x, lock.y, lock.w, lock.h, [255, 200, 0], 1200); // yellow = chest rect
 // Also draw expected icon slots so you can visually confirm alignment.
-const icon = BARROWS_CHEST_SLOTS.iconSz | 0;
-const absGX = (lock.grid && typeof lock.grid.x === "number") ? (lock.grid.x | 0) : ((lock.x + BARROWS_CHEST_SLOTS.startX) | 0);
-const absGY = (lock.grid && typeof lock.grid.y === "number") ? (lock.grid.y | 0) : ((lock.y + BARROWS_CHEST_SLOTS.rowY) | 0);
-for (let i = 0; i < BARROWS_CHEST_SLOTS.max; i++) {
-  const sx = (absGX + i * (BARROWS_CHEST_SLOTS.spacing | 0)) | 0;
-  const sy = absGY;
-  __overlayRectAbs(sx, sy, icon, icon, [255, 80, 80], 1200); // red = slot boxes
+const slots = __barrowsSlotRects(lock);
+for (let i = 0; i < slots.length; i++) {
+  const r = slots[i];
+  __overlayRectAbs((lock.x + (r.x|0))|0, (lock.y + (r.y|0))|0, (r.w|0), (r.h|0), [255, 80, 80], 1200); // red = slot boxes
 }
+
     } catch (e) {}
   }
 
@@ -935,6 +1107,8 @@ function __validateBarrowsChestLock(lock) {
   const th = __barrowsCloseT.h|0;
 
   const expCloseX = (lock.x + (lock.w - tw - BARROWS_CLOSE_PAD_R)) | 0;
+  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
+
   if (BARROWS_LOCK_DEBUG_OVERLAY) {
     try {
       __overlayRectAbs(expCloseX, expCloseY, tw, th, [0, 200, 255], 400); // cyan expected close
@@ -942,7 +1116,6 @@ function __validateBarrowsChestLock(lock) {
     } catch (e) {}
   }
 
-  const expCloseY = (lock.y + BARROWS_CLOSE_PAD_T) | 0;
 
   const cap = __captureRect(expCloseX, expCloseY, tw, th);
   if (!cap) return { ok:false, score:0 };
@@ -957,8 +1130,8 @@ function __validateBarrowsChestLock(lock) {
 
 // Chest scan slot occupancy + color logic
 const CHEST_SLOT_OCCUPANCY = {
-  featW: 16,
-  featH: 16,
+  featW: 8,
+  featH: 8,
   // variance threshold for "icon present" (tuned for Barrows chest dark background)
   minVar: 55,
   // edge energy threshold (backup)
@@ -1011,6 +1184,10 @@ function __scanBarrowsChestForDrops(lock) {
     ICON_MATCH.acceptScore = CHEST_ICON_MATCH_OVERRIDES.acceptScore;
     ICON_MATCH.minGap = CHEST_ICON_MATCH_OVERRIDES.minGap;
     ICON_MATCH.minRatio = CHEST_ICON_MATCH_OVERRIDES.minRatio;
+    // Use the same snap mechanism as manual submit: local dx/dy search around slot center
+    ICON_MATCH.snapRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;
+    ICON_MATCH.snapStep = CHEST_ICON_MATCH_OVERRIDES.snapStep ?? 1;
+    // (legacy) keep searchRadius in sync for any other call sites
     ICON_MATCH.searchRadius = CHEST_ICON_MATCH_OVERRIDES.searchRadius;  } catch (e) {}
 
   const hits = [];
@@ -1039,20 +1216,14 @@ const selection = {
 // Only attempt template match on occupied slots (saves CPU + reduces noise)
 const best = occ.occupied ? matchIconFromSelection(selection, __iconTemplates) : null;
 
-// Visual proof: draw slot boxes at the snapped position actually evaluated
+// Draw slot boxes at the FIXED GRID position (no snapping)
 if (CHEST_SCAN_DEBUG_OVERLAY) {
-  const dx = (best && typeof best.dx === "number") ? best.dx : 0;
-  const dy = (best && typeof best.dy === "number") ? best.dy : 0;
-  const ax = (lock.x + x + dx)|0;
-  const ay = (lock.y + y + dy)|0;
+  const ax = (lock.x + x)|0;
+  const ay = (lock.y + y)|0;
 
   const isBarrows = !!(best && best.accepted && validateDropName(best.name));
   const nearMiss = !!(occ.occupied && best && !isBarrows && best.score >= CHEST_SLOT_OCCUPANCY.nearMissScore);
 
-  // Color scheme:
-  // - Green: accepted Barrows unique
-  // - Red: near-miss (looked close but failed)
-  // - Gray: empty slot or junk / low-confidence
   const col = isBarrows ? [0, 220, 0] : (nearMiss ? [220, 0, 0] : [140, 140, 140]);
   __overlayRectAbs(ax, ay, iconSz, iconSz, col, 280);
 }
@@ -1079,9 +1250,11 @@ if (CHEST_SCAN_DEBUG_OVERLAY) {
 
     if (!best || !best.accepted) continue;
 
-    // Only include actual Barrows list drops (validateDropName handles allowlist)
-    if (!validateDropName(best.name)) continue;
-    hits.push({ name: best.name, score: best.score });
+// Only include actual Barrows list drops (validateDropName handles allowlist)
+if (!validateDropName(best.name)) continue;
+
+// EARLY EXIT (fastest safe placement)
+return [{ name: best.name, score: best.score }];
   }
 
   // Console proof: print one table per ~1s to avoid spam
@@ -2168,7 +2341,10 @@ async function manualSubmitFlow() {
 
   const capSize = (ICON_MATCH.hoverCaptureSize == null ? 220 : ICON_MATCH.hoverCaptureSize) | 0;
   const cap = __captureAroundMouse(capSize);
-  try { if (alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch (e) {}
+  try {
+  if (alt1 && typeof alt1.clearTooltip === "function")
+    alt1.clearTooltip();
+} catch (e) {}
 
   if (!cap) {
     showEvent("Manual submit", "Capture failed (mouse position / capture unavailable).", "warn", true, true);
@@ -2210,6 +2386,19 @@ async function manualSubmitFlow() {
     await submitDrop({ drop_name: chosen, amount: String(qty) });
     showEvent("Manual submit", `Submitted: ${chosen} x${qty}`, "ok", true, true);
     playBeep("ok");
+    // 3-second mouse bubble
+try {
+  if (window.alt1 && typeof alt1.setTooltip === "function") {
+    alt1.setTooltip("Submitted successfully!");
+    setTimeout(() => {
+      try {
+        if (typeof alt1.clearTooltip === "function") {
+          alt1.clearTooltip();
+        }
+      } catch (e) {}
+    }, 3000);
+  }
+} catch (e) {}
   } catch (e) {
     showEvent("Manual submit", "Submit failed: " + (e && e.message ? e.message : e), "warn", true, true);
   }
@@ -2811,7 +3000,12 @@ function initHistoryPanel() {
     if (ui.btnLockSetup) ui.btnLockSetup.disabled = true;
 
     try {
-      const res = await fetch(`${base}/api/bingos`, { method: "GET", credentials: "omit" });
+      const ign = (ui.ign?.value || localStorage.getItem(LS.ign) || "").trim();
+      const ignLocked = (localStorage.getItem(LS.ignLocked) === "1");
+      const endpoint = (ignLocked && ign)
+        ? `/api/resolve-bingos?ign=${encodeURIComponent(ign)}`
+        : `/api/bingos`;
+      const res = await fetch(`${base}${endpoint}`, { method: "GET", credentials: "omit" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
 
@@ -2970,6 +3164,803 @@ function initHistoryPanel() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return true;
   }
+
+
+  // ---------- guided pre-check baseline tracking ----------
+  const PRECHECK_ITEMS = [
+    { key: "tectonic energy", label: "Tectonic energy", aliases: ["tectonic energy"] },
+    { key: "draconic energy", label: "Draconic energy", aliases: ["draconic energy"] },
+    { key: "malevolent energy", label: "Malevolent energy", aliases: ["malevolent energy"] },
+    { key: "black stone heart", label: "Black stone heart", aliases: ["black stone heart", "black stone hearts"] },
+    { key: "ancient scale", label: "Ancient scale", aliases: ["ancient scale", "ancient scales"] },
+    { key: "dark nilas", label: "Dark Nilas", aliases: ["dark nilas", "nilas"] },
+  ];
+
+  const precheck = {
+    mode: "inactive", // inactive | collecting | ready_to_validate | live
+    sessionId: null,
+    currentIndex: 0,
+    promptTimer: null,
+    lastPromptAt: 0,
+    lastHandledKeys: new Map(),
+    captured: {},         // key -> qty
+    liveHighest: {},      // key -> highest observed qty post-validation
+    startedAtIso: null,
+    validatedAtIso: null,
+    lastFeed: "",
+    backendOnline: null,
+    lastCommandKey: "",
+    lastCommandAt: 0,
+    snapshotBusy: false,
+    snapshotLastAt: 0,
+    snapshotLastKey: "",
+  };
+
+  function precheckCtx() {
+    const bingo_id = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+    const team_no = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
+    const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim() || "Unknown";
+    return { bingo_id, team_no, ign };
+  }
+
+  function precheckResetTimers() {
+    if (precheck.promptTimer) {
+      try { clearTimeout(precheck.promptTimer); } catch (e) {}
+    }
+    precheck.promptTimer = null;
+  }
+
+  function precheckMakeSessionId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return "pc_" + window.crypto.randomUUID().replace(/-/g, "").slice(0, 12);
+      }
+    } catch (e) {}
+    return "pc_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+
+  function precheckExpectedItem() {
+    return PRECHECK_ITEMS[precheck.currentIndex] || null;
+  }
+
+  function precheckSetFeed(msg, level = "warn") {
+    if (precheck.lastFeed === msg) return;
+    precheck.lastFeed = msg;
+    setEventFeedPriority(FEED_PRIORITY.precheck);
+    addFeed(msg, level, "precheck");
+  }
+
+  function precheckIsTriggeredObtainedLine(raw) {
+    const own = String(getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/\bi\s*have\s*obtained\b/i.test(own)) return true;
+
+    const t = String(raw || "");
+    const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
+    if (!ign) return /\bi\s*have\s*obtained\b/i.test(t);
+    return /\bi\s*have\s*obtained\b/i.test(t) && collapseIgnForMatch(t).includes(ign);
+  }
+
+  function precheckGetChatRect() {
+    try {
+      const pos = chatReader && chatReader.pos ? chatReader.pos : loadChatPos();
+      if (!pos) return null;
+      const rect = pos.mainbox && pos.mainbox.rect ? pos.mainbox.rect : (pos.rect ? pos.rect : pos);
+      if (!rect) return null;
+      const x = rect.x | 0;
+      const y = rect.y | 0;
+      const w = (rect.width || rect.w || 0) | 0;
+      const h = (rect.height || rect.h || 0) | 0;
+      if (w <= 0 || h <= 0) return null;
+      return { x, y, w, h };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  async function precheckCaptureChatBlob() {
+    const rect = precheckGetChatRect();
+    if (!rect) throw new Error("chat_rect_unavailable");
+    if (!(window.A1lib && typeof A1lib.capture === "function")) throw new Error("capture_unavailable");
+    if (!window.alt1 || !alt1.permissionPixel) throw new Error("pixel_permission_missing");
+
+    // One stronger snapshot: focus on the newest line area near the bottom of the chatbox,
+    // keep useful width, add modest padding, and encode at higher JPEG quality.
+    const padX = Math.max(10, Math.round(rect.w * 0.03));
+    const bandTop = Math.max(0, Math.round(rect.h * 0.62));
+    const bandBottom = Math.min(rect.h, Math.round(rect.h * 0.98));
+
+    const x = Math.max(0, (rect.x - padX) | 0);
+    const y = Math.max(0, (rect.y + bandTop) | 0);
+    const w = Math.max(64, (rect.w + padX * 2) | 0);
+    const h = Math.max(28, (bandBottom - bandTop) | 0);
+
+    let img = null;
+    try { img = A1lib.capture(x, y, w, h); } catch (e) {}
+    const props = __getImgProps(img);
+    if (!props) throw new Error("capture_failed");
+
+    const srcCanvas = document.createElement("canvas");
+    srcCanvas.width = props.width | 0;
+    srcCanvas.height = props.height | 0;
+    const sctx = srcCanvas.getContext("2d", { willReadFrequently: true });
+    const id = sctx.createImageData(props.width | 0, props.height | 0);
+    id.data.set(props.data);
+    sctx.putImageData(id, 0, 0);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, (props.width | 0) * 2);
+    canvas.height = Math.max(1, (props.height | 0) * 2);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(srcCanvas, 0, 0, canvas.width, canvas.height);
+
+    const blob = await new Promise((resolve, reject) => {
+      try {
+        canvas.toBlob((b) => b ? resolve(b) : reject(new Error("blob_encode_failed")), "image/jpeg", 0.92);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    return { blob, rect: { x, y, w, h, scaled_w: canvas.width, scaled_h: canvas.height } };
+  }
+
+  let __precheckLastSnapshotPreviewUrl = null;
+  function precheckDebugSnapshotPreview(_shot, _expectedItem, _rawHint) {
+    return;
+  }
+
+  async function postPrecheckSnapshot(expectedItem, mode, rawHint) {
+    const base = getPrecheckApiBase();
+    const ctx = precheckCtx();
+    const url = `${base}/b/${ctx.bingo_id}/api/precheck/snapshot`;
+    const shot = await precheckCaptureChatBlob();
+    precheckDebugSnapshotPreview(shot, expectedItem, rawHint);
+
+    const fd = new FormData();
+    fd.append("expected_item", String(expectedItem || ""));
+    fd.append("ign", ctx.ign);
+    fd.append("team_no", String(ctx.team_no || 0));
+    fd.append("session_id", String(precheck.sessionId || ""));
+    fd.append("mode", String(mode || ""));
+    fd.append("client_ts", new Date().toISOString());
+    if (rawHint) fd.append("raw_hint", String(rawHint));
+    fd.append("image", shot.blob, "precheck-chat.jpg");
+
+    const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    try {
+      return await res.json();
+    } catch (e) {
+      return { ok: true, matched: false, reason: "bad_snapshot_json" };
+    }
+  }
+
+  async function tryCollectPrecheckViaSnapshot(raw) {
+  if (precheck.mode !== "collecting") return null;
+
+  const expected = precheckExpectedItem();
+  if (!expected) return null;
+
+  const now = Date.now();
+  const rawText = String(raw || "");
+  const collapsedRaw = collapseIgnForMatch(rawText);
+
+  const ign = collapseIgnForMatch((localStorage.getItem(LS.ign) || ui.ign?.value || "").trim());
+  const looksLikeSelf = !!(ign && collapsedRaw && collapsedRaw.includes(ign));
+  const looksLikeObtained = /obtained/i.test(rawText);
+  const withinPromptWindow = !!(precheck.lastPromptAt && (now - precheck.lastPromptAt) < 1600);
+
+  if (!withinPromptWindow && !looksLikeSelf && !looksLikeObtained) return null;
+
+  const triggerKey = ((collapsedRaw || rawText.trim().toLowerCase()) + "||" + expected.key);
+  if (precheck.snapshotBusy) return { handled: true, matched: false, busy: true };
+  if (precheck.snapshotLastKey === triggerKey && (now - precheck.snapshotLastAt) < 1600) {
+    return { handled: true, matched: false, duplicate: true };
+  }
+
+  precheck.snapshotBusy = true;
+  precheck.snapshotLastKey = triggerKey;
+  precheck.snapshotLastAt = now;
+
+  try {
+    const snapStart = __pcNow();
+    const out = await postPrecheckSnapshot(expected.key, "baseline", rawText);
+    const snapDone = __pcNow();
+
+    try {
+      console.log("[precheck][timing] snapshot_done", {
+        ms: snapDone - snapStart,
+        matched: !!(out && out.matched),
+        expected: expected.key,
+        out
+      });
+    } catch (e) {}
+
+    if (
+      out &&
+      out.matched &&
+      out.item_name === expected.key &&
+      Number.isFinite(Number(out.observed_qty))
+    ) {
+      precheck.backendOnline = true;
+      return {
+        handled: true,
+        matched: true,
+        itemKey: expected.key,
+        label: expected.label,
+        qty: Number(out.observed_qty),
+        raw: String((out && out.raw_text) || rawText || "")
+      };
+    }
+
+    precheck.backendOnline = true;
+    try {
+      console.log("[precheck][snapshot miss]", { expected: expected.key, raw: rawText, out });
+    } catch (e) {}
+
+    return {
+      handled: true,
+      matched: false,
+      reason: out && out.reason ? out.reason : "snapshot_no_match",
+      raw: out && out.raw_text ? out.raw_text : ""
+    };
+  } catch (e) {
+    precheck.backendOnline = false;
+    try {
+      console.warn("[precheck][snapshot unavailable]", expected.key, e);
+    } catch (ee) {}
+    return null;
+  } finally {
+    precheck.snapshotBusy = false;
+  }
+}
+
+  function normalizePrecheckItemName(name) {
+    const t = String(name || "")
+      .toLowerCase()
+      .replace(/[.,!?]+$/g, "")
+      .replace(/\s+from.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!t) return "";
+    for (const item of PRECHECK_ITEMS) {
+      for (const alias of item.aliases) {
+        if (t === alias) return item.key;
+      }
+    }
+    return "";
+  }
+
+  function getObservationLineKey(raw, parsed) {
+    const qty = parsed && parsed.qty != null ? String(parsed.qty) : "";
+    const item = parsed && parsed.itemKey ? parsed.itemKey : "";
+    return (String(raw || "").trim() + "||" + item + "||" + qty).toLowerCase();
+  }
+
+  function precheckSeenRecently(raw, parsed, windowMs = 3500) {
+    const key = getObservationLineKey(raw, parsed);
+    const now = Date.now();
+    const last = precheck.lastHandledKeys.get(key) || 0;
+    if (now - last < windowMs) return true;
+    precheck.lastHandledKeys.set(key, now);
+
+    if (precheck.lastHandledKeys.size > 250) {
+      for (const [k, ts] of precheck.lastHandledKeys) {
+        if (now - ts > 20000) precheck.lastHandledKeys.delete(k);
+      }
+    }
+    return false;
+  }
+
+  function collapseIgnForMatch(raw) {
+    return String(raw || "")
+      .normalize("NFKD")
+      .replace(/[㊉☠⚔✦✪★☆•·▪▫◦◉⬤⬥⬦◆◇■□▲△▼▽]+/g, " ")
+      .replace(/[^A-Za-z0-9]+/g, "")
+      .toLowerCase();
+  }
+
+  function escapeRegex(raw) {
+    return String(raw || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  
+function buildIgnLoosePattern(rawIgn) {
+  const parts = String(rawIgn || "")
+    .match(/[A-Za-z0-9]+/g);
+  if (!parts || !parts.length) return "";
+  const sep = "[^A-Za-z0-9]{0,6}";
+  return parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(sep);
+}
+
+function buildIgnGlyphPattern(rawIgn) {
+  const chars = (String(rawIgn || "").match(/[A-Za-z0-9]/g) || []);
+  if (!chars.length) return "";
+  return chars
+    .map(ch => String(ch).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^A-Za-z0-9]{0,4}");
+}
+
+
+
+  function sanitizeSpeakerSegment(raw) {
+    return String(raw || "")
+      .normalize("NFKD")
+      .replace(/[㊉☠⚔✦✪★☆•·▪▫◦◉⬤⬥⬦◆◇■□▲△▼▽]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function speakerMatchesLockedIgn(rawSpeaker, rawIgn) {
+    const speaker = collapseIgnForMatch(sanitizeSpeakerSegment(rawSpeaker));
+    const ign = collapseIgnForMatch(rawIgn);
+    if (!speaker || !ign) return false;
+    if (speaker === ign) return true;
+    if (speaker.startsWith(ign) || speaker.endsWith(ign)) return true;
+    if (speaker.includes(ign)) return true;
+    return false;
+  }
+
+
+function getOwnMessageContent(raw) {
+  let t = stripTimestampPrefix(raw);
+  t = stripChatPrefix(t);
+
+  const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+  const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
+
+  const m = t.match(/^([^:;]{1,200})\s*[:;]\s*(.+)$/);
+  if (m) {
+    const speakerRaw = sanitizeSpeakerSegment((m[1] || "").trim());
+    const msgRaw = (m[2] || "").trim();
+    if (!lockedIgnRaw) return msgRaw;
+
+    if (speakerMatchesLockedIgn(speakerRaw, lockedIgnRaw)) return msgRaw;
+
+    const speakerCollapsed = collapseIgnForMatch(speakerRaw);
+    if (speakerCollapsed && lockedIgnCollapsed && speakerCollapsed.includes(lockedIgnCollapsed)) return msgRaw;
+  }
+
+  if (lockedIgnCollapsed) {
+    const lower = t.toLowerCase();
+    const obtainedIdx = lower.indexOf("i have obtained");
+    if (obtainedIdx >= 0) {
+      const before = t.slice(0, obtainedIdx);
+      const beforeCollapsed = collapseIgnForMatch(before);
+      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
+        return t.slice(obtainedIdx).trim();
+      }
+    }
+
+    const collapsed = collapseIgnForMatch(t);
+    if (collapsed && collapsed.includes(lockedIgnCollapsed)) {
+      const idx = t.lastIndexOf(":");
+      if (idx >= 0 && idx < t.length - 1) return t.slice(idx + 1).trim();
+    }
+    return null;
+  }
+
+  return t.trim();
+}
+
+
+function extractPrecheckObtainedMessage(raw) {
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim();
+    const lockedIgnCollapsed = collapseIgnForMatch(lockedIgnRaw);
+    const source = String(raw || "");
+    const candidates = [
+      stripChatPrefix(stripTimestampPrefix(source)),
+      stripTimestampPrefix(source),
+      source
+    ];
+
+    const own = (getOwnMessageContent(raw) || "").replace(/\s+/g, " ").trim();
+    if (/^i\s+have\s+obtained\b/i.test(own)) return own;
+
+    const ignLoose = buildIgnLoosePattern(lockedIgnRaw);
+    const ignGlyph = buildIgnGlyphPattern(lockedIgnRaw);
+
+    for (const candidateRaw of candidates) {
+      const candidate = String(candidateRaw || "").replace(/\s+/g, " ").trim();
+      if (!candidate) continue;
+
+      if (lockedIgnRaw && ignLoose) {
+        const rxLoose = new RegExp("^.*?(" + ignLoose + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const mLoose = candidate.match(rxLoose);
+        if (mLoose) return String(mLoose[2] || "").trim();
+      }
+
+      if (lockedIgnRaw && ignGlyph) {
+        const rxGlyph = new RegExp("^.*?(" + ignGlyph + "(?:[^:;]{0,16})?)\\s*[:;]\\s*(I\\s+have\\s+obtained\\s+[\\d,]+\\s+.+)$", "i");
+        const mGlyph = candidate.match(rxGlyph);
+        if (mGlyph) return String(mGlyph[2] || "").trim();
+      }
+
+      const direct = candidate.match(/^(.*?)\s*[:;]\s*(I\s+have\s+obtained\s+[\d,]+\s+.+)$/i);
+      if (direct) {
+        const speaker = sanitizeSpeakerSegment(direct[1] || "");
+        const msg = String(direct[2] || "").trim();
+        if (!lockedIgnRaw || speakerMatchesLockedIgn(speaker, lockedIgnRaw)) {
+          return msg;
+        }
+      }
+
+      const obtainedIdx = candidate.toLowerCase().indexOf("i have obtained");
+      if (obtainedIdx < 0) continue;
+
+      const after = candidate.slice(obtainedIdx).trim();
+      if (!/^i\s+have\s+obtained\s+[\d,]+\s+.+/i.test(after)) continue;
+
+      if (!lockedIgnCollapsed) return after;
+
+      const before = sanitizeSpeakerSegment(candidate.slice(0, obtainedIdx));
+      const beforeCollapsed = collapseIgnForMatch(before);
+      if (beforeCollapsed && beforeCollapsed.includes(lockedIgnCollapsed)) {
+        return after;
+      }
+    }
+
+    try {
+      const expected = precheckExpectedItem && precheckExpectedItem();
+      const lc = String(source || "").toLowerCase();
+      if (expected && lc.includes("i have obtained")) {
+        const aliases = expected.aliases || [expected.key];
+        const matchesExpected = aliases.some(alias => lc.includes(String(alias).toLowerCase()));
+        if (matchesExpected) {
+          console.log("[precheck][extract miss]", { raw: source, own, lockedIgnRaw, expected: expected.key });
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+function parsePrecheckCommand(raw) {
+    const msg = (getOwnMessageContent(raw) || "").trim();
+    if (!msg) return null;
+    if (/^pre[\s-]*check!?$/i.test(msg) || /^precheck!?$/i.test(msg)) return "start";
+    if (/^validate!?$/i.test(msg)) return "validate";
+    if (/^cancel[\s-]*precheck!?$/i.test(msg) || /^cancelprecheck!?$/i.test(msg)) return "cancel";
+    return null;
+  }
+
+function parsePrecheckObservation(raw) {
+    const mode = precheck.mode;
+    const expected = precheckExpectedItem();
+    const pool = (mode === "collecting" && expected) ? [expected] : PRECHECK_ITEMS;
+
+    const candidate = extractPrecheckObtainedMessage(raw);
+    if (!candidate) return null;
+
+    let t = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (!t) return null;
+
+    const m = t.match(/^I\s+have\s+obtained\s+([\d,]+)\s+(.+)$/i);
+    if (!m) return null;
+
+    const qty = parseInt(String(m[1] || "").replace(/,/g, ""), 10);
+    if (!Number.isFinite(qty) || qty <= 0) return null;
+
+    let remainder = String(m[2] || "")
+      .replace(/[.!?]+$/g, "")
+      .replace(/\s+from\s+.+$/i, "")
+      .trim();
+    if (!remainder) return null;
+
+    const normalizedRemainder = remainder.toLowerCase().replace(/\s+/g, " ").trim();
+    let itemKey = normalizePrecheckItemName(remainder);
+
+    if (!itemKey) {
+      for (const item of pool) {
+        const aliases = item.aliases || [item.key];
+        if (aliases.some(alias => normalizedRemainder.includes(String(alias).toLowerCase()))) {
+          itemKey = item.key;
+          break;
+        }
+      }
+    }
+
+    if (!itemKey) return null;
+    const item = PRECHECK_ITEMS.find(x => x.key === itemKey);
+    try { console.log("[precheck][parsed observation]", { raw, candidate: t, itemKey, qty }); } catch (e) {}
+    return {
+      itemKey,
+      label: item ? item.label : itemKey,
+      qty,
+      raw: t
+    };
+  }
+
+  async function postPrecheckJson(path, payload) {
+    const base = getPrecheckApiBase();
+    const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
+    const url = `${base}/b/${bingoId}${path}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "omit",
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    precheck.backendOnline = true;
+    try { return await res.json(); } catch (e) { return { ok: true }; }
+  }
+
+  async function precheckBestEffortSubmit(path, payload) {
+    try {
+      const out = await postPrecheckJson(path, payload);
+      return out;
+    } catch (e) {
+      precheck.backendOnline = false;
+      console.warn("[precheck] backend unavailable for", path, payload, e);
+      return null;
+    }
+  }
+
+  async function startPrecheck() {
+    if (precheck.mode && precheck.mode !== "inactive") {
+      return;
+    }
+    precheckResetTimers();
+    precheck.mode = "collecting";
+    precheck.sessionId = precheckMakeSessionId();
+    precheck.currentIndex = 0;
+    precheck.captured = {};
+    precheck.liveHighest = {};
+    precheck.startedAtIso = new Date().toISOString();
+    precheck.validatedAtIso = null;
+    precheck.lastFeed = "";
+    __idleModeOn = false;
+    __stopIdleDots();
+    try { ui.eventLine && ui.eventLine.classList.remove("idle"); } catch (e) {}
+    precheckSetFeed("Pre-check mode enabled", "ok");
+    precheckAudioCue("start");
+
+    const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: precheck.startedAtIso };
+    await precheckBestEffortSubmit("/api/precheck/start", payload);
+
+    scheduleNextPrecheckPrompt(250);
+  }
+
+  function scheduleNextPrecheckPrompt(delayMs = 500) {
+    precheckResetTimers();
+    precheck.promptTimer = setTimeout(() => {
+      precheck.promptTimer = null;
+      const expected = precheckExpectedItem();
+      if (!expected) {
+        precheck.mode = "ready_to_validate";
+        precheckSetFeed('All items recorded', "ok");
+        precheck.promptTimer = setTimeout(() => {
+          precheck.promptTimer = null;
+          if (precheck.mode === "ready_to_validate") {
+            precheckSetFeed('Type "Validate!" in chat to complete', "warn");
+            precheckAudioCue("prompt");
+          }
+        }, 250);
+        return;
+      }
+      precheck.lastPromptAt = Date.now();
+      precheckSetFeed(`Quick chat ${expected.label}`, "warn");
+      precheckAudioCue("prompt");
+    }, Math.max(0, delayMs));
+  }
+
+  async function cancelPrecheck(showFeedMsg = true) {
+    const payload = { ...precheckCtx(), session_id: precheck.sessionId, client_ts: new Date().toISOString() };
+    if (precheck.sessionId) await precheckBestEffortSubmit("/api/precheck/cancel", payload);
+
+    precheckResetTimers();
+    precheck.mode = "inactive";
+    releaseEventFeedPriority();
+    precheck.sessionId = null;
+    precheck.currentIndex = 0;
+    precheck.captured = {};
+    precheck.liveHighest = {};
+    precheck.validatedAtIso = null;
+    precheck.lastFeed = "";
+    if (showFeedMsg) {
+      precheckSetFeed("Pre-check cancelled", "warn");
+      precheckAudioCue("cancel");
+    }
+  }
+
+  async function validatePrecheck() {
+    if (precheck.mode !== "ready_to_validate" && precheck.mode !== "collecting") {
+      precheckSetFeed("No active pre-check to validate", "warn");
+      precheckAudioCue("warn");
+      return;
+    }
+
+    const missing = PRECHECK_ITEMS.filter(item => !(item.key in precheck.captured));
+    if (missing.length) {
+      precheckSetFeed(`Missing: ${missing.map(x => x.label).join(", ")}`, "warn");
+      precheckAudioCue("warn");
+      return;
+    }
+
+    const items = PRECHECK_ITEMS.map(item => ({
+      item_name: item.key,
+      baseline_qty: Number(precheck.captured[item.key] || 0)
+    }));
+
+    const payload = {
+      ...precheckCtx(),
+      session_id: precheck.sessionId,
+      client_ts: new Date().toISOString(),
+      items
+    };
+
+    await precheckBestEffortSubmit("/api/precheck/validate", payload);
+
+    precheck.mode = "live";
+    precheck.validatedAtIso = payload.client_ts;
+    precheck.liveHighest = { ...precheck.captured };
+    precheckResetTimers();
+    precheck.lastFeed = "";
+    precheckSetFeed("Validated!", "ok");
+    precheckAudioCue("validate");
+    precheck.promptTimer = setTimeout(() => {
+      precheck.promptTimer = null;
+      if (precheck.mode === "live") {
+        precheckSetFeed("Live tracking enabled", "ok");
+        precheckAudioCue("live");
+      }
+    }, 250);
+  }
+
+  async function handlePrecheckCommand(raw) {
+    const cmd = parsePrecheckCommand(raw);
+    if (!cmd) return false;
+
+    const now = Date.now();
+    const dedupeKey = `${cmd}::${String(raw || "").trim().toLowerCase()}`;
+    if (precheck.lastCommandKey === dedupeKey && (now - precheck.lastCommandAt) < 10000) return true;
+    precheck.lastCommandKey = dedupeKey;
+    precheck.lastCommandAt = now;
+
+    if (cmd === "start") {
+      if (precheck.mode && precheck.mode !== "inactive") return true;
+      await startPrecheck();
+      return true;
+    }
+    if (cmd === "cancel") {
+      await cancelPrecheck(true);
+      return true;
+    }
+    if (cmd === "validate") {
+      await validatePrecheck();
+      return true;
+    }
+    return false;
+  }
+
+  async function handlePrecheckObservation(raw) {
+    const __t0 = __pcNow();
+    try { console.log("[precheck][timing] trigger", __t0, raw); } catch (e) {}
+    if (precheck.mode !== "collecting" && precheck.mode !== "live") return false;
+
+    if (precheck.mode === "collecting") {
+      const snapshotParsed = await tryCollectPrecheckViaSnapshot(raw);
+      if (snapshotParsed && snapshotParsed.handled) {
+        if (!snapshotParsed.matched) {
+          if (snapshotParsed.reason && !snapshotParsed.busy && !snapshotParsed.duplicate) {
+            precheck.lastFeed = "";
+            precheckSetFeed(`Not detected, quick chat ${precheckExpectedItem() ? precheckExpectedItem().label : "item"} again`, "warn");
+            precheckAudioCue("warn");
+          }
+          return true;
+        }
+
+        const parsed = {
+          itemKey: snapshotParsed.itemKey,
+          label: snapshotParsed.label,
+          qty: snapshotParsed.qty,
+          raw: snapshotParsed.raw
+        };
+        if (precheckSeenRecently(raw, parsed)) return true;
+
+        precheck.captured[parsed.itemKey] = parsed.qty;
+        const payload = {
+          ...precheckCtx(),
+          session_id: precheck.sessionId,
+          item_name: parsed.itemKey,
+          observed_qty: parsed.qty,
+          raw_text: parsed.raw || raw,
+          source: "baseline",
+          client_ts: new Date().toISOString()
+        };
+        await precheckBestEffortSubmit("/api/precheck/baseline", payload);
+
+        try { console.log("[precheck][recorded baseline snapshot]", { raw, parsed }); } catch (e) {}
+        try {
+          const __done = __pcNow();
+          console.log("[precheck][timing] recorded", {
+            total_ms: __done - __t0,
+            item: parsed.itemKey,
+            qty: parsed.qty,
+            source: "snapshot"
+          });
+        } catch (e) {}
+        precheck.lastFeed = "";
+        precheckSetFeed(`${parsed.label} x ${parsed.qty} recorded`, "ok");
+        precheckAudioCue("recorded");
+        precheck.currentIndex += 1;
+        scheduleNextPrecheckPrompt(500);
+        return true;
+      }
+    }
+
+    const parsed = parsePrecheckObservation(raw);
+    if (!parsed) return false;
+    if (precheckSeenRecently(raw, parsed)) return true;
+
+    if (precheck.mode === "collecting") {
+      const expected = precheckExpectedItem();
+      if (!expected) return true;
+      if (parsed.itemKey !== expected.key) {
+        try { console.log("[precheck][unexpected item while collecting]", { raw, parsed, expected: expected.key }); } catch (e) {}
+        return true;
+      }
+
+      precheck.captured[parsed.itemKey] = parsed.qty;
+      const payload = {
+        ...precheckCtx(),
+        session_id: precheck.sessionId,
+        item_name: parsed.itemKey,
+        observed_qty: parsed.qty,
+        raw_text: raw,
+        source: "baseline",
+        client_ts: new Date().toISOString()
+      };
+      await precheckBestEffortSubmit("/api/precheck/baseline", payload);
+
+      try { console.log("[precheck][recorded baseline fallback]", { raw, parsed, expected: expected.key }); } catch (e) {}
+      try {
+        const __done = __pcNow();
+        console.log("[precheck][timing] recorded", {
+          total_ms: __done - __t0,
+          item: parsed.itemKey,
+          qty: parsed.qty,
+          source: "fallback"
+        });
+      } catch (e) {}
+      precheck.lastFeed = "";
+      precheckSetFeed(`${expected.label} x ${parsed.qty} recorded`, "ok");
+      precheckAudioCue("recorded");
+      precheck.currentIndex += 1;
+      scheduleNextPrecheckPrompt(500);
+      return true;
+    }
+
+    if (precheck.mode === "live") {
+      const baseline = Number(precheck.captured[parsed.itemKey] || 0);
+      if (!baseline) return true;
+
+      const prevHighest = Number(precheck.liveHighest[parsed.itemKey] || baseline);
+      if (parsed.qty <= prevHighest) return true;
+
+      precheck.liveHighest[parsed.itemKey] = parsed.qty;
+      const payload = {
+        ...precheckCtx(),
+        session_id: precheck.sessionId,
+        item_name: parsed.itemKey,
+        observed_qty: parsed.qty,
+        raw_text: raw,
+        source: "live",
+        client_ts: new Date().toISOString()
+      };
+      await precheckBestEffortSubmit("/api/precheck/observe", payload);
+
+      const delta = Math.max(0, parsed.qty - baseline);
+      precheck.lastFeed = "";
+      precheckSetFeed(`${parsed.label} +${delta} tracked`, "ok");
+      return true;
+    }
+
+    return false;
+  }
+
 
   // ---------- drop parsing ----------
   function stripTimestampPrefix(s) {
@@ -3525,15 +4516,24 @@ function stitchChatMessages(lines) {
 
       chatState.lastLine = stripTimestampPrefix(raw);
 
-      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
-      const parsed = parseDropLine(raw, nextRaw);
-      if (!parsed) continue;
-
-      // Reject rich-fragment stringify artifacts
       if (raw.includes("[object Object]")) {
         addFeed("Ignored line (unparsed rich text): " + raw, "warn");
         continue;
       }
+
+      try {
+        const handledCmd = await handlePrecheckCommand(raw);
+        if (handledCmd) continue;
+
+        const handledObservation = await handlePrecheckObservation(raw);
+        if (handledObservation) continue;
+      } catch (e) {
+        console.warn("[precheck] line handling failed:", e);
+      }
+
+      const nextRaw = stitched.messages[i + 1] ? stitched.messages[i + 1] : "";
+      const parsed = parseDropLine(raw, nextRaw);
+      if (!parsed) continue;
 
       // Allowlist validation (primary gate)
       const strictOn = settings.strictDrops && canonicalMap.size > 0;
@@ -3557,7 +4557,6 @@ function stitchChatMessages(lines) {
           canonicalName = wikiName;
         }
       }
-
 
       // De-dupe across ALL detection paths (broadcast, "You received", etc.)
       const amtKey = (parsed.amount || "1").toString().trim();
@@ -3735,6 +4734,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ign, ign);
     localStorage.setItem(LS.ignLocked, "1");
     setIgnLocked(true);
+    loadBingosAndPopulate();
     addFeed("IGN locked ✅", "ok");
     playBeep("ok");
     refreshSummary();
@@ -3745,6 +4745,7 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
   ui.btnResetIgn && ui.btnResetIgn.addEventListener("click", () => {
     localStorage.setItem(LS.ignLocked, "0");
     setIgnLocked(false);
+    loadBingosAndPopulate();
     addFeed("IGN unlocked. Update it, then Lock again.", "warn");
     playBeep("warn");
     refreshSummary();
@@ -4080,3 +5081,42 @@ if (typeof _tryParseReceive === "function") {
   };
 }
 // --- End broadcast patch ---
+// --- plugin heartbeat (global) ---
+function getInstallId(){
+  const k = "rs3bingo_install_id";
+  let v = localStorage.getItem(k);
+  if(!v){
+    v = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random());
+    localStorage.setItem(k, v);
+  }
+  return v;
+}
+
+const API_ROOT = "https://rs3bingo.com";
+
+async function sendHeartbeat(){
+  const install_id = getInstallId();
+
+  const ign = (localStorage.getItem("rs3bingo_ign") || "").trim();
+  const board_id = Number(localStorage.getItem("rs3bingo_board_id") || 0) || null;
+
+  try{
+    const r = await fetch(`${API_ROOT}/api/plugin/presence`, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        install_id,
+        ign,
+        board_id
+      })
+    });
+
+    console.log("Heartbeat OK", install_id, ign, board_id, r.status);
+
+  }catch(e){
+    console.error("Heartbeat failed", e);
+  }
+}
+
+sendHeartbeat();
+setInterval(sendHeartbeat, 25000);

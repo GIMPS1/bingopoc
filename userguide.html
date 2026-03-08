@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>IRB User Guide</title>
+  <link rel="stylesheet" href="./css/style.css" />
+  <script src="https://runeapps.org/runeappslib.js"></script>
+  <script src="https://www.unpkg.com/alt1/dist/base/index.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <img class="brandIcon" src="./assets/icon.png" alt="" />
+        <div class="brandText">
+          <div class="title">Iron Rivals Bingo</div>
+          <div class="subtitle">User guide</div>
+        </div>
+      </div>
+
+      <div class="statusRow">
+        <button class="iconBtn" id="btnCloseGuide" title="Close">
+          <span class="icon">✕</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="panel guidePanel">
+      <div class="section">
+        <div class="sectionTitle">Setup order (important)</div>
+        <div class="hint">
+          You must do <b>Auto-locate Chat</b> <b>before</b> locking IGN.
+        </div>
+        <ol class="guideList">
+          <li><b>Auto-locate Chat</b> (Setup panel) → locks chatbox.</li>
+          <li>Enter <b>IGN</b> and lock it.</li>
+          <li>Select <b>Bingo</b> + <b>Team</b> and lock setup (plugin refreshes).</li>
+        </ol>
+      </div>
+
+      <div class="section">
+  <div class="sectionTitle">Barrows chest setup</div>
+
+  <ol class="guideList">
+    <li>Open the Barrows chest.</li>
+    <li>
+      First time only: hover near the <b>top bar / close button</b> and press <b>Alt+1</b> to locate it.
+    </li>
+    <li>After that, opening the chest will auto-scan and submit Barrows uniques.</li>
+    <li>If needed: press <b>Alt+1</b> while the chest is open to force an immediate scan.</li>
+  </ol>
+
+  <div class="hint">
+    <b>Where to press Alt+1:</b> hover your mouse over the chest's <b>top-right close button (red X)</b>
+    or anywhere along the top bar.
+  </div>
+
+  <div style="margin-top:12px; text-align:center;">
+    <img 
+      src="./assets/guide/barrows-click-example.png"
+      alt="Barrows chest click example"
+      style="max-width:120px; border:1px solid rgba(255,255,255,0.15); border-radius:6px;"
+    />
+    <div style="font-size:12px; opacity:0.8; margin-top:6px;">
+      Example click spot (hover here → press Alt+1)
+    </div>
+  </div>
+
+  <div class="hint" style="margin-top:10px;">
+    Tip: If the chest is not detected, close and re-open it, then press Alt+1 again near the top bar.
+  </div>
+</div>
+
+  <script>
+  (function(){
+    function clearTip() {
+      try { if (window.alt1 && typeof alt1.clearTooltip === "function") alt1.clearTooltip(); } catch(e) {}
+    }
+
+    // Clear any stale tooltip when the guide opens
+    clearTip();
+
+    const btn = document.getElementById("btnCloseGuide");
+    if (btn) btn.addEventListener("click", () => {
+      clearTip();
+      try { window.close(); } catch(e) {}
+    });
+
+    // Also clear if closed by other means
+    window.addEventListener("beforeunload", clearTip);
+  })();
+</script>
+</body>
+</html>
