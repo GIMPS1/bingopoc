@@ -4658,7 +4658,7 @@ function stitchChatMessages(lines) {
       const key = `${canonicalName}`.toLowerCase().trim() + "||" + amtKey;
       if (seenRecently(key, 8000)) continue;
 
-      const gameTimestamp = String(parsed.game_timestamp || extractGameTimestamp(raw) || "").trim();
+      const gameTimestamp = (parsed.game_timestamp || extractGameTimestamp(raw) || "").toString().trim();
       const rawText = String(parsed.raw_text || raw || "");
       const persistentKey = makeServerDedupeKey({
         bingoId: parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0,
