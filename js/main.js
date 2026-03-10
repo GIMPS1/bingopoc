@@ -5127,7 +5127,7 @@ function stripChatPrefix(s) {
   t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
 
   // Remove common channel labels
-  t = t.replace(/^\s*(?:%+\s*)?(?:news|clan chat|guest clan chat|friends chat|fc|cc)\s*:\s*/i, "");
+  t = t.replace(/^\s*(?:%+\s*)?(?:news|clan chat|guest clan chat|friends chat|group chat|gc|fc|cc|broadcast|announcement)\s*:\s*/i, "");
 
   // Remove any leftover junk before the speaker name
   t = t.replace(/^\s*[^A-Za-z0-9]+/, "");
@@ -5143,7 +5143,9 @@ if (typeof _tryParseReceive === "function") {
     const result = __originalTryParseReceive(text);
     if (result) return result;
 
-    let t = stripTimestampPrefix(text);
+    let t = (typeof stripTimestampPrefix === "function")
+      ? stripTimestampPrefix(text)
+      : String(text || "");
     t = stripChatPrefix(t);
 
     const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
@@ -5152,7 +5154,6 @@ if (typeof _tryParseReceive === "function") {
     const lockedIgn = normalizeIgn(lockedIgnRaw);
     if (!lockedIgn) return null;
 
-    // Accept names with spaces/punctuation by using a non-greedy capture up to "has received"
     const reBroadcast = new RegExp(
       "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?[.!]?$",
       "i"
@@ -5175,54 +5176,6 @@ if (typeof _tryParseReceive === "function") {
       game_timestamp: extractGameTimestamp(text),
       raw_text: String(text || "")
     };
-  };
-}
-
-// Patch into existing parse function if present
-if (typeof _tryParseReceive === "function") {
-  const __originalTryParseReceive = _tryParseReceive;
-
-  _tryParseReceive = function (text) {
-    // First try the original parser
-    const result = __originalTryParseReceive(text);
-    if (result) return result;
-
-    // Then try broadcast parsing
-    let t = stripTimestampPrefix(text);
-    t = stripChatPrefix(t);
-
-    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
-    if (!lockedIgnRaw) return null;
-
-    const lockedIgn = normalizeIgn(lockedIgnRaw).toLowerCase();
-    if (!lockedIgn) return null; // if locked ign normalizes to empty, don't match anything
-
-    // Broadcast format:
-    // "IGN has received some Item drop!"
-    // "IGN has received an Item."
-    // "IGN has received Item (x 3) drop!"
-    //
-    // Improvements vs old version:
-    // - IGN capture is strictly alphanumeric (no icons, no spaces)
-    // - "drop" is OPTIONAL (many broadcasts omit it)
-    // - quantity parsing supports "(x 3)" and "x 3" variants
-    const reBroadcast = new RegExp(
-      "^([A-Za-z0-9]+)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?$",
-      "i"
-    );
-
-    const m = t.match(reBroadcast);
-    if (!m) return null;
-
-    const ign = normalizeIgn(m[1]).toLowerCase();
-    if (!ign || ign !== lockedIgn) return null;
-
-    const item = (m[2] || "").trim();
-    if (!item) return null;
-
-    const amt = (m[3] || "1").trim();
-
-    return { drop_name: item, amount: amt };
   };
 }
 // --- End broadcast patch ---
