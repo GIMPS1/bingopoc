@@ -170,7 +170,86 @@ btnCloseSettings: $("btnCloseSettings"),
     settings: "irb.settings",
     historyOpen: "irb.historyOpen",
   };
+  const CLIENT_SESSION_KEY = "irb.clientSession";
+  const LOCAL_DEDUPE_KEY = "irb.localDedupe";
+  const CLIENT_SESSION_TTL_MS = 6 * 60 * 60 * 1000;
+  const LOCAL_DEDUPE_TTL_MS = 30 * 60 * 1000;
 
+  function getClientSessionId() {
+    const now = Date.now();
+    try {
+      const raw = localStorage.getItem(CLIENT_SESSION_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.id && parsed.ts && (now - parsed.ts) < CLIENT_SESSION_TTL_MS) {
+          return String(parsed.id);
+        }
+      }
+    } catch (e) {}
+
+    const id = (crypto && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : ("sess_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10));
+
+    try {
+      localStorage.setItem(CLIENT_SESSION_KEY, JSON.stringify({ id, ts: now }));
+    } catch (e) {}
+    return id;
+  }
+
+  function extractGameTimestamp(raw) {
+    const m = String(raw || "").match(/^\s*\[?(\d{1,2}:\d{2}:\d{2})(?:\s*[AP]M)?\]?/i);
+    return m ? m[1] : "";
+  }
+
+  function getPersistentDedupeMap() {
+    try {
+      const raw = localStorage.getItem(LOCAL_DEDUPE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return (parsed && typeof parsed === "object") ? parsed : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function setPersistentDedupeMap(map) {
+    try {
+      localStorage.setItem(LOCAL_DEDUPE_KEY, JSON.stringify(map || {}));
+    } catch (e) {}
+  }
+
+  function seenPersistentDedupe(key, ttlMs = LOCAL_DEDUPE_TTL_MS) {
+    const now = Date.now();
+    const map = getPersistentDedupeMap();
+
+    for (const k in map) {
+      if (!Object.prototype.hasOwnProperty.call(map, k)) continue;
+      if ((now - Number(map[k] || 0)) > ttlMs) delete map[k];
+    }
+
+    if (map[key] && (now - Number(map[key])) < ttlMs) {
+      setPersistentDedupeMap(map);
+      return true;
+    }
+
+    map[key] = now;
+    setPersistentDedupeMap(map);
+    return false;
+  }
+
+  function makeServerDedupeKey({ bingoId, teamNumber, ign, dropName, amount, gameTimestamp, rawText }) {
+    return [
+      String(bingoId || "").trim(),
+      String(teamNumber || "").trim(),
+      String(ign || "").trim().toLowerCase(),
+      String(dropName || "").trim().toLowerCase(),
+      String(amount || "1").trim(),
+      String(gameTimestamp || "").trim() || String(rawText || "").trim().toLowerCase()
+    ].join("||");
+  }
+
+  const CLIENT_SESSION_ID = getClientSessionId();
+  
   // API base is locked (hidden in UI)
   const LOCKED_API_BASE = (ui.apiBase && ui.apiBase.value) ? ui.apiBase.value : "";
   const getApiBase = () => LOCKED_API_BASE;
@@ -3141,14 +3220,23 @@ function initHistoryPanel() {
   }
 
   // FIX: submitDrop does NOT resolve canonical again (poll already does it)
-  async function submitDrop({ drop_name, amount }) {
+  async function submitDrop({ drop_name, amount, game_timestamp = "", raw_text = "" }) {
     const base = getApiBase();
     const bingoId = parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0;
     const team_number = parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0;
     const ign = (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim() || "Unknown";
     const ts_iso = new Date().toISOString();
 
-    const canonical = (drop_name || "").trim(); // trust caller
+    const canonical = (drop_name || "").trim();
+    const dedupe_key = makeServerDedupeKey({
+      bingoId,
+      teamNumber: team_number,
+      ign,
+      dropName: canonical,
+      amount: amount || "",
+      gameTimestamp: game_timestamp || "",
+      rawText: raw_text || ""
+    });
 
     const fd = new FormData();
     fd.append("ts_iso", ts_iso);
@@ -3158,6 +3246,13 @@ function initHistoryPanel() {
     fd.append("drop_name", canonical);
     fd.append("result", "success");
     fd.append("amount", amount || "");
+
+    fd.append("client_session_id", CLIENT_SESSION_ID);
+    fd.append("session_id", CLIENT_SESSION_ID);
+    fd.append("drop_game_timestamp", game_timestamp || "");
+    fd.append("game_timestamp", game_timestamp || "");
+    fd.append("raw_text", raw_text || "");
+    fd.append("dedupe_key", dedupe_key);
 
     const url = `${base}/b/${bingoId}/api/mock_drop`;
     const res = await fetch(url, { method: "POST", body: fd, credentials: "omit" });
@@ -4558,15 +4653,35 @@ function stitchChatMessages(lines) {
         }
       }
 
-      // De-dupe across ALL detection paths (broadcast, "You received", etc.)
+         // Short-term in-memory dedupe across all detection paths
       const amtKey = (parsed.amount || "1").toString().trim();
       const key = `${canonicalName}`.toLowerCase().trim() + "||" + amtKey;
       if (seenRecently(key, 8000)) continue;
 
+      const gameTimestamp = String(parsed.game_timestamp || extractGameTimestamp(raw) || "").trim();
+      const rawText = String(parsed.raw_text || raw || "");
+      const persistentKey = makeServerDedupeKey({
+        bingoId: parseInt(localStorage.getItem(LS.bingoId) || ui.bingoId?.value || "0", 10) || 0,
+        teamNumber: parseInt(localStorage.getItem(LS.team) || ui.teamNumber?.value || "0", 10) || 0,
+        ign: (localStorage.getItem(LS.ign) || ui.ign?.value || "").trim() || "Unknown",
+        dropName: canonicalName,
+        amount: parsed.amount || "",
+        gameTimestamp,
+        rawText
+      });
+
+      // Reload-safe dedupe: only block persistently when we have an in-game timestamp
+      if (gameTimestamp && seenPersistentDedupe(persistentKey, LOCAL_DEDUPE_TTL_MS)) continue;
+
       addFeed(`Drop: ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
 
       try {
-        await submitDrop({ drop_name: canonicalName, amount: parsed.amount });
+        await submitDrop({
+          drop_name: canonicalName,
+          amount: parsed.amount,
+          game_timestamp: gameTimestamp,
+          raw_text: rawText
+        });
         playBeep("ok");
         addFeed(`Submitted ✅ ${canonicalName}${parsed.amount ? " x" + parsed.amount : ""}`, "ok");
       } catch (e) {
@@ -4989,48 +5104,78 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
 
 // --- Added: Universal broadcast drop detection ---
 function normalizeIgn(raw) {
-  // Strict, deterministic IGN normalization:
-  // - remove leading/trailing whitespace
-  // - strip any leading non-alphanumeric noise (icons, bullets, etc.)
-  // - enforce alphanumeric-only (your requirement)
-  // - case-insensitive comparisons are done by caller via .toLowerCase()
-  raw = (raw || "").toString().trim();
+  raw = (raw || "").toString().trim().toLowerCase();
 
-  // Remove leading junk (icons/prefix punctuation) but keep the rest intact for now
-  raw = raw.replace(/^[^A-Za-z0-9]+/, "");
+  // Remove obvious channel/tag junk on the left first
+  raw = raw.replace(/^\s*[^a-z0-9\[]+\s*/i, "");
+  raw = raw.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
 
-  // Enforce alphanumeric-only IGN
-  return raw.replace(/[^A-Za-z0-9]/g, "");
+  // Collapse RSN for compare only
+  return raw.replace(/[^a-z0-9]/g, "");
 }
 
 function stripChatPrefix(s) {
-  // Goal: reduce lines like
-  // "[00:00:39] ☠ [Iron Rivals] News: ifwewerecgim has received ..."
-  // to:
-  // "ifwewerecgim has received ..."
   let t = (s || "").toString();
 
-  // 1) Remove leading timestamp blocks like "[17:36:57]" (one or more)
-  t = t.replace(/^\s*(?:\[\d{1,2}:\d{2}:\d{2}\]\s*)+/, "");
+  // Remove one or more timestamp prefixes
+  t = t.replace(/^\s*(?:\[\d{1,2}:\d{2}:\d{2}(?:\s*[AP]M)?\]?\s*)+/i, "");
 
-  // 2) Remove leading non-alphanumeric noise (icons, bullets, punctuation) before tags/labels
-  // Keep '[' so we can still strip bracket tags next.
+  // Remove leading icons / bullets / symbols but preserve bracket tags for next step
   t = t.replace(/^\s*[^A-Za-z0-9\[]+\s*/g, "");
 
-  // 3) Remove one or more leading bracket tags like "[CC]" "[Iron Rivals]" etc (repeat)
-  t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/, "");
+  // Remove repeated bracket tags such as [CC] [Iron Rivals]
+  t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
 
-  // 4) Remove leading % and optional bracket tag(s) that sometimes precede News:
-  // e.g. "% [CC] News:" or "%[Iron Rivals] News:"
-  t = t.replace(/^\s*%\s*(?:\[[^\]]+\]\s*)*/i, "");
+  // Remove common channel labels
+  t = t.replace(/^\s*(?:%+\s*)?(?:news|clan chat|guest clan chat|friends chat|fc|cc)\s*:\s*/i, "");
 
-  // 5) Strip "News:" label (case-insensitive), allowing extra whitespace
-  t = t.replace(/^\s*news\s*:\s*/i, "");
-
-  // 6) Finally, strip again any leading junk/icons that might remain after removing tags/labels
+  // Remove any leftover junk before the speaker name
   t = t.replace(/^\s*[^A-Za-z0-9]+/, "");
 
   return t.trim();
+}
+
+// Patch into existing parse function if present
+if (typeof _tryParseReceive === "function") {
+  const __originalTryParseReceive = _tryParseReceive;
+
+  _tryParseReceive = function (text) {
+    const result = __originalTryParseReceive(text);
+    if (result) return result;
+
+    let t = stripTimestampPrefix(text);
+    t = stripChatPrefix(t);
+
+    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
+    if (!lockedIgnRaw) return null;
+
+    const lockedIgn = normalizeIgn(lockedIgnRaw);
+    if (!lockedIgn) return null;
+
+    // Accept names with spaces/punctuation by using a non-greedy capture up to "has received"
+    const reBroadcast = new RegExp(
+      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?[.!]?$",
+      "i"
+    );
+
+    const m = t.match(reBroadcast);
+    if (!m) return null;
+
+    const ign = normalizeIgn(m[1]);
+    if (!ign || ign !== lockedIgn) return null;
+
+    const item = (m[2] || "").trim().replace(/[.!]+$/, "");
+    if (!item) return null;
+
+    const amt = (m[3] || "1").trim();
+
+    return {
+      drop_name: item,
+      amount: amt,
+      game_timestamp: extractGameTimestamp(text),
+      raw_text: String(text || "")
+    };
+  };
 }
 
 // Patch into existing parse function if present
