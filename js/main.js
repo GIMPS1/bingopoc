@@ -5102,83 +5102,88 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
 })();
 
 
-// --- Added: Universal broadcast drop detection ---
-function normalizeIgn(raw) {
-  raw = (raw || "").toString().trim().toLowerCase();
+  // --- Added: Universal broadcast drop detection ---
+  function normalizeIgn(raw) {
+    raw = (raw || "").toString().trim().toLowerCase();
 
-  // Remove obvious channel/tag junk on the left first
-  raw = raw.replace(/^\s*[^a-z0-9\[]+\s*/i, "");
-  raw = raw.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
+    // Remove obvious channel/tag junk on the left first
+    raw = raw.replace(/^\s*[^a-z0-9\[]+\s*/i, "");
+    raw = raw.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
 
-  // Collapse RSN for compare only
-  return raw.replace(/[^a-z0-9]/g, "");
-}
+    // Collapse RSN for compare only
+    return raw.replace(/[^a-z0-9]/g, "");
+  }
 
-function stripChatPrefix(s) {
-  let t = (s || "").toString();
+  function stripChatPrefix(s) {
+    let t = (s || "").toString();
 
-  // Remove one or more timestamp prefixes
-  t = t.replace(/^\s*(?:\[\d{1,2}:\d{2}:\d{2}(?:\s*[AP]M)?\]?\s*)+/i, "");
+    // Remove one or more timestamp prefixes
+    t = t.replace(/^\s*(?:\[\d{1,2}:\d{2}:\d{2}(?:\s*[AP]M)?\]?\s*)+/i, "");
 
-  // Remove leading icons / bullets / symbols but preserve bracket tags for next step
-  t = t.replace(/^\s*[^A-Za-z0-9\[]+\s*/g, "");
+    // Remove leading icons / bullets / symbols but preserve bracket tags for next step
+    t = t.replace(/^\s*[^A-Za-z0-9\[]+\s*/g, "");
 
-  // Remove repeated bracket tags such as [CC] [Iron Rivals]
-  t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
+    // Remove repeated bracket tags such as [CC] [Iron Rivals]
+    t = t.replace(/^\s*(?:\[[^\]]+\]\s*)+/g, "");
 
-  // Remove common channel labels
-  t = t.replace(/^\s*(?:%+\s*)?(?:news|clan chat|guest clan chat|friends chat|group chat|gc|fc|cc|broadcast|announcement)\s*:\s*/i, "");
+    // Remove common channel labels
+    t = t.replace(/^\s*(?:%+\s*)?(?:news|clan chat|guest clan chat|friends chat|group chat|gc|fc|cc|broadcast|announcement)\s*:\s*/i, "");
 
-  // Remove any leftover junk before the speaker name
-  t = t.replace(/^\s*[^A-Za-z0-9]+/, "");
+    // Remove any leftover junk before the speaker name
+    t = t.replace(/^\s*[^A-Za-z0-9]+/, "");
 
-  return t.trim();
-}
+    return t.trim();
+  }
 
-// Patch into existing parse function if present
-if (typeof _tryParseReceive === "function") {
-  const __originalTryParseReceive = _tryParseReceive;
+  if (typeof _tryParseReceive === "function") {
+    const __originalTryParseReceive = _tryParseReceive;
 
-  _tryParseReceive = function (text) {
-    const result = __originalTryParseReceive(text);
-    if (result) return result;
+    _tryParseReceive = function (text) {
+      const result = __originalTryParseReceive(text);
+      if (result) return result;
 
-    let t = (typeof stripTimestampPrefix === "function")
-      ? stripTimestampPrefix(text)
-      : String(text || "");
-    t = stripChatPrefix(t);
+      let t = (typeof stripTimestampPrefix === "function")
+        ? stripTimestampPrefix(text)
+        : String(text || "");
 
-    const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
-    if (!lockedIgnRaw) return null;
+      t = stripChatPrefix(t);
 
-    const lockedIgn = normalizeIgn(lockedIgnRaw);
-    if (!lockedIgn) return null;
+      const lockedIgnRaw = (localStorage.getItem(LS.ign) || "").trim();
+      if (!lockedIgnRaw) return null;
 
-    const reBroadcast = new RegExp(
-      "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?[.!]?$",
-      "i"
-    );
+      const lockedIgn = normalizeIgn(lockedIgnRaw);
+      if (!lockedIgn) return null;
 
-    const m = t.match(reBroadcast);
-    if (!m) return null;
+      const reBroadcast = new RegExp(
+        "^(.+?)\\s+has\\s+received\\s+(?:some\\s+|an?\\s+)?(.+?)\\s*(?:\\(?\\s*x\\s*(\\d+)\\s*\\)?)?\\s*(?:drop\\b.*)?[.!]?$",
+        "i"
+      );
 
-    const ign = normalizeIgn(m[1]);
-    if (!ign || ign !== lockedIgn) return null;
+      const m = t.match(reBroadcast);
+      if (!m) return null;
 
-    const item = (m[2] || "").trim().replace(/[.!]+$/, "");
-    if (!item) return null;
+      const ign = normalizeIgn(m[1]);
+      if (!ign || ign !== lockedIgn) return null;
 
-    const amt = (m[3] || "1").trim();
+      const item = (m[2] || "").trim().replace(/[.!]+$/, "");
+      if (!item) return null;
 
-    return {
-      drop_name: item,
-      amount: amt,
-      game_timestamp: extractGameTimestamp(text),
-      raw_text: String(text || "")
+      const amt = (m[3] || "1").trim();
+
+      return {
+        drop_name: item,
+        amount: amt,
+        game_timestamp: extractGameTimestamp(text),
+        raw_text: String(text || "")
+      };
     };
-  };
-}
-// --- End broadcast patch ---
+  }
+  // --- End broadcast patch ---
+
+  // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
+})();
 // --- plugin heartbeat (global) ---
 function getInstallId(){
   const k = "rs3bingo_install_id";
