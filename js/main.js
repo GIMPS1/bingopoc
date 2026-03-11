@@ -5096,11 +5096,6 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
     };
   }
 
-  // Bind hotkey after everything is defined
-  bindAlt1ManualHotkey();
-
-})();
-
 
   // --- Added: Universal broadcast drop detection ---
   function normalizeIgn(raw) {
@@ -5180,10 +5175,6 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
   }
   // --- End broadcast patch ---
 
-  // Bind hotkey after everything is defined
-  bindAlt1ManualHotkey();
-
-})();
 // --- plugin heartbeat (global) ---
 function getInstallId(){
   const k = "rs3bingo_install_id";
@@ -5223,3 +5214,8 @@ async function sendHeartbeat(){
 
 sendHeartbeat();
 setInterval(sendHeartbeat, 25000);
+
+    // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
+})();
