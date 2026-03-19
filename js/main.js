@@ -15,7 +15,7 @@ function __getImgProps(img) {
 */
 (async function () {
 
-  const BUILD_VERSION = "v2026-03-06-precheck-v18k-single-hq";
+  const BUILD_VERSION = "v2026-03-19 Dedupe work";
 
 
   // ---------------------------------------------------------------------------
@@ -45,10 +45,10 @@ function __getImgProps(img) {
   // Set to false to disable heavy console.table output.
   var DEBUG_ICON_MATCH = false;
 ;
-  console.log("IRB v2026-03-06-precheck-v18k-single-hq ✅");
+  console.log("v2026-03-19 Dedupe work ✅");
   try {
     const sub = document.querySelector(".subtitle");
-    if (sub) sub.textContent = `Drop auto-submit • v2026-03-06-precheck-v18k-single-hq`;
+    if (sub) sub.textContent = `v2026-03-19 Dedupe work`;
   } catch (e) {}
 
   function __pcNow() {
@@ -5175,6 +5175,11 @@ ui.btnLockIgn && ui.btnLockIgn.addEventListener("click", () => {
   }
   // --- End broadcast patch ---
 
+  // Bind hotkey after everything is defined
+  bindAlt1ManualHotkey();
+
+})();
+
 // --- plugin heartbeat (global) ---
 function getInstallId(){
   const k = "rs3bingo_install_id";
@@ -5214,8 +5219,3 @@ async function sendHeartbeat(){
 
 sendHeartbeat();
 setInterval(sendHeartbeat, 25000);
-
-    // Bind hotkey after everything is defined
-  bindAlt1ManualHotkey();
-
-})();
